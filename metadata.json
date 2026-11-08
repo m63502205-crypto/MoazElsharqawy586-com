@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Remix Remix حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر",
+  "description": "المشغل الالكتروني الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة. شعارنا: مصر للجميع.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

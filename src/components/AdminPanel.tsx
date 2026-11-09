@@ -41,6 +41,7 @@ import {
   Plus,
   Trash2,
   Edit2,
+  Save,
   Eye,
   EyeOff,
   Check,
@@ -974,11 +975,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b border-stone-100 pb-4">
                   <div>
-                    <h2 className="text-xl font-black text-stone-900">
-                      إدارة الأمانات
-                    </h2>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-xl font-black text-stone-900">
+                        إدارة الأمانات التخصصية
+                      </h2>
+                      <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-emerald-200">
+                        <Save className="w-3.5 h-3.5" />
+                        <span>حفظ دائم وتلقائي</span>
+                      </span>
+                    </div>
                     <p className="text-xs text-stone-500 mt-0.5">
-                      تعديل أسماء الأمانات، تعيين الأمين والأمين المساعد، ضبط المهام والأهداف، حذف أمانة، أو إضافة أمانات جديدة.
+                      تعديل أسماء الأمانات، تعيين الأمين والأمين المساعد، ضبط المهام والأهداف، حذف أمانة، أو إضافة أمانات جديدة. كافة التعديلات تُحفظ فورياً بقاعدة البيانات.
                     </p>
                   </div>
                   <button
@@ -1173,10 +1180,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                 setEditingSecretariat(sec);
                                 setShowSecretariatModal(true);
                               }}
-                              className="bg-stone-200 hover:bg-stone-300 text-stone-800 px-3 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1 transition-colors"
+                              className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1.5 transition-colors shadow-xs"
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
-                              <span>تعديل الأمانة والأمين</span>
+                              <Save className="w-3.5 h-3.5" />
+                              <span>تعديل وحفظ الأمانة</span>
                             </button>
                             <button
                               onClick={async () => {
@@ -4366,13 +4373,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       setShowSecretariatModal(false);
                       loadAdminData();
                       onRefreshPublicData();
+                      alert('تم حفظ الأمانة بنجاح!');
                     } catch (err: any) {
                       alert(err.message || 'حدث خطأ أثناء حفظ الأمانة');
                     }
                   }}
-                  className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs"
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
                 >
-                  {editingSecretariat.id ? 'حفظ تعديلات الأمانة' : 'إضافة الأمانة الآن'}
+                  <Save className="w-4 h-4" />
+                  <span>{editingSecretariat.id ? 'حفظ تعديلات الأمانة' : 'حفظ وإضافة الأمانة الآن'}</span>
                 </button>
                 <button
                   type="button"
@@ -4591,9 +4600,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   onRefreshPublicData();
                   alert('تم حفظ بيانات العضو / كادر الأمانة بنجاح');
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
               >
-                حفظ بيانات العضو
+                <Save className="w-4 h-4" />
+                <span>حفظ بيانات كادر الأمانة</span>
               </button>
               <button
                 onClick={() => setShowSecMemberModal(false)}

@@ -1587,6 +1587,46 @@ function escapeHtml(str: string): string {
 // -------------------------------------------------------------
 // DYNAMIC SOCIAL SHARE PREVIEW ROUTES (WhatsApp, Facebook, Twitter, Telegram)
 // -------------------------------------------------------------
+// Direct image endpoint for WhatsApp and Open Graph previews
+app.get(['/api/news/:id/image', '/api/events/:id/image'], (req: Request, res: Response) => {
+  const isNews = req.path.startsWith('/api/news');
+  const id = req.params.id;
+  const data = db.get();
+  const item: any = isNews
+    ? (data.news || []).find((n: any) => n.id === id || n.slug === id)
+    : (data.events || []).find((e: any) => e.id === id || e.slug === id);
+
+  const rawImage = item ? (isNews ? (item.coverImage || item.imageUrl) : (item.images?.[0] || item.coverUrl || item.imageUrl)) : null;
+
+  if (!rawImage) {
+    return res.redirect('/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg');
+  }
+
+  // Handle base64 encoded images
+  if (rawImage.startsWith('data:image/')) {
+    const match = rawImage.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      const mime = match[1];
+      const buffer = Buffer.from(match[2], 'base64');
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      return res.send(buffer);
+    }
+  }
+
+  // Handle absolute or relative URLs
+  if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) {
+    return res.redirect(rawImage);
+  }
+  if (rawImage.startsWith('/')) {
+    return res.redirect(rawImage);
+  }
+  return res.redirect('/' + rawImage);
+});
+
+// -------------------------------------------------------------
+// DYNAMIC SOCIAL SHARE PREVIEW ROUTES (WhatsApp, Facebook, Twitter, Telegram)
+// -------------------------------------------------------------
 app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFunction) => {
   const isNews = req.path.startsWith('/news');
   const id = req.params.id;
@@ -1608,9 +1648,20 @@ app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFu
 
   const title = `${item.title} | حزب الجبهة الوطنية`;
   const description = item.excerpt || item.description || (item.content ? item.content.substring(0, 160) : '') || 'المنصة الرسمية لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة';
-  let imageUrl = item.imageUrl || item.coverUrl || item.images?.[0] || `${baseUrl}/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg`;
-  if (imageUrl.startsWith('/')) {
-    imageUrl = `${baseUrl}${imageUrl}`;
+
+  // Extract real cover image: check coverImage, imageUrl, or first event image
+  const rawImage = isNews ? (item.coverImage || item.imageUrl) : (item.images?.[0] || item.coverUrl || item.imageUrl);
+  let imageUrl = '';
+  if (rawImage && rawImage.startsWith('data:image/')) {
+    imageUrl = `${baseUrl}/api/${isNews ? 'news' : 'events'}/${item.id}/image`;
+  } else if (rawImage && (rawImage.startsWith('http://') || rawImage.startsWith('https://'))) {
+    imageUrl = rawImage;
+  } else if (rawImage && rawImage.startsWith('/')) {
+    imageUrl = `${baseUrl}${rawImage}`;
+  } else if (rawImage) {
+    imageUrl = `${baseUrl}/${rawImage}`;
+  } else {
+    imageUrl = `${baseUrl}/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg`;
   }
 
   const pageUrl = `${baseUrl}/${isNews ? 'news' : 'events'}/${item.id}`;
@@ -1634,6 +1685,9 @@ app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFu
     <meta property="og:description" content="${escapeHtml(description)}" />
     <meta property="og:image" content="${imageUrl}" />
     <meta property="og:image:secure_url" content="${imageUrl}" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="${escapeHtml(item.title)}" />
     <meta property="og:locale" content="ar_EG" />
 
@@ -1642,6 +1696,7 @@ app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFu
     <meta name="twitter:title" content="${escapeHtml(item.title)}" />
     <meta name="twitter:description" content="${escapeHtml(description)}" />
     <meta name="twitter:image" content="${imageUrl}" />
+    <link rel="image_src" href="${imageUrl}" />
 
     <!-- Client-side Redirect to interactive SPA for real users -->
     <script>
@@ -1651,7 +1706,7 @@ app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFu
   <body style="font-family: Cairo, system-ui, -apple-system, sans-serif; background: #fafaf9; color: #1c1917; text-align: right; padding: 2rem; direction: rtl;">
     <div style="max-width: 680px; margin: 2rem auto; background: white; padding: 2rem; border-radius: 1.5rem; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
       <div style="display: inline-block; background: #fee2e2; color: #b91c1c; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: bold; margin-bottom: 0.75rem;">
-        حزب الجبهة الوطنية – ${isNews ? 'الأخبار' : 'الفعاليات'}
+        حزب الجبهة الوطنية – ${isNews ? 'الأخبار والبيانات' : 'الفعاليات'}
       </div>
       <h1 style="color: #1c1917; font-size: 1.5rem; font-weight: 800; line-height: 1.4; margin-bottom: 1rem;">
         ${escapeHtml(item.title)}
@@ -1661,7 +1716,7 @@ app.get(['/news/:id', '/events/:id'], (req: Request, res: Response, next: NextFu
         ${escapeHtml(description)}
       </p>
       <a href="${redirectTarget}" style="display: inline-flex; align-items: center; justify-content: center; background: #b91c1c; color: white; padding: 0.75rem 1.5rem; border-radius: 0.75rem; text-decoration: none; font-weight: bold; font-size: 0.9rem;">
-        الانتقال إلى التفاصيل الكاملة بالمنصة
+        الانتقال إلى قراءة الخبر كاملاً بالمنصة
       </a>
     </div>
   </body>

@@ -17,6 +17,8 @@ import { initGoogleAnalytics, trackPageView } from './utils/analytics';
 function MainApp() {
   const [currentView, setCurrentView] = useState<string>('home');
   const [selectedSlug, setSelectedSlug] = useState<string>('about');
+  const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [data, setData] = useState<PublicPortalData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -73,15 +75,71 @@ function MainApp() {
   // Sync view from hash on mount or when hash changes
   useEffect(() => {
     const handleHash = () => {
-      const hash = window.location.hash.replace('#', '');
-      if (!hash) return;
-      if (hash.startsWith('page/')) {
-        const slug = hash.replace('page/', '');
+      // Check query parameters for direct links
+      if (typeof window !== 'undefined' && window.location.search) {
+        const searchParams = new URLSearchParams(window.location.search);
+        const searchNewsId = searchParams.get('news') || searchParams.get('id');
+        if (searchNewsId) {
+          setSelectedNewsId(searchNewsId);
+          setCurrentView('news');
+        }
+      }
+
+      const fullHash = window.location.hash.replace(/^#\/?/, '');
+      if (!fullHash) return;
+
+      if (fullHash.startsWith('page/')) {
+        const slug = fullHash.replace('page/', '');
         setSelectedSlug(slug);
         setCurrentView('cms-page');
-      } else if (hash === 'admin') {
+        return;
+      }
+
+      if (fullHash === 'admin') {
         setCurrentView('admin');
-      } else if (
+        return;
+      }
+
+      // News route with ID: #news?id=xxx or #news/xxx or #news
+      if (fullHash.startsWith('news')) {
+        let nId: string | null = null;
+        if (fullHash.includes('?id=')) {
+          nId = fullHash.split('?id=')[1]?.split('&')[0] || null;
+        } else if (fullHash.includes('/') && fullHash.split('/')[1]) {
+          nId = fullHash.split('/')[1] || null;
+        }
+        setCurrentView('news');
+        if (nId) {
+          setSelectedNewsId(nId);
+        }
+        return;
+      }
+
+      // Events route with ID: #events?id=xxx or #events/xxx or #events
+      if (fullHash.startsWith('events')) {
+        let eId: string | null = null;
+        if (fullHash.includes('?id=')) {
+          eId = fullHash.split('?id=')[1]?.split('&')[0] || null;
+        } else if (fullHash.includes('/') && fullHash.split('/')[1]) {
+          eId = fullHash.split('/')[1] || null;
+        }
+        setCurrentView('events');
+        if (eId) {
+          setSelectedEventId(eId);
+        }
+        return;
+      }
+
+      // Single secretariat route: #secretariat/slug
+      if (fullHash.startsWith('secretariat/')) {
+        const secSlug = fullHash.replace('secretariat/', '');
+        setSelectedSlug(secSlug);
+        setCurrentView('secretariat-detail');
+        return;
+      }
+
+      const cleanView = fullHash.split('?')[0].split('/')[0];
+      if (
         [
           'home',
           'about',
@@ -94,9 +152,9 @@ function MainApp() {
           'gallery',
           'join',
           'contact'
-        ].includes(hash)
+        ].includes(cleanView)
       ) {
-        setCurrentView(hash);
+        setCurrentView(cleanView);
       }
     };
 
@@ -180,6 +238,8 @@ function MainApp() {
           onRefreshData={loadData}
           selectedSlug={selectedSlug}
           setSelectedSlug={setSelectedSlug}
+          selectedNewsId={selectedNewsId}
+          onClearSelectedNewsId={() => setSelectedNewsId(null)}
         />
       </main>
 

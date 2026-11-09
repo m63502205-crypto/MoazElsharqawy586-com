@@ -27,29 +27,31 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
   const hash = itemType === 'news' ? 'news' : 'events';
   const shareUrl = url || (itemId ? `${baseUrl}/${itemType === 'news' ? 'news' : 'events'}/${itemId}` : `${baseUrl}/#${hash}`);
 
-  const shareText = `${title}\n${summary ? summary.slice(0, 120) + '...\n' : ''}حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | مصر للجميع`;
+  const cleanTitle = title.trim();
+  const cleanSummary = summary ? summary.replace(/\r?\n/g, ' ').slice(0, 140).trim() + '...' : '';
 
   const handleWhatsApp = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(shareText + '\n' + shareUrl)}`;
+    const waText = `📰 *${cleanTitle}*\n\n${cleanSummary ? cleanSummary + '\n\n' : ''}🏛️ حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر\n${shareUrl}`;
+    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
     window.open(waUrl, '_blank', 'noopener,noreferrer');
   };
 
   const handleFacebook = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(shareText)}`;
+    const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
     window.open(fbUrl, '_blank', 'noopener,noreferrer,width=600,height=500');
   };
 
   const handleTwitter = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const twUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(title)}&url=${encodeURIComponent(shareUrl)}`;
+    const twUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(cleanTitle)}&url=${encodeURIComponent(shareUrl)}`;
     window.open(twUrl, '_blank', 'noopener,noreferrer,width=600,height=400');
   };
 
   const handleTelegram = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(title)}`;
+    const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(cleanTitle)}`;
     window.open(tgUrl, '_blank', 'noopener,noreferrer');
   };
 
@@ -57,10 +59,10 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
     e.stopPropagation();
     try {
       if (navigator.clipboard) {
-        await navigator.clipboard.writeText(`${title} - ${shareUrl}`);
+        await navigator.clipboard.writeText(shareUrl);
       } else {
         const textarea = document.createElement('textarea');
-        textarea.value = `${title} - ${shareUrl}`;
+        textarea.value = shareUrl;
         document.body.appendChild(textarea);
         textarea.select();
         document.execCommand('copy');

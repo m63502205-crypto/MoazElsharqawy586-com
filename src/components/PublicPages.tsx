@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PublicPortalData,
   SpecializedSecretariat,
@@ -50,6 +50,8 @@ interface PublicPagesProps {
   onRefreshData: () => void;
   selectedSlug?: string;
   setSelectedSlug?: (slug: string) => void;
+  selectedNewsId?: string | null;
+  onClearSelectedNewsId?: () => void;
 }
 
 export const PublicPages: React.FC<PublicPagesProps> = ({
@@ -57,7 +59,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   setCurrentView,
   data,
   selectedSlug,
-  setSelectedSlug
+  setSelectedSlug,
+  selectedNewsId,
+  onClearSelectedNewsId
 }) => {
   const ct = data.settings.customTexts || {};
 
@@ -66,6 +70,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+
+  // Sync news selection from URL deep links (#news?id=xxx)
+  useEffect(() => {
+    if (selectedNewsId && data?.news?.length) {
+      const match = data.news.find(n => n.id === selectedNewsId || (n as any).slug === selectedNewsId);
+      if (match) {
+        setSelectedNews(match);
+      }
+    }
+  }, [selectedNewsId, data?.news]);
 
   // Filter states
   const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>('all');
@@ -379,53 +393,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </section>
 
-        {/* Stats Strip */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-6 sm:p-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center divide-y md:divide-y-0 md:divide-x md:divide-x-reverse divide-stone-100">
-              <div className="p-3">
-                <div className="text-3xl sm:text-4xl font-black text-red-700 tabular-nums">
-                  {ct.statsCard1Value ?? String(data.specializedSecretariats.length)}
-                </div>
-                <div className="text-xs sm:text-sm font-bold text-stone-700 mt-1">
-                  {ct.statsCard1Label || 'أمانة حزبية معتمدة'}
-                </div>
-                <div className="text-[11px] text-stone-400">{ct.statsCard1Sub || 'تغطي كافة الملفات التنموية'}</div>
-              </div>
-
-              <div className="p-3">
-                <div className="text-3xl sm:text-4xl font-black text-amber-600 tabular-nums">
-                  {ct.statsCard2Value ?? String(data.initiatives.length)}
-                </div>
-                <div className="text-xs sm:text-sm font-bold text-stone-700 mt-1">
-                  {ct.statsCard2Label || 'مبادرات ميدانية ومجتمعية'}
-                </div>
-                <div className="text-[11px] text-stone-400">{ct.statsCard2Sub || 'تخدم أهالي قسم ثالث أكتوبر'}</div>
-              </div>
-
-              <div className="p-3">
-                <div className="text-3xl sm:text-4xl font-black text-emerald-700 tabular-nums">
-                  {ct.statsCard3Value ?? '100%'}
-                </div>
-                <div className="text-xs sm:text-sm font-bold text-stone-700 mt-1">
-                  {ct.statsCard3Label || 'منصة رقمية حقيقية'}
-                </div>
-                <div className="text-[11px] text-stone-400">{ct.statsCard3Sub || 'دون أي كارنيهات أو اشتراكات'}</div>
-              </div>
-
-              <div className="p-3">
-                <div className="text-3xl sm:text-4xl font-black text-stone-900 tabular-nums">
-                  {ct.statsCard4Value ?? String(data.news.length + data.events.length)}
-                </div>
-                <div className="text-xs sm:text-sm font-bold text-stone-700 mt-1">
-                  {ct.statsCard4Label || 'تغطية إخبارية وفعالية'}
-                </div>
-                <div className="text-[11px] text-stone-400">{ct.statsCard4Sub || 'مستمرة على مدار الساعة'}</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* Section 1: Party Leaders Preview */}
         <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
@@ -730,7 +697,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 {data.news.slice(0, 3).map(item => (
                   <div
                     key={item.id}
-                    onClick={() => setSelectedNews(item)}
+                    onClick={() => {
+                      setSelectedNews(item);
+                      setCurrentView('news');
+                      window.location.hash = `news?id=${item.id}`;
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
                     className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col sm:flex-row gap-4"
                   >
                     <img
@@ -1834,7 +1806,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           {filteredNews.map(item => (
             <div
               key={item.id}
-              onClick={() => setSelectedNews(item)}
+              onClick={() => {
+                setSelectedNews(item);
+                window.location.hash = `news?id=${item.id}`;
+              }}
               className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
             >
               <div>
@@ -1889,7 +1864,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
               <button
-                onClick={() => setSelectedNews(null)}
+                onClick={() => {
+                  setSelectedNews(null);
+                  if (onClearSelectedNewsId) onClearSelectedNewsId();
+                  if (window.location.hash.startsWith('#news')) {
+                    window.location.hash = 'news';
+                  }
+                }}
                 className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
               >
                 ✕

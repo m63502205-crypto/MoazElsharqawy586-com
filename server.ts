@@ -1,11 +1,13 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { db, hashPassword, AdminUser, MembershipApplication, MemberRecord } from './src/server/db.ts';
+import { db, hashPassword } from './src/server/db.ts';
+import type { AdminUser, MembershipApplication, MemberRecord } from './src/server/db.ts';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Enable large JSON payloads for documents/images
 app.use(express.json({ limit: '50mb' }));
@@ -578,20 +580,8 @@ app.delete('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermi
 });
 
 // --- SPECIALIZED SECRETARIATS MANAGEMENT ---
-const getSecretariatActor = (req: Request) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    const session = sessionStore.get(token);
-    if (session && session.expiresAt >= Date.now()) {
-      return { email: session.admin.email, name: session.admin.name };
-    }
-  }
-  return { email: 'admin@nfp.eg', name: 'إدارة الحزب' };
-};
-
-app.post(['/api/admin/secretariats', '/api/secretariats'], (req: Request, res: Response) => {
-  const actor = getSecretariatActor(req);
+app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body;
 
@@ -620,12 +610,12 @@ app.post(['/api/admin/secretariats', '/api/secretariats'], (req: Request, res: R
 
   data.specializedSecretariats.push(newSec);
   db.save();
-  db.addAuditLog(actor.email, actor.name, 'إضافة أمانة تخصصية جديدة', 'SpecializedSecretariat', `تم إنشاء: ${newSec.name}`, newSec.id);
+  db.addAuditLog(admin.email, admin.name, 'إضافة أمانة تخصصية جديدة', 'SpecializedSecretariat', `تم إنشاء: ${newSec.name}`, newSec.id);
   res.json({ success: true, secretariat: newSec });
 });
 
-app.put(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Request, res: Response) => {
-  const actor = getSecretariatActor(req);
+app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const idx = data.specializedSecretariats.findIndex(s => s.id === req.params.id);
   if (idx === -1) {
@@ -638,12 +628,12 @@ app.put(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Request,
     id: req.params.id
   };
   db.save();
-  db.addAuditLog(actor.email, actor.name, 'تعديل أمانة تخصصية', 'SpecializedSecretariat', `تم تعديل بيانات أمانة: ${data.specializedSecretariats[idx].name}`, req.params.id);
+  db.addAuditLog(admin.email, admin.name, 'تعديل أمانة تخصصية', 'SpecializedSecretariat', `تم تعديل بيانات أمانة: ${data.specializedSecretariats[idx].name}`, req.params.id);
   res.json({ success: true, secretariat: data.specializedSecretariats[idx] });
 });
 
-app.delete(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Request, res: Response) => {
-  const actor = getSecretariatActor(req);
+app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const sec = data.specializedSecretariats.find(s => s.id === req.params.id);
   if (!sec) {
@@ -653,13 +643,13 @@ app.delete(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Reque
   // Preserve members: keep secretariatMembers intact or set their secretariatId to unassigned, without deleting person records
   data.specializedSecretariats = data.specializedSecretariats.filter(s => s.id !== req.params.id);
   db.save();
-  db.addAuditLog(actor.email, actor.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
+  db.addAuditLog(admin.email, admin.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
   res.json({ success: true });
 });
 
 // Save all secretariats (ordering, bulk changes, confirm)
-app.post(['/api/admin/secretariats/save-all', '/api/secretariats/save-all'], (req: Request, res: Response) => {
-  const actor = getSecretariatActor(req);
+app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const list = req.body.secretariats;
 
@@ -668,8 +658,8 @@ app.post(['/api/admin/secretariats/save-all', '/api/secretariats/save-all'], (re
   }
   db.save();
   db.addAuditLog(
-    actor.email,
-    actor.name,
+    admin.email,
+    admin.name,
     'حفظ الأمانات بالكامل',
     'SpecializedSecretariat',
     `تم حفظ وتأكيد بيانات الأمانات التخصصية بنجاح (${data.specializedSecretariats.length} أمانة)`
@@ -965,7 +955,7 @@ app.delete('/api/admin/events/:id', authenticateAdmin, requirePermission('events
 });
 
 // --- MEDIA GALLERY MANAGEMENT ---
-app.post('/api/admin/media', authenticateAdmin, (req: Request, res: Response) => {
+app.post('/api/admin/media', authenticateAdmin, requirePermission('media'), (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body;
@@ -1380,16 +1370,19 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), (re
     }
   }
 
+  // Only super_admin can create another super_admin
+  const requestedRole = (role === 'super_admin' && admin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
+
   const newAdmin: AdminUser = {
     id: 'admin-' + Date.now(),
     email: cleanEmail,
     name: name.trim(),
     passwordHash: hashPassword(password),
-    role: role === 'super_admin' ? 'super_admin' : 'sub_admin',
+    role: requestedRole,
     roleId: roleId || undefined,
     adminScope: adminScope === 'specialized' ? 'specialized' : 'general',
     managedSecretariatId: adminScope === 'specialized' ? managedSecretariatId : undefined,
-    permissions: userPerms.length > 0 ? userPerms : ['news', 'events'],
+    permissions: requestedRole === 'super_admin' ? ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'news', 'events', 'media', 'livestream', 'social', 'admins', 'settings', 'audit'] : (userPerms.length > 0 ? userPerms : ['news', 'events']),
     isActive: true,
     createdAt: new Date().toISOString()
   };
@@ -1414,16 +1407,28 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   const target = data.admins[idx];
   const { name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body;
 
-  // Protect main super admin email
-  if (target.email === 'moazmahmoud586@gmail.com' && isActive === false) {
-    return res.status(400).json({ error: 'لا يمكن تعطيل حساب المدير الرئيسي للمنصة' });
+  // Protect main super admin account
+  if (target.email === 'moazmahmoud586@gmail.com') {
+    if (isActive === false) {
+      return res.status(400).json({ error: 'لا يمكن تعطيل حساب المدير الرئيسي للمنصة' });
+    }
+    if (role && role !== 'super_admin') {
+      return res.status(400).json({ error: 'لا يمكن تغيير رتبة المدير الرئيسي للمنصة' });
+    }
+  }
+
+  // Only super_admin can edit a super_admin or promote someone to super_admin
+  if ((target.role === 'super_admin' || role === 'super_admin') && currentAdmin.role !== 'super_admin') {
+    return res.status(403).json({ error: 'صلاحية المدير العام الرئيسي (Super Admin) محصورة لمدير المنصة فقط' });
   }
 
   if (name) target.name = name.trim();
   if (password && String(password).trim().length >= 6) {
     target.passwordHash = hashPassword(password);
   }
-  if (role) target.role = role;
+  if (role) {
+    target.role = (role === 'super_admin' && currentAdmin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
+  }
   if (roleId !== undefined) target.roleId = roleId;
   if (adminScope) target.adminScope = adminScope;
   if ('managedSecretariatId' in req.body) target.managedSecretariatId = managedSecretariatId;

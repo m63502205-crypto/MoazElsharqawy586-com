@@ -16,6 +16,7 @@ import {
   Calendar,
   Newspaper,
   ChevronLeft,
+  ChevronRight,
   Phone,
   MessageCircle,
   Mail,
@@ -71,86 +72,91 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 }) => {
   const ct = data.settings.customTexts || {};
 
-  // Secretariat management states (شيل أمانة / إضافة أمانة / حفظ)
-  const [showAddSecretariatModal, setShowAddSecretariatModal] = useState(false);
-  const [editingSecretariatData, setEditingSecretariatData] = useState<Partial<SpecializedSecretariat> | null>(null);
-  const [isSavingSecretariats, setIsSavingSecretariats] = useState(false);
-  const [secretariatNotice, setSecretariatNotice] = useState<string | null>(null);
-
-  const handleRemoveSecretariat = async (sec: SpecializedSecretariat, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (!window.confirm(`هل أنت متأكد من رغبتك في شيل (حذف) أمانة "${sec.name}" نهائياً من الموقع؟`)) {
-      return;
-    }
-    try {
-      await api.deleteSecretariat(sec.id);
-      if (onRefreshData) onRefreshData();
-      setSecretariatNotice(`تم شيل أمانة "${sec.name}" بنجاح!`);
-      setTimeout(() => setSecretariatNotice(null), 4000);
-    } catch (err: any) {
-      alert(err.message || 'تعذر شيل الأمانة');
-    }
-  };
-
-  const handleOpenAddSecretariat = () => {
-    setEditingSecretariatData({
-      isActive: true,
-      sortOrder: (data.specializedSecretariats?.length || 0) + 1,
-      duties: [],
-      goals: []
-    });
-    setShowAddSecretariatModal(true);
-  };
-
-  const handleOpenEditSecretariat = (sec: SpecializedSecretariat, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setEditingSecretariatData({ ...sec });
-    setShowAddSecretariatModal(true);
-  };
-
-  const handleSaveSecretariatModal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingSecretariatData || !editingSecretariatData.name?.trim()) {
-      alert('يرجى كتابة اسم الأمانة');
-      return;
-    }
-    try {
-      if (editingSecretariatData.id) {
-        await api.updateSecretariat(editingSecretariatData.id, editingSecretariatData);
-        setSecretariatNotice(`تم حفظ وتحديث أمانة "${editingSecretariatData.name}" بنجاح!`);
-      } else {
-        const autoSlug = editingSecretariatData.slug || editingSecretariatData.name.toLowerCase().trim().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-') || ('sec-' + Date.now());
-        await api.createSecretariat({ ...editingSecretariatData, slug: autoSlug });
-        setSecretariatNotice(`تم إضافة أمانة "${editingSecretariatData.name}" بنجاح!`);
-      }
-      setShowAddSecretariatModal(false);
-      setEditingSecretariatData(null);
-      if (onRefreshData) onRefreshData();
-      setTimeout(() => setSecretariatNotice(null), 4000);
-    } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حفظ الأمانة');
-    }
-  };
-
-  const handleSaveAllSecretariats = async () => {
-    setIsSavingSecretariats(true);
-    try {
-      await api.saveAllSecretariats(data.specializedSecretariats);
-      if (onRefreshData) onRefreshData();
-      setSecretariatNotice('تم حفظ وتأكيد كافة الأمانات التخصصية بنجاح!');
-      setTimeout(() => setSecretariatNotice(null), 4000);
-    } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
-    } finally {
-      setIsSavingSecretariats(false);
-    }
-  };
+  // Public visitor view is strictly read-only; admin modifications are exclusively performed via the Admin Panel
 
   // Modal states for leaders / news
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+
+  // Automated Hero Reel / Slider state ("يقعد يقلب تلقائي")
+  const [heroSlideIndex, setHeroSlideIndex] = useState(0);
+  const [isHeroHovered, setIsHeroHovered] = useState(false);
+
+  // Construct hero slides
+  const heroSlides = React.useMemo(() => {
+    if (data.settings.heroSlides && data.settings.heroSlides.length > 0) {
+      return data.settings.heroSlides;
+    }
+    const list: Array<{
+      id: string;
+      type: 'video' | 'image';
+      url: string;
+      posterUrl?: string;
+      title?: string;
+      caption?: string;
+    }> = [];
+
+    if (data.settings.heroVideoUrl) {
+      list.push({
+        id: 'hero-main-vid',
+        type: 'video',
+        url: data.settings.heroVideoUrl,
+        posterUrl: data.settings.heroPosterUrl || data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
+        title: 'فعاليات حزب الجبهة الوطنية الميدانية',
+        caption: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة'
+      });
+    }
+
+    list.push({
+      id: 'hero-entrance',
+      type: 'image',
+      url: data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
+      title: 'مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر',
+      caption: 'المقر الرئيسي للعمل الحزبي وخدمة أهالي أكتوبر'
+    });
+
+    if (data.media && data.media.length > 0) {
+      data.media.slice(0, 5).forEach((m, idx) => {
+        if (m.url && !list.some(s => s.url === m.url)) {
+          list.push({
+            id: `hero-med-${idx}`,
+            type: m.type === 'video' ? 'video' : 'image',
+            url: m.url,
+            title: m.title || 'أنشطة وفعاليات الحزب',
+            caption: m.albumName || 'أمانة قسم ثالث أكتوبر'
+          });
+        }
+      });
+    }
+
+    list.push({
+      id: 'hero-emblem',
+      type: 'image',
+      url: data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
+      title: 'معاً نبني مستقبلاً مشرقاً لمصر',
+      caption: 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر'
+    });
+
+    return list;
+  }, [
+    data.settings.heroSlides,
+    data.settings.heroVideoUrl,
+    data.settings.heroPosterUrl,
+    data.settings.entranceImageUrl,
+    data.settings.officialLogo,
+    data.media
+  ]);
+
+  // Auto-flip effect every 4.5 seconds
+  useEffect(() => {
+    if (heroSlides.length <= 1 || isHeroHovered) return;
+    const interval = setInterval(() => {
+      setHeroSlideIndex(prev => (prev + 1) % heroSlides.length);
+    }, 4500);
+    return () => clearInterval(interval);
+  }, [heroSlides.length, isHeroHovered]);
 
   // Sync news selection from URL deep links (#news?id=xxx)
   useEffect(() => {
@@ -323,97 +329,110 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     return (
       <div className="space-y-16 lg:space-y-24 pb-16">
         
-        {/* Hero Section */}
-        <section className="relative overflow-hidden bg-gradient-to-b from-stone-900 via-stone-900 to-stone-950 text-white pt-16 pb-24 border-b-4 border-amber-500">
-          <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#d97706_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none" />
-          
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
-              
-              {/* Text column */}
-              <div className="lg:col-span-7 space-y-6 text-right">
-                <div className="inline-flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 text-amber-300 px-3 py-1.5 rounded-full text-xs font-bold">
-                  <Award className="w-4 h-4 text-amber-400" />
-                  <span>حزب الجبهة الوطنية – محافظة الجيزة</span>
-                </div>
-
-                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-white leading-tight tracking-tight">
-                  أمانة قسم ثالث أكتوبر
-                  <span className="block text-2xl sm:text-3xl lg:text-4xl gold-gradient-text mt-2 font-extrabold">
-                    شعارنا: «{data.settings.slogan || 'مصر للجميع'}»
-                  </span>
-                </h1>
-
-                <p className="text-base sm:text-lg text-stone-300 leading-relaxed font-normal max-w-2xl">
-                  {data.settings.aboutSecretariat ||
-                    'المنصة الرسمية المعتمدة لأمانة قسم ثالث أكتوبر بمحافظة الجيزة. صرح وطني يجمع الكوادر الوطنية ويسخر كافة الإمكانيات والمبادرات لخدمة أهالي وشباب المنطقة وبناء مستقبل واعد تحت راية الوطن.'}
-                </p>
-
-                {/* Primary Action Buttons */}
-                <div className="flex flex-wrap items-center gap-4 pt-2">
-                  <button
-                    onClick={() => {
-                      setCurrentView('join');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    className="cursor-pointer bg-gradient-to-r from-red-700 via-red-600 to-red-700 hover:from-red-800 hover:to-red-800 text-white font-bold px-6 py-3.5 rounded-xl shadow-lg transition-all hover:shadow-red-700/30 hover:scale-[1.02] flex items-center gap-2 text-base"
+        {/* Automated Hero Video & Media Reel ("يقعد يقلب تلقائي") */}
+        <section
+          className="relative overflow-hidden bg-black text-white border-b-2 border-amber-500/30"
+          onMouseEnter={() => setIsHeroHovered(true)}
+          onMouseLeave={() => setIsHeroHovered(false)}
+        >
+          <div className="max-w-6xl mx-auto px-0 sm:px-4 lg:px-6">
+            
+            {/* Main Video / Slide Carousel Container */}
+            <div className="relative aspect-[16/9] sm:aspect-[21/9] max-h-[560px] w-full overflow-hidden bg-black sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
+              {heroSlides.map((slide, idx) => {
+                const isActive = idx === heroSlideIndex;
+                return (
+                  <div
+                    key={slide.id || idx}
+                    className={`absolute inset-0 w-full h-full transition-opacity duration-700 ease-in-out ${
+                      isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
+                    }`}
                   >
-                    <HeartHandshake className="w-5 h-5 text-amber-300" />
-                    <span>طلب الانضمام للحزب</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setCurrentView('party-leaders');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    className="cursor-pointer bg-white/10 hover:bg-white/15 text-white border border-white/20 font-bold px-5 py-3.5 rounded-xl transition-all flex items-center gap-2 text-sm"
-                  >
-                    <Award className="w-4 h-4 text-amber-400" />
-                    <span>قيادات الحزب</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setCurrentView('secretariats');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    className="cursor-pointer bg-stone-800/80 hover:bg-stone-800 text-stone-200 border border-stone-700 font-bold px-5 py-3.5 rounded-xl transition-all flex items-center gap-2 text-sm"
-                  >
-                    <Building2 className="w-4 h-4 text-amber-400" />
-                    <span>الأمانات</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Logo / Emblem Display Column */}
-              <div className="lg:col-span-5 flex justify-center">
-                <div className="relative group p-4 sm:p-6 bg-white/5 border border-amber-500/30 rounded-3xl backdrop-blur-xs shadow-2xl">
-                  <div className="absolute -inset-1 bg-gradient-to-r from-red-600 via-amber-500 to-red-600 rounded-3xl blur-md opacity-30 group-hover:opacity-50 transition duration-700" />
-                  <img
-                    src={data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                    alt="الشعار الرسمي لحزب الجبهة الوطنية"
-                    className="relative w-72 h-72 sm:w-80 sm:h-80 object-contain rounded-2xl bg-white p-3 shadow-inner"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="text-center mt-4">
-                    <p className="text-xs font-bold text-amber-400 tracking-wider">
-                      اللوجو الرسمي المعتمد
-                    </p>
-                    <p className="text-[11px] text-stone-400">
-                      محافظة الجيزة – أمانة قسم ثالث أكتوبر
-                    </p>
+                    {slide.type === 'video' ? (
+                      <video
+                        src={slide.url}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={slide.url}
+                        alt={slide.title || 'فعاليات حزب الجبهة الوطنية'}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
+                    
+                    {/* Subtle bottom gradient & unobtrusive caption strip */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent pointer-events-none" />
+                    
+                    {slide.title && (
+                      <div className="absolute bottom-5 right-5 sm:bottom-6 sm:right-8 z-20 text-right max-w-lg pointer-events-none">
+                        <span className="inline-block bg-amber-500/90 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-md mb-1 shadow-xs">
+                          {slide.type === 'video' ? 'مقطع مرئي' : 'تغطية مصورة'}
+                        </span>
+                        <h2 className="text-sm sm:text-lg font-black text-white drop-shadow-md">
+                          {slide.title}
+                        </h2>
+                        {slide.caption && (
+                          <p className="text-[11px] sm:text-xs text-amber-200/90 font-medium line-clamp-1 drop-shadow-xs">
+                            {slide.caption}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
+                );
+              })}
+
+              {/* Prev / Next Controls (Subtle, sleek) */}
+              {heroSlides.length > 1 && (
+                <>
+                  <button
+                    onClick={() => setHeroSlideIndex(prev => (prev - 1 + heroSlides.length) % heroSlides.length)}
+                    aria-label="السابق"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-70 hover:opacity-100"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => setHeroSlideIndex(prev => (prev + 1) % heroSlides.length)}
+                    aria-label="التالي"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-70 hover:opacity-100"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+
+                  {/* Slide Indicators / Navigation Dots */}
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/40 backdrop-blur-xs px-3 py-1 rounded-full border border-white/10">
+                    {heroSlides.map((_, dotIdx) => (
+                      <button
+                        key={dotIdx}
+                        onClick={() => setHeroSlideIndex(dotIdx)}
+                        aria-label={`شريحة ${dotIdx + 1}`}
+                        className={`h-2 rounded-full transition-all cursor-pointer ${
+                          dotIdx === heroSlideIndex
+                            ? 'w-6 bg-amber-400'
+                            : 'w-2 bg-white/40 hover:bg-white/80'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
 
             </div>
+
           </div>
         </section>
 
         {/* Live Stream alert if active */}
         {data.liveStream && data.liveStream.isActive && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-10 relative z-20">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-6 relative z-20">
             <div className="bg-red-700 text-white rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 border-2 border-red-500">
               <div className="flex items-center gap-4">
                 <span className="relative flex h-4 w-4">
@@ -443,33 +462,98 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         )}
 
-        {/* National Front Party Charter Banner */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="relative overflow-hidden bg-gradient-to-r from-red-950 via-stone-900 to-amber-950 rounded-3xl p-6 sm:p-10 border-2 border-amber-500/40 shadow-2xl text-white">
-            <div className="relative z-10 flex flex-col md:flex-row items-center gap-6 text-right">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center shrink-0 text-amber-400 shadow-inner">
-                <Award className="w-10 h-10" />
+        {/* Official Typography Section Directly Below Video (Exactly matching reference video) */}
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 pt-4">
+          {/* Main Headline */}
+          <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
+            معاً نبني مستقبلاً مشرقاً لمصر
+          </h1>
+
+          {/* Subtitle Paragraph */}
+          <div className="text-sm sm:text-base lg:text-lg font-bold text-stone-800 leading-relaxed max-w-3xl mx-auto space-y-1">
+            <p>
+              حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يحق لأي مصري الانتماء إلى عضويته
+            </p>
+            <p className="text-stone-600 font-semibold text-xs sm:text-sm">
+              دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان
+            </p>
+          </div>
+
+          <div className="w-16 h-1 bg-amber-500 mx-auto rounded-full my-4" />
+
+          {/* Three Foundational Manifesto Paragraphs (Matching video frame 00:01) */}
+          <div className="text-right space-y-4 text-xs sm:text-sm lg:text-base text-stone-700 leading-relaxed font-normal bg-stone-50/80 p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
+            <p className="font-semibold text-stone-900 leading-relaxed">
+              حزب الجبهة الوطنية هو كيان سياسي مصري يهدف إلى إحداث تغيير حقيقي في المشهد السياسي من خلال تعزيز المشاركة الشعبية الفاعلة والصادقة.
+            </p>
+            <p className="leading-relaxed">
+              يعمل الحزب على بناء نموذج ديمقراطي يعزز ثقافة الحوار والتعاون بين جميع أطياف المجتمع، مع التركيز على تحقيق العدالة الاجتماعية والتنمية المستدامة، يسعى الحزب إلى أن يكون بيت خبرة وطني يخدم مصلحة الوطن العليا بعيداً عن أي توجهات ضيقة أو شخصية، مستنداً إلى رؤية شاملة تستند إلى قيم الحرية، العدالة، وسيادة القانون.
+            </p>
+            <p className="leading-relaxed">
+              يجمع الحزب بين طاقات الشباب وخبرات الأجيال لإيجاد حلول حقيقية للتحديات التي تواجه الوطن، إيماناً بأن العمل الجماعي هو السبيل لتحقيق تطلعات الشعب المصري نحو مستقبل أفضل.
+            </p>
+          </div>
+        </section>
+
+        {/* Party Headquarters / Red Carpet Entrance Photo Card (Matching video frame 00:01 - 00:02) */}
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="overflow-hidden rounded-3xl border-2 border-amber-500/30 shadow-xl bg-stone-950 group">
+            <div className="relative aspect-[16/9] sm:aspect-[21/9] w-full overflow-hidden">
+              <img
+                src={data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg'}
+                alt="مدخل مقر حزب الجبهة الوطنية"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+              <div className="absolute bottom-4 right-4 sm:bottom-6 sm:right-6 text-right text-white">
+                <span className="bg-amber-500 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-md uppercase tracking-wider">
+                  مقر الحزب
+                </span>
+                <h3 className="text-base sm:text-xl font-black mt-1 text-white">
+                  مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر
+                </h3>
               </div>
-              <div className="space-y-3 flex-1">
-                <div className="inline-flex items-center gap-2 bg-amber-500/20 text-amber-300 px-3 py-1 rounded-full text-xs font-bold border border-amber-400/30">
-                  <span>{ct.heroBadge || 'الميثاق الوطني للحزب • معاً نبني مستقبلاً مشرقاً لمصر'}</span>
-                </div>
-                <h2 className="text-xl sm:text-2xl font-black text-white leading-snug">
-                  {ct.heroTitle || 'حزب الجبهة الوطنية هو حزب سياسى مدنى ديمقراطى يحق لأى مصرى الإنتماء إلى عضويته'}
-                </h2>
-                <p className="text-sm sm:text-base text-stone-300 leading-relaxed font-normal">
-                  {ct.heroSubtitle || 'دون تفرقة أو تمييز ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان، وتعزيز المشاركة الشعبية الفاعلة والصادقة لخدمة مصلحة الوطن العليا وتحقيق العدالة الاجتماعية والتنمية المستدامة.'}
-                </p>
-              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Independent Membership Call-To-Action Section (Matching video frame 00:02) */}
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="bg-gradient-to-b from-[#fbf8f2] via-[#f7f1e4] to-[#f2e8d5] border-2 border-amber-400/60 rounded-3xl p-8 sm:p-12 text-center shadow-lg space-y-5">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-stone-950">
+              {data.settings.membershipTitle || 'كن جزءاً من التغيير!'}
+            </h2>
+            <p className="text-sm sm:text-base text-stone-700 max-w-xl mx-auto leading-relaxed">
+              {data.settings.membershipSubtitle || 'ندعوكم للانضمام إلى مسيرة الحزب والعمل معنا لتحقيق تطلعات الوطن.'}
+            </p>
+            <p className="text-xs sm:text-sm font-bold text-amber-800">
+              {data.settings.membershipCtaText || 'انضم الآن وساهم في بناء المستقبل'}
+            </p>
+
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+              {/* Membership Application Button */}
               <button
                 onClick={() => {
-                  setCurrentView('about');
+                  setCurrentView('join');
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
-                className="cursor-pointer bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black px-6 py-3.5 rounded-xl text-xs sm:text-sm shadow-lg transition-all shrink-0 hover:scale-[1.02]"
+                className="w-full sm:w-auto bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-600 hover:to-amber-500 text-stone-950 font-black px-8 py-3.5 rounded-xl shadow-md transition-all hover:scale-105 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
               >
-                {ct.heroBtnPrimary || 'رؤية الحزب ومبادئه الكاملة'}
+                <HeartHandshake className="w-5 h-5 text-stone-950" />
+                <span>استمارة العضوية</span>
               </button>
+
+              {/* Direct WhatsApp Contact Button (Editable from Admin Panel) */}
+              <a
+                href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.membershipWhatsapp || data.settings.whatsapp || '01003070108').replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-3.5 rounded-xl shadow-md transition-all hover:scale-105 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
+              >
+                <MessageCircle className="w-5 h-5" />
+                <span>تواصل واستفسار عبر واتساب</span>
+              </a>
             </div>
           </div>
         </section>
@@ -1324,124 +1408,71 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   if (currentView === 'secretariats') {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        {/* Success / Status Notification */}
-        {secretariatNotice && (
-          <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 shadow-sm animate-in fade-in">
-            <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span className="text-xs sm:text-sm font-bold">{secretariatNotice}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSecretariatNotice(null)}
-              className="text-emerald-700 hover:text-emerald-900 p-1 cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
         <div className="text-center space-y-3">
           <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
             الهيكل التنظيمي
           </span>
           <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
-            الأمانات بأمانة قسم ثالث أكتوبر
+            الأمانات التخصصية والنوعية
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 max-w-2xl mx-auto">
-            تضم أمانة قسم ثالث أكتوبر الأمانات واللجان التنظيمية التي تغطي كافة الأبعاد الميدانية والتنموية والإعلامية والتكنولوجية، ولكل أمانة صفحة مستقلة تعرض هيكلها وأهدافها وأنشطتها.
+            تضم أمانة قسم ثالث أكتوبر تشكيلات متخصصة تغطي كافة الأبعاد الميدانية والتنموية والإعلامية والتنظيمية، ولكل أمانة صفحة مستقلة تعرض مهامها وأهدافها وأنشطتها.
           </p>
 
-          {/* Top Quick Actions Bar */}
-          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
-            <span className="bg-stone-100 text-stone-800 text-xs font-bold px-3 py-1.5 rounded-full border border-stone-200">
-              إجمالي الأمانات: {data.specializedSecretariats.length} أمانة
+          <div className="pt-2 flex items-center justify-center">
+            <span className="bg-stone-100 text-stone-800 text-xs font-bold px-3.5 py-1.5 rounded-full border border-stone-200">
+              إجمالي الأمانات: {data.specializedSecretariats.length} أمانة معتمدة
             </span>
-
-            <button
-              type="button"
-              onClick={handleOpenAddSecretariat}
-              className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إضافة أمانة جديدة</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSaveAllSecretariats}
-              disabled={isSavingSecretariats}
-              className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-5 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-            >
-              <Save className="w-4 h-4 text-amber-300" />
-              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
-            </button>
           </div>
         </div>
 
-        {/* Empty state if all secretariats are removed */}
-        {data.specializedSecretariats.length === 0 && (
-          <div className="bg-white rounded-3xl border border-dashed border-stone-300 p-12 text-center space-y-4">
+        {data.specializedSecretariats.length === 0 ? (
+          <div className="bg-white rounded-3xl border border-dashed border-stone-300 p-12 text-center space-y-3">
             <Building2 className="w-16 h-16 text-stone-300 mx-auto" />
-            <div className="space-y-1">
-              <h3 className="text-lg font-black text-stone-800">لا توجد أمانات حالياً</h3>
-              <p className="text-xs text-stone-500 max-w-md mx-auto">
-                يمكنك إضافة أمانة تخصصية جديدة الآن بضغطة زر وتعيين أمين الأمانة ومهامها وأهدافها.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleOpenAddSecretariat}
-              className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl inline-flex items-center gap-2 cursor-pointer shadow-xs"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إضافة أمانة جديدة الآن</span>
-            </button>
+            <h3 className="text-lg font-black text-stone-800">الأمانات قيد المراجعة التنظيمية</h3>
+            <p className="text-xs text-stone-500 max-w-md mx-auto">
+              يجري حالياً تحديث واعتماد تشكيلات الأمانات التخصصية من قبل الأمانة العامة.
+            </p>
           </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {data.specializedSecretariats.map(sec => (
-            <div
-              key={sec.id}
-              onClick={() => openSecretariat(sec.slug)}
-              className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:border-red-600 flex flex-col justify-between relative"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="w-12 h-12 rounded-xl bg-red-50 text-red-700 flex items-center justify-center font-bold group-hover:bg-red-700 group-hover:text-white transition-colors">
-                    <Building2 className="w-6 h-6" />
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-amber-700 font-bold bg-amber-50 px-2.5 py-1 rounded-full">
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {data.specializedSecretariats.map(sec => (
+              <div
+                key={sec.id}
+                onClick={() => openSecretariat(sec.slug)}
+                className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:border-amber-500 flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center font-bold group-hover:bg-amber-500 group-hover:text-stone-950 transition-colors">
+                      <Building2 className="w-6 h-6" />
+                    </div>
+                    <span className="text-xs text-amber-800 font-bold bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
                       قسم ثالث أكتوبر
                     </span>
                   </div>
+
+                  <h2 className="font-extrabold text-stone-900 text-xl group-hover:text-red-700 transition-colors mb-2">
+                    {sec.name}
+                  </h2>
+
+                  <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-6">
+                    {sec.description || 'أمانة تنظيمية متخصصة ضمن الهيكل الإداري والميداني لأمانة قسم ثالث أكتوبر.'}
+                  </p>
+
+                  <div className="space-y-1.5 mb-6 text-xs text-stone-500">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>{sec.duties?.length || 0} مهام واختصاصات رئيسية</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>{sec.goals?.length || 0} أهداف استراتيجية محددة</span>
+                    </div>
+                  </div>
                 </div>
 
-                <h2 className="font-extrabold text-stone-900 text-xl group-hover:text-red-700 transition-colors mb-2">
-                  {sec.name}
-                </h2>
-
-                <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-6">
-                  {sec.description || 'أمانة تنظيمية متخصصة ضمن الهيكل الإداري والميداني لأمانة قسم ثالث أكتوبر.'}
-                </p>
-
-                {/* Duties count / goals */}
-                <div className="space-y-1.5 mb-6 text-xs text-stone-500">
-                  <div className="flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>{sec.duties?.length || 0} مهام واختصاصات رئيسية</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>{sec.goals?.length || 0} أهداف استراتيجية محددة</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-stone-100 space-y-3">
-                <div className="flex items-center justify-between text-xs">
+                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs">
                   <div className="space-y-0.5">
                     <div className="text-[11px] text-stone-600">
                       <span className="text-stone-400 font-medium">أمين الأمانة: </span>
@@ -1453,234 +1484,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <span className="font-semibold text-stone-800">{sec.assistantSecretaryName}</span>
                       </div>
                     )}
-                    {(() => {
-                      const count = (data.secretariatMembers || []).filter(m => m.secretariatId === sec.id).length;
-                      return count > 0 ? (
-                        <div className="text-[10px] text-amber-700 font-bold">
-                          هيئة المكتب: {count} كادر معتمد
-                        </div>
-                      ) : null;
-                    })()}
                   </div>
                   <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
                     <span>التفاصيل</span>
                     <ChevronLeft className="w-4 h-4" />
                   </span>
                 </div>
-
-                {/* Card Management Action Buttons: تعديل / شيل الأمانة */}
-                <div className="pt-2 border-t border-dashed border-stone-200 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => handleOpenEditSecretariat(sec, e)}
-                    className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                    title="تعديل بيانات هذه الأمانة"
-                  >
-                    <Edit2 className="w-3 h-3 text-stone-500" />
-                    <span>تعديل</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={(e) => handleRemoveSecretariat(sec, e)}
-                    className="flex-1 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer border border-red-200 transition-colors"
-                    title="شيل (حذف) هذه الأمانة من الموقع"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    <span>شيل الأمانة</span>
-                  </button>
-                </div>
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* END OF PAGE SAVE & ACTIONS BAR ("ومن اخر الصفحة ضيف كلمت حفظ") */}
-        <div className="bg-gradient-to-r from-stone-900 via-stone-850 to-stone-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border-2 border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-5 mt-10">
-          <div className="text-right space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="bg-emerald-500/20 text-emerald-300 text-xs font-bold px-3 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>إدارة وحفظ الأمانات</span>
-              </span>
-              <h3 className="text-xl font-black text-white">
-                تأكيد وحفظ تشكيل الأمانات التخصصية
-              </h3>
-            </div>
-            <p className="text-xs sm:text-sm text-stone-300">
-              يمكنك إضافة أمانة جديدة أو شيل أي أمانة في أي وقت، واضغط الآن على زر «حفظ» لتأكيد وحفظ التغييرات بقاعدة بيانات المنصة.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3 w-full sm:w-auto shrink-0">
-            <button
-              type="button"
-              onClick={handleOpenAddSecretariat}
-              className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors"
-            >
-              <Plus className="w-4 h-4 text-amber-400" />
-              <span>إضافة أمانة</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSaveAllSecretariats}
-              disabled={isSavingSecretariats}
-              className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm sm:text-base px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/50 transition-all active:scale-95 disabled:opacity-50"
-            >
-              <Save className="w-5 h-5 text-amber-300" />
-              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* ADD / EDIT SECRETARIAT MODAL */}
-        {showAddSecretariatModal && editingSecretariatData && (
-          <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-3xl max-w-xl w-full p-6 text-right space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
-              <div className="flex items-center justify-between border-b border-stone-100 pb-3">
-                <h3 className="text-lg font-black text-stone-900">
-                  {editingSecretariatData.id ? `تعديل أمانة: ${editingSecretariatData.name}` : 'إضافة أمانة جديدة'}
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddSecretariatModal(false);
-                    setEditingSecretariatData(null);
-                  }}
-                  className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleSaveSecretariatModal} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">
-                    اسم الأمانة <span className="text-red-600">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="مثال: أمانة التنظيم والعضوية"
-                    value={editingSecretariatData.name || ''}
-                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, name: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">
-                    الوصف العام ورسالة الأمانة
-                  </label>
-                  <textarea
-                    rows={2}
-                    placeholder="نبذة عن دور واختصاصات الأمانة في خدمة المواطنين وقسم ثالث أكتوبر..."
-                    value={editingSecretariatData.description || ''}
-                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, description: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      اسم أمين الأمانة
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="الاسم الثلاثي أو الرباعي..."
-                      value={editingSecretariatData.secretaryName || ''}
-                      onChange={e => setEditingSecretariatData({ ...editingSecretariatData, secretaryName: e.target.value })}
-                      className="w-full border border-stone-300 rounded-xl px-3 py-1.5 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      اسم الأمين المساعد
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="الاسم الثلاثي أو الرباعي..."
-                      value={editingSecretariatData.assistantSecretaryName || ''}
-                      onChange={e => setEditingSecretariatData({ ...editingSecretariatData, assistantSecretaryName: e.target.value })}
-                      className="w-full border border-stone-300 rounded-xl px-3 py-1.5 text-xs"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">
-                    مهام واختصاصات الأمانة (كل مهمة في سطر)
-                  </label>
-                  <textarea
-                    rows={3}
-                    placeholder="المهمة الأولى&#10;المهمة الثانية&#10;المهمة الثالثة"
-                    value={Array.isArray(editingSecretariatData.duties) ? editingSecretariatData.duties.join('\n') : ''}
-                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, duties: e.target.value.split('\n').filter(Boolean) })}
-                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">
-                    أهداف الأمانة (كل هدف في سطر)
-                  </label>
-                  <textarea
-                    rows={3}
-                    placeholder="الهدف الأول&#10;الهدف الثاني"
-                    value={Array.isArray(editingSecretariatData.goals) ? editingSecretariatData.goals.join('\n') : ''}
-                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, goals: e.target.value.split('\n').filter(Boolean) })}
-                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-3 border-t border-stone-100 gap-3">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="submit"
-                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors shadow-xs"
-                    >
-                      <Save className="w-4 h-4 text-amber-300" />
-                      <span>حفظ</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAddSecretariatModal(false);
-                        setEditingSecretariatData(null);
-                      }}
-                      className="bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
-                    >
-                      إلغاء
-                    </button>
-                  </div>
-
-                  {editingSecretariatData.id && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (window.confirm(`هل أنت متأكد من شيل (حذف) أمانة "${editingSecretariatData.name}" نهائياً من الموقع؟`)) {
-                          try {
-                            await api.deleteSecretariat(editingSecretariatData.id!);
-                            setShowAddSecretariatModal(false);
-                            setEditingSecretariatData(null);
-                            if (onRefreshData) onRefreshData();
-                            setSecretariatNotice(`تم شيل أمانة "${editingSecretariatData.name}" بنجاح!`);
-                          } catch (err: any) {
-                            alert(err.message || 'تعذر شيل الأمانة');
-                          }
-                        }
-                      }}
-                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer flex items-center gap-1 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>شيل هذه الأمانة</span>
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
+            ))}
           </div>
         )}
       </div>
@@ -1714,29 +1525,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               <span className="bg-amber-500/20 text-amber-300 text-xs font-bold px-3 py-1 rounded-full border border-amber-500/30">
                 أمانة معتمدة – أمانة قسم ثالث أكتوبر
               </span>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditSecretariat(sec)}
-                  className="bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold px-3.5 py-1.5 rounded-xl border border-stone-700 cursor-pointer flex items-center gap-1.5 transition-colors"
-                >
-                  <Edit2 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>تعديل الأمانة</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await handleRemoveSecretariat(sec);
-                    setCurrentView('secretariats');
-                  }}
-                  className="bg-red-950/60 hover:bg-red-900 text-red-300 text-xs font-bold px-3.5 py-1.5 rounded-xl border border-red-800/60 cursor-pointer flex items-center gap-1.5 transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>شيل هذه الأمانة</span>
-                </button>
-              </div>
             </div>
 
             <h1 className="text-3xl sm:text-4xl font-black text-white">
@@ -2001,28 +1789,33 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         )}
 
-        {/* End of Page Save & Return Bar */}
-        <div className="bg-stone-900 text-white p-6 rounded-3xl border border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
+        {/* Navigation back to all secretariats and join CTA */}
+        <div className="bg-stone-900 text-white p-6 rounded-3xl border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
           <div className="text-right">
-            <h4 className="font-bold text-white text-base">إدارة وتأكيد أمانة {sec.name}</h4>
-            <p className="text-xs text-stone-400 mt-0.5">يمكنك حفظ بيانات الأمانة أو شيلها والعودة لكافة الأمانات.</p>
+            <h4 className="font-bold text-white text-base">هل ترغب بالانضمام إلى فريق {sec.name}؟</h4>
+            <p className="text-xs text-stone-400 mt-0.5">يمكنك تقديم طلب العضوية والانضمام إلى لجان وهيئة مكتب الأمانة.</p>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">
             <button
               type="button"
-              onClick={() => setCurrentView('secretariats')}
+              onClick={() => {
+                setCurrentView('secretariats');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className="bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
             >
               العودة لكافة الأمانات
             </button>
             <button
               type="button"
-              onClick={handleSaveAllSecretariats}
-              disabled={isSavingSecretariats}
-              className="flex-1 sm:flex-none bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-colors"
+              onClick={() => {
+                setCurrentView('join');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="flex-1 sm:flex-none bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-transform hover:scale-105"
             >
-              <Save className="w-4 h-4 text-amber-300" />
-              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
+              <HeartHandshake className="w-4 h-4 text-stone-950" />
+              <span>تقديم طلب انضمام</span>
             </button>
           </div>
         </div>

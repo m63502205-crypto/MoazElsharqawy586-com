@@ -38,46 +38,67 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-stone-200 shadow-xs">
+    <header className="sticky top-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-amber-500/20 shadow-md">
+      {/* Top Banner Ribbon */}
+      <div className="bg-gradient-to-r from-stone-950 via-amber-950/40 to-stone-950 py-1.5 px-4 border-b border-amber-500/15 flex items-center justify-between text-[11px]">
+        <div className="flex items-center gap-2 text-stone-300">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <span className="font-semibold text-amber-300">{slogan ? `«${slogan}»` : '«مصر للجميع»'}</span>
+          <span className="hidden sm:inline text-stone-600">|</span>
+          <span className="hidden sm:inline text-stone-400">أمانة قسم ثالث أكتوبر – محافظة الجيزة</span>
+        </div>
+      </div>
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-20 gap-4">
           
-          {/* Zone 1: Brand & Official Emblem */}
-          <button
-            onClick={() => handleNav('home')}
-            className="flex items-center gap-3.5 text-right cursor-pointer group shrink-0"
-          >
-            <img
-              src={officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-              alt="شعار حزب الجبهة الوطنية"
-              className="w-13 h-13 object-contain rounded-lg border border-amber-500/30 shadow-xs group-hover:scale-105 transition-transform"
-              referrerPolicy="no-referrer"
-            />
-            <div className="flex flex-col">
-              <span className="font-extrabold text-lg sm:text-xl text-stone-950 tracking-tight leading-tight group-hover:text-red-700 transition-colors">
-                حزب الجبهة الوطنية
-              </span>
-              <span className="text-xs font-semibold text-red-700 leading-tight">
-                أمانة قسم ثالث أكتوبر – محافظة الجيزة
-              </span>
-              <span className="text-[11px] font-medium text-amber-700 tracking-wide mt-0.5">
-                «{slogan || 'مصر للجميع'}»
-              </span>
-            </div>
-          </button>
+          {/* Right Zone: Active Main Tab on Mobile / Brand on Desktop */}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => handleNav('home')}
+              className="flex items-center gap-3 text-right cursor-pointer group shrink-0"
+            >
+              <img
+                src={officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                alt="شعار حزب الجبهة الوطنية"
+                className="w-12 h-12 sm:w-14 sm:h-14 object-contain rounded-xl border border-amber-500/40 p-0.5 bg-black/40 shadow-sm group-hover:scale-105 transition-transform"
+                referrerPolicy="no-referrer"
+              />
+              <div className="flex flex-col">
+                <span className="font-black text-base sm:text-lg text-white tracking-tight leading-tight group-hover:text-amber-400 transition-colors">
+                  حزب الجبهة الوطنية
+                </span>
+                <span className="text-[11px] font-semibold text-amber-400 leading-tight">
+                  أمانة قسم ثالث أكتوبر
+                </span>
+              </div>
+            </button>
 
-          {/* Zone 2: Navigation Links (Desktop) */}
-          <nav className="hidden xl:flex items-center gap-6 text-sm font-medium text-stone-700">
+            {/* Quick Home Tab on mobile */}
+            <button
+              onClick={() => handleNav('home')}
+              className={`xl:hidden px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                currentView === 'home'
+                  ? 'bg-amber-500 text-stone-950 shadow-sm'
+                  : 'text-stone-300 hover:text-white'
+              }`}
+            >
+              الرئيسية
+            </button>
+          </div>
+
+          {/* Center Zone: Navigation Links (Desktop) */}
+          <nav className="hidden xl:flex items-center gap-5 text-sm font-semibold text-stone-300">
             {navLinks.map(link => {
               const isActive = currentView === link.id;
               return (
                 <button
                   key={link.id}
                   onClick={() => handleNav(link.id)}
-                  className={`cursor-pointer whitespace-nowrap transition-colors py-1 border-b-2 font-semibold ${
+                  className={`cursor-pointer whitespace-nowrap transition-colors py-1 border-b-2 font-bold ${
                     isActive
-                      ? 'border-red-700 text-red-700'
-                      : 'border-transparent hover:text-red-700 hover:border-red-700/40 text-stone-700'
+                      ? 'border-amber-400 text-amber-300'
+                      : 'border-transparent hover:text-amber-300 hover:border-amber-400/40 text-stone-300'
                   }`}
                 >
                   {link.label}
@@ -86,24 +107,24 @@ export const Navbar: React.FC<NavbarProps> = ({
             })}
           </nav>
 
-          {/* Zone 3: Primary Action & Admin Portal Access */}
+          {/* Left Zone: Action Button & Mobile Drawer Toggle */}
           <div className="flex items-center gap-2.5 shrink-0">
             {/* Primary Action Button */}
             <button
               onClick={() => handleNav('join')}
-              className="flex items-center gap-2 bg-gradient-to-r from-red-700 to-red-800 hover:from-red-800 hover:to-red-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow cursor-pointer whitespace-nowrap"
+              className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all hover:scale-[1.02] cursor-pointer whitespace-nowrap"
             >
-              <HeartHandshake className="w-4 h-4 text-amber-300" />
-              <span>طلب الانضمام</span>
+              <HeartHandshake className="w-4 h-4 text-stone-950" />
+              <span>استمارة العضوية</span>
             </button>
 
             {/* Mobile menu toggle */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="xl:hidden p-2 rounded-lg text-stone-700 hover:bg-stone-100 focus:outline-hidden"
+              className="xl:hidden p-2 rounded-xl text-stone-200 hover:bg-stone-800/80 border border-stone-800 focus:outline-hidden"
               aria-label="القائمة الرئيسية"
             >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              {mobileMenuOpen ? <X className="w-6 h-6 text-amber-400" /> : <Menu className="w-6 h-6 text-amber-400" />}
             </button>
           </div>
 
@@ -112,18 +133,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="xl:hidden border-t border-stone-200 bg-white px-4 pt-3 pb-6 shadow-xl animate-in slide-in-from-top duration-150">
-          <div className="grid grid-cols-2 gap-2 text-sm font-medium">
+        <div className="xl:hidden border-t border-amber-500/20 bg-stone-950 px-4 pt-3 pb-6 shadow-2xl animate-in slide-in-from-top duration-150">
+          <div className="grid grid-cols-2 gap-2 text-sm font-semibold">
             {navLinks.map(link => {
               const isActive = currentView === link.id;
               return (
                 <button
                   key={link.id}
                   onClick={() => handleNav(link.id)}
-                  className={`text-right px-3 py-2.5 rounded-md transition-colors font-semibold ${
+                  className={`text-right px-3 py-2.5 rounded-xl transition-colors font-bold ${
                     isActive
-                      ? 'bg-red-50 text-red-700 border-r-4 border-red-700 font-bold'
-                      : 'text-stone-800 hover:bg-stone-50'
+                      ? 'bg-amber-500/20 text-amber-300 border-r-4 border-amber-400'
+                      : 'text-stone-300 hover:bg-stone-900 hover:text-white'
                   }`}
                 >
                   {link.label}
@@ -132,13 +153,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             })}
           </div>
 
-          <div className="mt-4 pt-3 border-t border-stone-100 flex flex-col gap-2">
+          <div className="mt-4 pt-3 border-t border-stone-800 flex flex-col gap-2">
             <button
               onClick={() => handleNav('join')}
-              className="w-full flex items-center justify-center gap-2 bg-red-700 text-white py-3 rounded-lg text-sm font-bold shadow-xs cursor-pointer"
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 py-3 rounded-xl text-sm font-black shadow-md cursor-pointer"
             >
-              <HeartHandshake className="w-4 h-4 text-amber-300" />
-              <span>تقديم طلب انضمام للحزب</span>
+              <HeartHandshake className="w-4 h-4 text-stone-950" />
+              <span>تقديم طلب العضوية والانضمام</span>
             </button>
           </div>
         </div>

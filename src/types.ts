@@ -327,6 +327,21 @@ export interface SiteSettings {
   facebookUrl?: string;
   googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-XXXXXXXXXX)
   customTexts?: SiteCustomTexts;
+  heroVideoUrl?: string;
+  heroPosterUrl?: string;
+  heroSlides?: Array<{
+    id: string;
+    type: 'video' | 'image';
+    url: string;
+    posterUrl?: string;
+    title?: string;
+    caption?: string;
+  }>;
+  entranceImageUrl?: string;
+  membershipTitle?: string;
+  membershipSubtitle?: string;
+  membershipCtaText?: string;
+  membershipWhatsapp?: string;
   socialLinks: Array<{ id: string; platform: string; url: string; label: string }>;
   aboutParty: string;
   aboutSecretariat: string;

@@ -67,7 +67,9 @@ import {
   Activity,
   Copy,
   FileSpreadsheet,
-  Type
+  Type,
+  Play,
+  HeartHandshake
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -2548,6 +2550,239 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono"
                         dir="ltr"
                       />
+                    </div>
+                  </div>
+
+                  {/* Video & Media Showcase Section (Matching Video bhaalwataniya.com) */}
+                  <div className="p-5 bg-stone-900 text-white border-2 border-amber-500/40 rounded-3xl space-y-4">
+                    <div className="flex items-center gap-2.5 border-b border-stone-800 pb-3">
+                      <span className="w-8 h-8 rounded-xl bg-amber-500 text-stone-950 flex items-center justify-center font-bold">
+                        <Play className="w-4 h-4 fill-stone-950" />
+                      </span>
+                      <div>
+                        <h3 className="text-sm font-black text-white">
+                          مقطع الفيديو التعريفي وصورة مدخل المقر (Hero Video & Entrance)
+                        </h3>
+                        <p className="text-[11px] text-stone-400">
+                          التحكم في فيديو البانر المتحرك أعلى الموقع وصورة مدخل المقر بالسجادة الحمراء كما بالفيديو المرجعي.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-amber-300 mb-1">
+                          رابط فيديو البانر الرئيسي (MP4 Video URL)
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://.../video.mp4 أو مسار ملف الفيديو"
+                          value={settings.heroVideoUrl || ''}
+                          onChange={e => setSettings({ ...settings, heroVideoUrl: e.target.value })}
+                          className="w-full border border-stone-700 bg-stone-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                          dir="ltr"
+                        />
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          يتم تشغيله تلقائياً مع تكرار دائم في أعلى الصفحة الرئيسية كفيديو صامت عالي الدقة.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-amber-300 mb-1">
+                          صورة غلاف الفيديو (Video Poster)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="/assets/... أو رابط صورة"
+                          value={settings.heroPosterUrl || ''}
+                          onChange={e => setSettings({ ...settings, heroPosterUrl: e.target.value })}
+                          className="w-full border border-stone-700 bg-stone-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                          dir="ltr"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <ImageFieldWithPicker
+                          label="صورة مدخل المقر والسجادة الحمراء (Party Entrance Banner)"
+                          value={settings.entranceImageUrl || ''}
+                          onChange={url => setSettings({ ...settings, entranceImageUrl: url })}
+                          media={media}
+                          onMediaCreated={handleMediaCreated}
+                          shape="rounded"
+                          helpText="تظهر أسفل النص التعريفي مباشرة وتفصل بين الرؤية وقسم العضوية كما بالفيديو المرجعي"
+                          pickerTitle="اختيار صورة المقر من المعرض العام"
+                        />
+                      </div>
+
+                      {/* Multi-slide automatic flipper manager */}
+                      <div className="sm:col-span-2 border-t border-stone-800 pt-4 mt-1 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-xs font-bold text-amber-300">
+                              شرائح وفيديوهات البانر (يقلب تلقائياً كل 4.5 ثوانٍ)
+                            </h4>
+                            <p className="text-[10px] text-stone-400">
+                              يمكنك إضافة عدة فيديوهات أو صور لتقلب تلقائياً في أعلى الموقع بدون أي عناصر تعيق المشاهدة.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newSlide = {
+                                id: `slide-${Date.now()}`,
+                                type: 'image' as const,
+                                url: '',
+                                title: '',
+                                caption: ''
+                              };
+                              setSettings({
+                                ...settings,
+                                heroSlides: [...(settings.heroSlides || []), newSlide]
+                              });
+                            }}
+                            className="text-xs bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>إضافة شريحة / فيديو</span>
+                          </button>
+                        </div>
+
+                        {settings.heroSlides && settings.heroSlides.length > 0 && (
+                          <div className="space-y-3">
+                            {settings.heroSlides.map((slide, sIdx) => (
+                              <div
+                                key={slide.id || sIdx}
+                                className="p-3 bg-stone-950 border border-stone-800 rounded-xl space-y-2 text-xs"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center font-bold text-[10px]">
+                                      {sIdx + 1}
+                                    </span>
+                                    <select
+                                      value={slide.type}
+                                      onChange={e => {
+                                        const updated = [...(settings.heroSlides || [])];
+                                        updated[sIdx] = { ...slide, type: e.target.value as 'video' | 'image' };
+                                        setSettings({ ...settings, heroSlides: updated });
+                                      }}
+                                      className="bg-stone-900 border border-stone-700 text-white rounded-lg px-2 py-1 text-xs"
+                                    >
+                                      <option value="image">صورة (Image)</option>
+                                      <option value="video">فيديو (Video MP4)</option>
+                                    </select>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = (settings.heroSlides || []).filter((_, i) => i !== sIdx);
+                                      setSettings({ ...settings, heroSlides: updated });
+                                    }}
+                                    className="text-red-400 hover:text-red-300 p-1"
+                                    title="حذف الشريحة"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="رابط الصورة أو ملف الفيديو"
+                                    value={slide.url}
+                                    onChange={e => {
+                                      const updated = [...(settings.heroSlides || [])];
+                                      updated[sIdx] = { ...slide, url: e.target.value };
+                                      setSettings({ ...settings, heroSlides: updated });
+                                    }}
+                                    className="sm:col-span-2 border border-stone-700 bg-stone-900 text-white rounded-lg px-2.5 py-1.5 font-mono text-xs"
+                                    dir="ltr"
+                                  />
+                                  <input
+                                    type="text"
+                                    placeholder="عنوان الشريحة (اختياري)"
+                                    value={slide.title || ''}
+                                    onChange={e => {
+                                      const updated = [...(settings.heroSlides || [])];
+                                      updated[sIdx] = { ...slide, title: e.target.value };
+                                      setSettings({ ...settings, heroSlides: updated });
+                                    }}
+                                    className="border border-stone-700 bg-stone-900 text-white rounded-lg px-2.5 py-1.5 text-xs"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Independent Membership Section & WhatsApp Number */}
+                  <div className="p-5 bg-gradient-to-b from-[#fbf8f2] to-[#f4ece0] border-2 border-amber-400/80 rounded-3xl space-y-4">
+                    <div className="flex items-center gap-2.5 border-b border-amber-300 pb-3">
+                      <span className="w-8 h-8 rounded-xl bg-amber-500 text-stone-950 flex items-center justify-center font-bold">
+                        <HeartHandshake className="w-4 h-4 text-stone-950" />
+                      </span>
+                      <div>
+                        <h3 className="text-sm font-black text-stone-950">
+                          قسم العضوية المستقل ورقم واتساب المباشر («كن جزءاً من التغيير!»)
+                        </h3>
+                        <p className="text-[11px] text-stone-600">
+                          تعديل نصوص دعوة الانضمام ورقم الواتساب الخاص بالاستفسارات والتواصل المباشر.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          عنوان قسم العضوية
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.membershipTitle || 'كن جزءاً من التغيير!'}
+                          onChange={e => setSettings({ ...settings, membershipTitle: e.target.value })}
+                          className="w-full border border-stone-300 bg-white rounded-xl px-3.5 py-2.5 text-xs font-bold text-stone-900"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          رقم واتساب العضوية والاستفسارات (فتح محادثة مباشرة) <span className="text-red-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.membershipWhatsapp || settings.whatsapp || '01003070108'}
+                          onChange={e => setSettings({ ...settings, membershipWhatsapp: e.target.value })}
+                          className="w-full border border-stone-300 bg-white rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-emerald-700"
+                          dir="ltr"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          النص التعريفي لدعوة العضوية
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.membershipSubtitle || 'ندعوكم للانضمام إلى مسيرة الحزب والعمل معنا لتحقيق تطلعات الوطن.'}
+                          onChange={e => setSettings({ ...settings, membershipSubtitle: e.target.value })}
+                          className="w-full border border-stone-300 bg-white rounded-xl px-3.5 py-2.5 text-xs text-stone-900"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          النص التحفيزي للزر
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.membershipCtaText || 'انضم الآن وساهم في بناء المستقبل'}
+                          onChange={e => setSettings({ ...settings, membershipCtaText: e.target.value })}
+                          className="w-full border border-stone-300 bg-white rounded-xl px-3.5 py-2.5 text-xs text-stone-900"
+                        />
+                      </div>
                     </div>
                   </div>
 

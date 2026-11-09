@@ -243,6 +243,21 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string;
+  heroVideoUrl?: string;
+  heroPosterUrl?: string;
+  heroSlides?: Array<{
+    id: string;
+    type: 'video' | 'image';
+    url: string;
+    posterUrl?: string;
+    title?: string;
+    caption?: string;
+  }>;
+  entranceImageUrl?: string;
+  membershipTitle?: string;
+  membershipSubtitle?: string;
+  membershipCtaText?: string;
+  membershipWhatsapp?: string;
   customTexts?: any;
   socialLinks: Array<{ id: string; platform: string; url: string; label: string }>;
   aboutParty: string;

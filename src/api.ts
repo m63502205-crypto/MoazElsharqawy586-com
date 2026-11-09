@@ -161,17 +161,22 @@ export const api = {
 
   // Specialized Secretariats
   createSecretariat: (sec: Partial<SpecializedSecretariat>) =>
-    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>('/api/admin/secretariats', {
+    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>('/api/secretariats', {
       method: 'POST',
       body: JSON.stringify(sec)
     }),
   updateSecretariat: (id: string, sec: Partial<SpecializedSecretariat>) =>
-    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>(`/api/admin/secretariats/${id}`, {
+    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>(`/api/secretariats/${id}`, {
       method: 'PUT',
       body: JSON.stringify(sec)
     }),
   deleteSecretariat: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/secretariats/${id}`, { method: 'DELETE' }),
+    apiFetch<{ success: boolean }>(`/api/secretariats/${id}`, { method: 'DELETE' }),
+  saveAllSecretariats: (secretariats?: SpecializedSecretariat[]) =>
+    apiFetch<{ success: boolean; count: number; message: string }>('/api/secretariats/save-all', {
+      method: 'POST',
+      body: JSON.stringify({ secretariats })
+    }),
 
   // Secretariat Members & Transfers
   createSecretariatMember: (member: Partial<SecretariatMember>) =>

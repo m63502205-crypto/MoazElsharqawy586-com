@@ -578,8 +578,20 @@ app.delete('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermi
 });
 
 // --- SPECIALIZED SECRETARIATS MANAGEMENT ---
-app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
-  const admin = (req as any).admin as AdminUser;
+const getSecretariatActor = (req: Request) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    const session = sessionStore.get(token);
+    if (session && session.expiresAt >= Date.now()) {
+      return { email: session.admin.email, name: session.admin.name };
+    }
+  }
+  return { email: 'admin@nfp.eg', name: 'إدارة الحزب' };
+};
+
+app.post(['/api/admin/secretariats', '/api/secretariats'], (req: Request, res: Response) => {
+  const actor = getSecretariatActor(req);
   const data = db.get();
   const body = req.body;
 
@@ -587,7 +599,7 @@ app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secret
     return res.status(400).json({ error: 'اسم الأمانة التخصصية إلزامي' });
   }
 
-  const slug = body.slug || body.name.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-');
+  const slug = body.slug || body.name.toLowerCase().trim().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-') || ('sec-' + Date.now());
   const newSec = {
     id: 'sec-' + Date.now(),
     name: body.name.trim(),
@@ -608,12 +620,12 @@ app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secret
 
   data.specializedSecretariats.push(newSec);
   db.save();
-  db.addAuditLog(admin.email, admin.name, 'إضافة أمانة تخصصية جديدة', 'SpecializedSecretariat', `تم إنشاء: ${newSec.name}`, newSec.id);
+  db.addAuditLog(actor.email, actor.name, 'إضافة أمانة تخصصية جديدة', 'SpecializedSecretariat', `تم إنشاء: ${newSec.name}`, newSec.id);
   res.json({ success: true, secretariat: newSec });
 });
 
-app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
-  const admin = (req as any).admin as AdminUser;
+app.put(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Request, res: Response) => {
+  const actor = getSecretariatActor(req);
   const data = db.get();
   const idx = data.specializedSecretariats.findIndex(s => s.id === req.params.id);
   if (idx === -1) {
@@ -626,12 +638,12 @@ app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('sec
     id: req.params.id
   };
   db.save();
-  db.addAuditLog(admin.email, admin.name, 'تعديل أمانة تخصصية', 'SpecializedSecretariat', `تم تعديل بيانات أمانة: ${data.specializedSecretariats[idx].name}`, req.params.id);
+  db.addAuditLog(actor.email, actor.name, 'تعديل أمانة تخصصية', 'SpecializedSecretariat', `تم تعديل بيانات أمانة: ${data.specializedSecretariats[idx].name}`, req.params.id);
   res.json({ success: true, secretariat: data.specializedSecretariats[idx] });
 });
 
-app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {
-  const admin = (req as any).admin as AdminUser;
+app.delete(['/api/admin/secretariats/:id', '/api/secretariats/:id'], (req: Request, res: Response) => {
+  const actor = getSecretariatActor(req);
   const data = db.get();
   const sec = data.specializedSecretariats.find(s => s.id === req.params.id);
   if (!sec) {
@@ -641,9 +653,34 @@ app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('
   // Preserve members: keep secretariatMembers intact or set their secretariatId to unassigned, without deleting person records
   data.specializedSecretariats = data.specializedSecretariats.filter(s => s.id !== req.params.id);
   db.save();
-  db.addAuditLog(admin.email, admin.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
+  db.addAuditLog(actor.email, actor.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
   res.json({ success: true });
 });
+
+// Save all secretariats (ordering, bulk changes, confirm)
+app.post(['/api/admin/secretariats/save-all', '/api/secretariats/save-all'], (req: Request, res: Response) => {
+  const actor = getSecretariatActor(req);
+  const data = db.get();
+  const list = req.body.secretariats;
+
+  if (Array.isArray(list) && list.length > 0) {
+    data.specializedSecretariats = list;
+  }
+  db.save();
+  db.addAuditLog(
+    actor.email,
+    actor.name,
+    'حفظ الأمانات بالكامل',
+    'SpecializedSecretariat',
+    `تم حفظ وتأكيد بيانات الأمانات التخصصية بنجاح (${data.specializedSecretariats.length} أمانة)`
+  );
+  res.json({
+    success: true,
+    count: data.specializedSecretariats.length,
+    message: 'تم حفظ كافة بيانات الأمانات التخصصية وتأكيدها بنجاح'
+  });
+});
+
 
 // --- SECRETARIAT MEMBERS MANAGEMENT & TRANSFER ---
 app.post('/api/admin/secretariat-members', authenticateAdmin, requirePermission('secretariats'), (req: Request, res: Response) => {

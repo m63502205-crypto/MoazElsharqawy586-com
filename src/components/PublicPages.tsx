@@ -37,7 +37,12 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  HelpCircle
+  HelpCircle,
+  Plus,
+  Trash2,
+  Save,
+  Edit2,
+  X
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
@@ -58,12 +63,88 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   currentView,
   setCurrentView,
   data,
+  onRefreshData,
   selectedSlug,
   setSelectedSlug,
   selectedNewsId,
   onClearSelectedNewsId
 }) => {
   const ct = data.settings.customTexts || {};
+
+  // Secretariat management states (شيل أمانة / إضافة أمانة / حفظ)
+  const [showAddSecretariatModal, setShowAddSecretariatModal] = useState(false);
+  const [editingSecretariatData, setEditingSecretariatData] = useState<Partial<SpecializedSecretariat> | null>(null);
+  const [isSavingSecretariats, setIsSavingSecretariats] = useState(false);
+  const [secretariatNotice, setSecretariatNotice] = useState<string | null>(null);
+
+  const handleRemoveSecretariat = async (sec: SpecializedSecretariat, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm(`هل أنت متأكد من رغبتك في شيل (حذف) أمانة "${sec.name}" نهائياً من الموقع؟`)) {
+      return;
+    }
+    try {
+      await api.deleteSecretariat(sec.id);
+      if (onRefreshData) onRefreshData();
+      setSecretariatNotice(`تم شيل أمانة "${sec.name}" بنجاح!`);
+      setTimeout(() => setSecretariatNotice(null), 4000);
+    } catch (err: any) {
+      alert(err.message || 'تعذر شيل الأمانة');
+    }
+  };
+
+  const handleOpenAddSecretariat = () => {
+    setEditingSecretariatData({
+      isActive: true,
+      sortOrder: (data.specializedSecretariats?.length || 0) + 1,
+      duties: [],
+      goals: []
+    });
+    setShowAddSecretariatModal(true);
+  };
+
+  const handleOpenEditSecretariat = (sec: SpecializedSecretariat, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditingSecretariatData({ ...sec });
+    setShowAddSecretariatModal(true);
+  };
+
+  const handleSaveSecretariatModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSecretariatData || !editingSecretariatData.name?.trim()) {
+      alert('يرجى كتابة اسم الأمانة');
+      return;
+    }
+    try {
+      if (editingSecretariatData.id) {
+        await api.updateSecretariat(editingSecretariatData.id, editingSecretariatData);
+        setSecretariatNotice(`تم حفظ وتحديث أمانة "${editingSecretariatData.name}" بنجاح!`);
+      } else {
+        const autoSlug = editingSecretariatData.slug || editingSecretariatData.name.toLowerCase().trim().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-') || ('sec-' + Date.now());
+        await api.createSecretariat({ ...editingSecretariatData, slug: autoSlug });
+        setSecretariatNotice(`تم إضافة أمانة "${editingSecretariatData.name}" بنجاح!`);
+      }
+      setShowAddSecretariatModal(false);
+      setEditingSecretariatData(null);
+      if (onRefreshData) onRefreshData();
+      setTimeout(() => setSecretariatNotice(null), 4000);
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء حفظ الأمانة');
+    }
+  };
+
+  const handleSaveAllSecretariats = async () => {
+    setIsSavingSecretariats(true);
+    try {
+      await api.saveAllSecretariats(data.specializedSecretariats);
+      if (onRefreshData) onRefreshData();
+      setSecretariatNotice('تم حفظ وتأكيد كافة الأمانات التخصصية بنجاح!');
+      setTimeout(() => setSecretariatNotice(null), 4000);
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
+    } finally {
+      setIsSavingSecretariats(false);
+    }
+  };
 
   // Modal states for leaders / news
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
@@ -1243,6 +1324,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   if (currentView === 'secretariats') {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
+        {/* Success / Status Notification */}
+        {secretariatNotice && (
+          <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 shadow-sm animate-in fade-in">
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span className="text-xs sm:text-sm font-bold">{secretariatNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSecretariatNotice(null)}
+              className="text-emerald-700 hover:text-emerald-900 p-1 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <div className="text-center space-y-3">
           <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
             الهيكل التنظيمي
@@ -1253,23 +1351,72 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <p className="text-xs sm:text-sm text-stone-500 max-w-2xl mx-auto">
             تضم أمانة قسم ثالث أكتوبر الأمانات واللجان التنظيمية التي تغطي كافة الأبعاد الميدانية والتنموية والإعلامية والتكنولوجية، ولكل أمانة صفحة مستقلة تعرض هيكلها وأهدافها وأنشطتها.
           </p>
+
+          {/* Top Quick Actions Bar */}
+          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+            <span className="bg-stone-100 text-stone-800 text-xs font-bold px-3 py-1.5 rounded-full border border-stone-200">
+              إجمالي الأمانات: {data.specializedSecretariats.length} أمانة
+            </span>
+
+            <button
+              type="button"
+              onClick={handleOpenAddSecretariat}
+              className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة أمانة جديدة</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveAllSecretariats}
+              disabled={isSavingSecretariats}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-5 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+            >
+              <Save className="w-4 h-4 text-amber-300" />
+              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
+            </button>
+          </div>
         </div>
+
+        {/* Empty state if all secretariats are removed */}
+        {data.specializedSecretariats.length === 0 && (
+          <div className="bg-white rounded-3xl border border-dashed border-stone-300 p-12 text-center space-y-4">
+            <Building2 className="w-16 h-16 text-stone-300 mx-auto" />
+            <div className="space-y-1">
+              <h3 className="text-lg font-black text-stone-800">لا توجد أمانات حالياً</h3>
+              <p className="text-xs text-stone-500 max-w-md mx-auto">
+                يمكنك إضافة أمانة تخصصية جديدة الآن بضغطة زر وتعيين أمين الأمانة ومهامها وأهدافها.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenAddSecretariat}
+              className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl inline-flex items-center gap-2 cursor-pointer shadow-xs"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة أمانة جديدة الآن</span>
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {data.specializedSecretariats.map(sec => (
             <div
               key={sec.id}
               onClick={() => openSecretariat(sec.slug)}
-              className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:border-red-600 flex flex-col justify-between"
+              className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:border-red-600 flex flex-col justify-between relative"
             >
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <div className="w-12 h-12 rounded-xl bg-red-50 text-red-700 flex items-center justify-center font-bold group-hover:bg-red-700 group-hover:text-white transition-colors">
                     <Building2 className="w-6 h-6" />
                   </div>
-                  <span className="text-xs text-amber-700 font-bold bg-amber-50 px-2.5 py-1 rounded-full">
-                    قسم ثالث أكتوبر
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-amber-700 font-bold bg-amber-50 px-2.5 py-1 rounded-full">
+                      قسم ثالث أكتوبر
+                    </span>
+                  </div>
                 </div>
 
                 <h2 className="font-extrabold text-stone-900 text-xl group-hover:text-red-700 transition-colors mb-2">
@@ -1277,7 +1424,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </h2>
 
                 <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-6">
-                  {sec.description}
+                  {sec.description || 'أمانة تنظيمية متخصصة ضمن الهيكل الإداري والميداني لأمانة قسم ثالث أكتوبر.'}
                 </p>
 
                 {/* Duties count / goals */}
@@ -1293,38 +1440,253 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs">
-                <div className="space-y-0.5">
-                  <div className="text-[11px] text-stone-600">
-                    <span className="text-stone-400 font-medium">أمين الأمانة: </span>
-                    <span className="font-bold text-stone-900">{sec.secretaryName || 'قيد التكليف'}</span>
-                  </div>
-                  {sec.assistantSecretaryName && (
+              <div className="pt-4 border-t border-stone-100 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="space-y-0.5">
                     <div className="text-[11px] text-stone-600">
-                      <span className="text-stone-400 font-medium">الأمين المساعد: </span>
-                      <span className="font-semibold text-stone-800">{sec.assistantSecretaryName}</span>
+                      <span className="text-stone-400 font-medium">أمين الأمانة: </span>
+                      <span className="font-bold text-stone-900">{sec.secretaryName || 'قيد التكليف'}</span>
                     </div>
-                  )}
-                  {(() => {
-                    const count = (data.secretariatMembers || []).filter(m => m.secretariatId === sec.id).length;
-                    return count > 0 ? (
-                      <div className="text-[10px] text-amber-700 font-bold">
-                        هيئة المكتب: {count} كادر معتمد
+                    {sec.assistantSecretaryName && (
+                      <div className="text-[11px] text-stone-600">
+                        <span className="text-stone-400 font-medium">الأمين المساعد: </span>
+                        <span className="font-semibold text-stone-800">{sec.assistantSecretaryName}</span>
                       </div>
-                    ) : null;
-                  })()}
+                    )}
+                    {(() => {
+                      const count = (data.secretariatMembers || []).filter(m => m.secretariatId === sec.id).length;
+                      return count > 0 ? (
+                        <div className="text-[10px] text-amber-700 font-bold">
+                          هيئة المكتب: {count} كادر معتمد
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
+                  <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
+                    <span>التفاصيل</span>
+                    <ChevronLeft className="w-4 h-4" />
+                  </span>
                 </div>
-                <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
-                  <span>التفاصيل</span>
-                  <ChevronLeft className="w-4 h-4" />
-                </span>
+
+                {/* Card Management Action Buttons: تعديل / شيل الأمانة */}
+                <div className="pt-2 border-t border-dashed border-stone-200 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => handleOpenEditSecretariat(sec, e)}
+                    className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+                    title="تعديل بيانات هذه الأمانة"
+                  >
+                    <Edit2 className="w-3 h-3 text-stone-500" />
+                    <span>تعديل</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => handleRemoveSecretariat(sec, e)}
+                    className="flex-1 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer border border-red-200 transition-colors"
+                    title="شيل (حذف) هذه الأمانة من الموقع"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>شيل الأمانة</span>
+                  </button>
+                </div>
               </div>
             </div>
           ))}
         </div>
+
+        {/* END OF PAGE SAVE & ACTIONS BAR ("ومن اخر الصفحة ضيف كلمت حفظ") */}
+        <div className="bg-gradient-to-r from-stone-900 via-stone-850 to-stone-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border-2 border-amber-500/40 flex flex-col sm:flex-row items-center justify-between gap-5 mt-10">
+          <div className="text-right space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="bg-emerald-500/20 text-emerald-300 text-xs font-bold px-3 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>إدارة وحفظ الأمانات</span>
+              </span>
+              <h3 className="text-xl font-black text-white">
+                تأكيد وحفظ تشكيل الأمانات التخصصية
+              </h3>
+            </div>
+            <p className="text-xs sm:text-sm text-stone-300">
+              يمكنك إضافة أمانة جديدة أو شيل أي أمانة في أي وقت، واضغط الآن على زر «حفظ» لتأكيد وحفظ التغييرات بقاعدة بيانات المنصة.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 w-full sm:w-auto shrink-0">
+            <button
+              type="button"
+              onClick={handleOpenAddSecretariat}
+              className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors"
+            >
+              <Plus className="w-4 h-4 text-amber-400" />
+              <span>إضافة أمانة</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveAllSecretariats}
+              disabled={isSavingSecretariats}
+              className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm sm:text-base px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/50 transition-all active:scale-95 disabled:opacity-50"
+            >
+              <Save className="w-5 h-5 text-amber-300" />
+              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ADD / EDIT SECRETARIAT MODAL */}
+        {showAddSecretariatModal && editingSecretariatData && (
+          <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl max-w-xl w-full p-6 text-right space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+                <h3 className="text-lg font-black text-stone-900">
+                  {editingSecretariatData.id ? `تعديل أمانة: ${editingSecretariatData.name}` : 'إضافة أمانة جديدة'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddSecretariatModal(false);
+                    setEditingSecretariatData(null);
+                  }}
+                  className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveSecretariatModal} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    اسم الأمانة <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: أمانة التنظيم والعضوية"
+                    value={editingSecretariatData.name || ''}
+                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, name: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    الوصف العام ورسالة الأمانة
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="نبذة عن دور واختصاصات الأمانة في خدمة المواطنين وقسم ثالث أكتوبر..."
+                    value={editingSecretariatData.description || ''}
+                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, description: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">
+                      اسم أمين الأمانة
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="الاسم الثلاثي أو الرباعي..."
+                      value={editingSecretariatData.secretaryName || ''}
+                      onChange={e => setEditingSecretariatData({ ...editingSecretariatData, secretaryName: e.target.value })}
+                      className="w-full border border-stone-300 rounded-xl px-3 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">
+                      اسم الأمين المساعد
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="الاسم الثلاثي أو الرباعي..."
+                      value={editingSecretariatData.assistantSecretaryName || ''}
+                      onChange={e => setEditingSecretariatData({ ...editingSecretariatData, assistantSecretaryName: e.target.value })}
+                      className="w-full border border-stone-300 rounded-xl px-3 py-1.5 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    مهام واختصاصات الأمانة (كل مهمة في سطر)
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="المهمة الأولى&#10;المهمة الثانية&#10;المهمة الثالثة"
+                    value={Array.isArray(editingSecretariatData.duties) ? editingSecretariatData.duties.join('\n') : ''}
+                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, duties: e.target.value.split('\n').filter(Boolean) })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">
+                    أهداف الأمانة (كل هدف في سطر)
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="الهدف الأول&#10;الهدف الثاني"
+                    value={Array.isArray(editingSecretariatData.goals) ? editingSecretariatData.goals.join('\n') : ''}
+                    onChange={e => setEditingSecretariatData({ ...editingSecretariatData, goals: e.target.value.split('\n').filter(Boolean) })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-3 border-t border-stone-100 gap-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors shadow-xs"
+                    >
+                      <Save className="w-4 h-4 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddSecretariatModal(false);
+                        setEditingSecretariatData(null);
+                      }}
+                      className="bg-stone-200 hover:bg-stone-300 text-stone-700 font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+
+                  {editingSecretariatData.id && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (window.confirm(`هل أنت متأكد من شيل (حذف) أمانة "${editingSecretariatData.name}" نهائياً من الموقع؟`)) {
+                          try {
+                            await api.deleteSecretariat(editingSecretariatData.id!);
+                            setShowAddSecretariatModal(false);
+                            setEditingSecretariatData(null);
+                            if (onRefreshData) onRefreshData();
+                            setSecretariatNotice(`تم شيل أمانة "${editingSecretariatData.name}" بنجاح!`);
+                          } catch (err: any) {
+                            alert(err.message || 'تعذر شيل الأمانة');
+                          }
+                        }
+                      }}
+                      className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs px-3.5 py-2.5 rounded-xl cursor-pointer flex items-center gap-1 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>شيل هذه الأمانة</span>
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
+
 
   // -------------------------------------------------------------
   // 6. INDIVIDUAL SECRETARIAT DEDICATED PAGE
@@ -1348,9 +1710,35 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         {/* Secretariat Header Card */}
         <div className="bg-gradient-to-br from-stone-900 to-stone-950 text-white rounded-3xl p-8 sm:p-12 border-2 border-amber-500/40 shadow-xl relative overflow-hidden">
           <div className="relative z-10 space-y-4 text-right">
-            <span className="bg-amber-500/20 text-amber-300 text-xs font-bold px-3 py-1 rounded-full border border-amber-500/30">
-              أمانة معتمدة – أمانة قسم ثالث أكتوبر
-            </span>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="bg-amber-500/20 text-amber-300 text-xs font-bold px-3 py-1 rounded-full border border-amber-500/30">
+                أمانة معتمدة – أمانة قسم ثالث أكتوبر
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditSecretariat(sec)}
+                  className="bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold px-3.5 py-1.5 rounded-xl border border-stone-700 cursor-pointer flex items-center gap-1.5 transition-colors"
+                >
+                  <Edit2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>تعديل الأمانة</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await handleRemoveSecretariat(sec);
+                    setCurrentView('secretariats');
+                  }}
+                  className="bg-red-950/60 hover:bg-red-900 text-red-300 text-xs font-bold px-3.5 py-1.5 rounded-xl border border-red-800/60 cursor-pointer flex items-center gap-1.5 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>شيل هذه الأمانة</span>
+                </button>
+              </div>
+            </div>
+
             <h1 className="text-3xl sm:text-4xl font-black text-white">
               {sec.name}
             </h1>
@@ -1359,6 +1747,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </p>
           </div>
         </div>
+
 
         {/* Leadership of the Secretariat */}
         <div className="space-y-4">
@@ -1611,9 +2000,36 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           </div>
         )}
+
+        {/* End of Page Save & Return Bar */}
+        <div className="bg-stone-900 text-white p-6 rounded-3xl border border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
+          <div className="text-right">
+            <h4 className="font-bold text-white text-base">إدارة وتأكيد أمانة {sec.name}</h4>
+            <p className="text-xs text-stone-400 mt-0.5">يمكنك حفظ بيانات الأمانة أو شيلها والعودة لكافة الأمانات.</p>
+          </div>
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setCurrentView('secretariats')}
+              className="bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-xs px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+            >
+              العودة لكافة الأمانات
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveAllSecretariats}
+              disabled={isSavingSecretariats}
+              className="flex-1 sm:flex-none bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-colors"
+            >
+              <Save className="w-4 h-4 text-amber-300" />
+              <span>{isSavingSecretariats ? 'جاري الحفظ...' : 'حفظ'}</span>
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
+
 
   // -------------------------------------------------------------
   // 7. INITIATIVES LIST & DETAIL VIEW

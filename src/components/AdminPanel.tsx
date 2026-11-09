@@ -45,6 +45,7 @@ import {
   Eye,
   EyeOff,
   Check,
+  CheckCircle2,
   X,
   Search,
   Filter,
@@ -1187,21 +1188,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             </button>
                             <button
                               onClick={async () => {
-                                if (confirm(`هل أنت متأكد من رغبتك في حذف أمانة "${sec.name}" نهائياً من الموقع؟`)) {
+                                if (confirm(`هل أنت متأكد من رغبتك في شيل (حذف) أمانة "${sec.name}" نهائياً من الموقع؟`)) {
                                   try {
                                     await api.deleteSecretariat(sec.id);
-                                    loadAdminData();
+                                    await loadAdminData();
                                     onRefreshPublicData();
+                                    alert(`تم شيل أمانة "${sec.name}" بنجاح!`);
                                   } catch (err: any) {
-                                    alert(err.message || 'تعذر حذف الأمانة');
+                                    alert(err.message || 'تعذر شيل الأمانة');
                                   }
                                 }
                               }}
                               className="bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 border border-red-200 px-3 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1 transition-colors"
-                              title="حذف الأمانة"
+                              title="شيل الأمانة نهائياً من الموقع"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
-                              <span>حذف الأمانة</span>
+                              <span>شيل الأمانة</span>
                             </button>
                           </div>
                         </div>
@@ -1209,8 +1211,59 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     );
                   })}
                 </div>
+
+                {/* END OF PAGE SAVE & ACTIONS BAR */}
+                <div className="bg-gradient-to-r from-stone-900 via-stone-850 to-stone-900 text-white p-6 rounded-3xl shadow-xl border-2 border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-5 mt-8">
+                  <div className="text-right space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="bg-emerald-500/20 text-emerald-300 text-xs font-bold px-3 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>جاهز للحفظ</span>
+                      </span>
+                      <h3 className="text-lg font-black text-white">
+                        حفظ حالة الأمانات التخصصية
+                      </h3>
+                    </div>
+                    <p className="text-xs text-stone-300">
+                      يمكنك شيل أي أمانة أو إضافة أمانة جديدة بكل سهولة، ومن آخر الصفحة اضغط «حفظ» لتأكيد وحفظ التغييرات بقاعدة البيانات.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSecretariat({ isActive: true, sortOrder: secretariats.length + 1, duties: [], goals: [] });
+                        setShowSecretariatModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة أمانة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await api.saveAllSecretariats(secretariats);
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
+
 
             {/* TAB: SECRETARIAT MEMBERS & TRANSFERS */}
             {activeTab === 'secretariat-members' && (

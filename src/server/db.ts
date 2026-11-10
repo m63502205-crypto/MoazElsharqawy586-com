@@ -87,6 +87,7 @@ export interface NewsItem {
   linkedSecretariatId?: string;
   linkedInitiativeId?: string;
   isFeatured: boolean;
+  isBreaking?: boolean;
   isDraft: boolean;
   createdAt: string;
 }

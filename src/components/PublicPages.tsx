@@ -462,36 +462,124 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         )}
 
-        {/* Official Typography Section Directly Below Video (Exactly matching reference video) */}
-        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 pt-4">
-          {/* Main Headline */}
-          <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
-            معاً نبني مستقبلاً مشرقاً لمصر
-          </h1>
-
-          {/* Subtitle Paragraph */}
-          <div className="text-sm sm:text-base lg:text-lg font-bold text-stone-800 leading-relaxed max-w-3xl mx-auto space-y-1">
-            <p>
-              حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يحق لأي مصري الانتماء إلى عضويته
-            </p>
-            <p className="text-stone-600 font-semibold text-xs sm:text-sm">
-              دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان
-            </p>
+        {/* Breaking News Ribbon (If any news is marked as 'isBreaking') */}
+        {data.news.some(n => n.isBreaking && !n.isDraft) && (
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 -mt-8 mb-4">
+            <div className="bg-gradient-to-r from-red-800 via-red-700 to-red-900 text-white py-2.5 px-4 rounded-2xl border-2 border-amber-400 shadow-lg flex items-center justify-between gap-3 text-xs sm:text-sm">
+              <div className="flex items-center gap-2.5 overflow-hidden">
+                <span className="flex items-center gap-1.5 bg-white text-red-800 font-black px-2.5 py-0.5 rounded-full text-xs shrink-0 shadow-xs">
+                  <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+                  <span>عاجل</span>
+                </span>
+                <div className="overflow-hidden whitespace-nowrap">
+                  <span className="font-bold text-amber-200">
+                    {data.news.filter(n => n.isBreaking && !n.isDraft).map(n => n.title).join(' • ')}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const firstBreaking = data.news.find(n => n.isBreaking && !n.isDraft);
+                  if (firstBreaking) {
+                    setSelectedNews(firstBreaking);
+                    setCurrentView('news');
+                    window.location.hash = `news?id=${firstBreaking.id}`;
+                  }
+                }}
+                className="text-[11px] font-bold text-amber-300 hover:text-white underline shrink-0 cursor-pointer"
+              >
+                التفاصيل
+              </button>
+            </div>
           </div>
+        )}
 
-          <div className="w-16 h-1 bg-amber-500 mx-auto rounded-full my-4" />
+        {/* Prestigious Governmental Party Charter Card (الميثاق الوطني للحزب) */}
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="bg-gradient-to-br from-[#4c0519] via-[#881337] to-[#3b0819] text-white rounded-3xl border-2 border-amber-500/50 shadow-2xl p-8 sm:p-12 text-center relative overflow-hidden group">
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-amber-500/10 via-transparent to-transparent pointer-events-none" />
+            
+            {/* Golden Emblem Icon */}
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-black/40 border border-amber-400/40 text-amber-400 mb-5 shadow-inner">
+              <Award className="w-8 h-8 text-amber-300" />
+            </div>
 
-          {/* Three Foundational Manifesto Paragraphs (Matching video frame 00:01) */}
-          <div className="text-right space-y-4 text-xs sm:text-sm lg:text-base text-stone-700 leading-relaxed font-normal bg-stone-50/80 p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
-            <p className="font-semibold text-stone-900 leading-relaxed">
-              حزب الجبهة الوطنية هو كيان سياسي مصري يهدف إلى إحداث تغيير حقيقي في المشهد السياسي من خلال تعزيز المشاركة الشعبية الفاعلة والصادقة.
+            <div className="inline-flex items-center gap-2 bg-amber-500/20 border border-amber-400/30 text-amber-300 px-3 py-1 rounded-full text-xs font-bold mb-4">
+              <span>{ct.heroBadge || 'الميثاق الوطني للحزب • معاً نبني مستقبلاً مشرقاً لمصر'}</span>
+            </div>
+
+            <h1 className="text-xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight leading-tight mb-4">
+              {ct.heroTitle || 'حزب الجبهة الوطنية هو حزب سياسى مدنى ديمقراطى يحق لأى مصرى الإنتماء إلى عضويته'}
+            </h1>
+
+            <p className="text-xs sm:text-sm lg:text-base text-stone-200 max-w-2xl mx-auto leading-relaxed font-normal mb-8">
+              {ct.heroSubtitle || 'دون تفرقة أو تمييز ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان، وتعزيز المشاركة الشعبية الفاعلة والصادقة لخدمة مصلحة الوطن العليا وتحقيق العدالة الاجتماعية والتنمية المستدامة.'}
             </p>
-            <p className="leading-relaxed">
-              يعمل الحزب على بناء نموذج ديمقراطي يعزز ثقافة الحوار والتعاون بين جميع أطياف المجتمع، مع التركيز على تحقيق العدالة الاجتماعية والتنمية المستدامة، يسعى الحزب إلى أن يكون بيت خبرة وطني يخدم مصلحة الوطن العليا بعيداً عن أي توجهات ضيقة أو شخصية، مستنداً إلى رؤية شاملة تستند إلى قيم الحرية، العدالة، وسيادة القانون.
-            </p>
-            <p className="leading-relaxed">
-              يجمع الحزب بين طاقات الشباب وخبرات الأجيال لإيجاد حلول حقيقية للتحديات التي تواجه الوطن، إيماناً بأن العمل الجماعي هو السبيل لتحقيق تطلعات الشعب المصري نحو مستقبل أفضل.
-            </p>
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                onClick={() => {
+                  setCurrentView('about');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black px-8 py-3 rounded-xl text-xs sm:text-sm shadow-lg transition-all hover:scale-105 cursor-pointer"
+              >
+                {ct.heroBtnPrimary || 'رؤية الحزب ومبادئه الكاملة'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* 4 Governmental Statistics Cards */}
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white rounded-2xl p-5 text-center border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+              <div className="text-3xl font-black text-red-700 mb-1">
+                {ct.statsCard1Value || data.specializedSecretariats.length || '9'}
+              </div>
+              <div className="text-xs font-bold text-stone-900">
+                {ct.statsCard1Label || 'أمانة حزبية معتمدة'}
+              </div>
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                {ct.statsCard1Sub || 'تغطي كافة الملفات التنموية'}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 text-center border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+              <div className="text-3xl font-black text-red-700 mb-1">
+                {ct.statsCard2Value || data.initiatives.length || '1'}
+              </div>
+              <div className="text-xs font-bold text-stone-900">
+                {ct.statsCard2Label || 'مبادرات ميدانية ومجتمعية'}
+              </div>
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                {ct.statsCard2Sub || 'تخدم أهالي قسم ثالث أكتوبر'}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 text-center border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+              <div className="text-3xl font-black text-emerald-600 mb-1">
+                {ct.statsCard3Value || '100%'}
+              </div>
+              <div className="text-xs font-bold text-stone-900">
+                {ct.statsCard3Label || 'منصة رقمية حقيقية'}
+              </div>
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                {ct.statsCard3Sub || 'دون أي كارنيهات أو اشتراكات'}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl p-5 text-center border border-stone-200 shadow-sm hover:shadow-md transition-shadow">
+              <div className="text-3xl font-black text-red-700 mb-1">
+                {ct.statsCard4Value || (data.news.length + data.events.length) || '2'}
+              </div>
+              <div className="text-xs font-bold text-stone-900">
+                {ct.statsCard4Label || 'تغطية إخبارية وفعالية'}
+              </div>
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                {ct.statsCard4Sub || 'مستمرة على مدار الساعة'}
+              </div>
+            </div>
           </div>
         </section>
 

@@ -9,7 +9,7 @@ interface FooterProps {
 
 export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
   return (
-    <footer className="bg-gradient-to-b from-[#2a0410] via-[#1a0209] to-[#120106] text-stone-300 border-t-2 border-amber-500/30 no-print">
+    <footer className="bg-gradient-to-b from-[#0f172a] via-[#090d16] to-[#020617] text-slate-300 border-t-2 border-amber-500/40 no-print">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center flex flex-col items-center">
         
         {/* Centered Golden Emblem */}

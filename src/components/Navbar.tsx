@@ -39,17 +39,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-gradient-to-r from-[#4c0519] via-[#881337] to-[#4c0519] border-b-2 border-amber-500/40 shadow-xl text-white">
+    <header className="sticky top-0 z-40 bg-[#0f172a] border-b-2 border-amber-500/40 shadow-xl text-white">
       {/* Top Banner Ribbon */}
-      <div className="bg-gradient-to-r from-[#2a0410] via-[#47061d] to-[#2a0410] py-1.5 px-4 border-b border-amber-500/25 flex items-center justify-between text-[11px] text-amber-200">
+      <div className="bg-slate-950 py-1.5 px-4 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-300">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-          <span className="font-semibold text-amber-300">{slogan ? `«${slogan}»` : '«مصر للجميع»'}</span>
-          <span className="hidden sm:inline text-amber-400/40">|</span>
-          <span className="hidden sm:inline text-amber-100 font-medium">أمانة قسم ثالث أكتوبر – محافظة الجيزة</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="font-bold text-amber-400">حزب الجبهة الوطنية</span>
+          <span className="text-slate-600">|</span>
+          <span className="text-slate-300 font-medium">أمانة قسم ثالث أكتوبر – محافظة الجيزة</span>
         </div>
-        <div className="text-[10px] text-amber-300/80 font-bold hidden md:block">
-          بوابة الحزب الرسمية المعتمدة
+        <div className="text-[10px] text-amber-400/90 font-bold hidden md:block tracking-wide">
+          المنصة الرقمية المعتمدة والمركز الإعلامي الرسمي
         </div>
       </div>
 
@@ -135,7 +135,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="xl:hidden border-t border-amber-500/30 bg-[#2a0410] px-4 pt-3 pb-6 shadow-2xl animate-in slide-in-from-top duration-150">
+        <div className="xl:hidden border-t border-amber-500/30 bg-[#0f172a] px-4 pt-3 pb-6 shadow-2xl animate-in slide-in-from-top duration-150">
           <div className="grid grid-cols-2 gap-2 text-sm font-semibold">
             {navLinks.map(link => {
               const isActive = currentView === link.id;

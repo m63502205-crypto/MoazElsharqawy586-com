@@ -21,6 +21,7 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import { ImageFieldWithPicker } from './ImageFieldWithPicker';
 import { MultiImageGalleryField } from './MultiImageGalleryField';
+import { VideosRepeaterField } from './VideosRepeaterField';
 import { MediaPickerModal } from './MediaPickerModal';
 import {
   Shield,
@@ -185,6 +186,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [showMediaPickerModal, setShowMediaPickerModal] = useState(false);
   const [newSecVideoTitle, setNewSecVideoTitle] = useState('');
   const [newSecVideoUrl, setNewSecVideoUrl] = useState('');
+
+  // Universal Save feedback toast
+  const [universalSaveToast, setUniversalSaveToast] = useState<string | null>(null);
+  const [saveLoading, setSaveLoading] = useState(false);
+
+  // Reusable Save Footer for every admin section ("وضيف فى كل قسم فى الإدارة فى اخر الصفحة كلمة حفظ التغييرات")
+  const renderSectionSaveFooter = (sectionName: string, onSaveAction?: () => Promise<void> | void) => (
+    <div className="mt-8 pt-5 border-t-2 border-stone-200 bg-gradient-to-r from-stone-50 to-amber-50/40 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xs">
+      <div className="flex items-center gap-2 text-stone-700 text-xs font-semibold">
+        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+        <span>حفظ كافة التغييرات والإضافات في قسم ({sectionName}) وتثبيتها فوراً بالخادم وقاعدة البيانات.</span>
+      </div>
+      <button
+        type="button"
+        disabled={saveLoading}
+        onClick={async () => {
+          setSaveLoading(true);
+          try {
+            if (onSaveAction) {
+              await onSaveAction();
+            } else if (settings) {
+              await api.updateSettings(settings);
+            }
+            await loadAdminData();
+            onRefreshPublicData();
+            setUniversalSaveToast(`تم حفظ جميع التغييرات في قسم «${sectionName}» بنجاح`);
+            setTimeout(() => setUniversalSaveToast(null), 3500);
+          } catch (e: any) {
+            alert('حدث خطأ أثناء الحفظ: ' + (e?.message || 'يرجى المحاولة ثانية'));
+          } finally {
+            setSaveLoading(false);
+          }
+        }}
+        className="w-full sm:w-auto bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-black text-xs px-6 py-2.5 rounded-xl shadow-md transition-all hover:scale-102 flex items-center justify-center gap-2 cursor-pointer"
+      >
+        <Save className="w-4 h-4 text-amber-300" />
+        <span>حفظ التغييرات</span>
+      </button>
+    </div>
+  );
 
   // Handle new media created via picker or upload
   const handleMediaCreated = (newMedia: MediaItem) => {
@@ -877,6 +918,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </table>
                   </div>
                 )}
+
+                {renderSectionSaveFooter('قيادات الحزب')}
               </div>
             )}
 
@@ -970,6 +1013,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </table>
                   </div>
                 )}
+
+                {renderSectionSaveFooter('قيادات أمانة أكتوبر')}
               </div>
             )}
 
@@ -1251,7 +1296,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           await api.saveAllSecretariats(secretariats);
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح!');
+                          setUniversalSaveToast('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح في قاعدة البيانات');
+                          setTimeout(() => setUniversalSaveToast(null), 3500);
                         } catch (err: any) {
                           alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
                         }
@@ -1259,7 +1305,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
                       <Save className="w-5 h-5 text-amber-300" />
-                      <span>حفظ</span>
+                      <span>حفظ التغييرات</span>
                     </button>
                   </div>
                 </div>
@@ -1419,6 +1465,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </table>
                   </div>
                 )}
+
+                {renderSectionSaveFooter('تشكيلات الأمانات وهيئات المكاتب')}
               </div>
             )}
 
@@ -1837,6 +1885,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   ))}
                 </div>
+
+                {renderSectionSaveFooter('المبادرات المجتمعية')}
               </div>
             )}
 
@@ -1905,6 +1955,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   ))}
                 </div>
+
+                {renderSectionSaveFooter('الأخبار والبيانات الصحفية')}
               </div>
             )}
 
@@ -1972,6 +2024,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   ))}
                 </div>
+
+                {renderSectionSaveFooter('الفعاليات والأنشطة')}
               </div>
             )}
 
@@ -2043,6 +2097,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   ))}
                 </div>
+
+                {renderSectionSaveFooter('معرض الصور والفيديوهات')}
               </div>
             )}
 
@@ -2245,6 +2301,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     ))
                   )}
                 </div>
+
+                {renderSectionSaveFooter('صفحات الموقع والتعريف')}
               </div>
             )}
 
@@ -2359,6 +2417,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   ))}
                 </div>
+
+                {renderSectionSaveFooter('الأدوار والصلاحيات')}
               </div>
             )}
 
@@ -2446,6 +2506,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     );
                   })}
                 </div>
+
+                {renderSectionSaveFooter('المشرفون وحسابات الإدارة')}
               </div>
             )}
 
@@ -3578,12 +3640,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    className="bg-red-700 hover:bg-red-800 text-white font-bold px-6 py-2.5 rounded-xl text-xs cursor-pointer"
-                  >
-                    حفظ كافة الإعدادات
-                  </button>
+                  <div className="pt-4 border-t border-stone-200">
+                    <button
+                      type="submit"
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-black px-8 py-3 rounded-xl text-xs cursor-pointer shadow-md flex items-center gap-2"
+                    >
+                      <Save className="w-4 h-4 text-amber-300" />
+                      <span>حفظ التغييرات</span>
+                    </button>
+                  </div>
                 </form>
               </div>
             )}
@@ -5049,6 +5114,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
+              {/* Leader & Secretariat Responsible */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">القائم على المبادرة / من أطلقها</label>
+                  <input
+                    type="text"
+                    placeholder="اسم المسؤول أو العضو..."
+                    value={editingInitiative.leaderName || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, leaderName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة القائم عليها</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: أمين التنظيم، منسق المبادرة..."
+                    value={editingInitiative.leaderRole || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, leaderRole: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الأمانة المسؤولة</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: أمانة العلاقات العامة..."
+                    list="secretariats-list-init"
+                    value={editingInitiative.secretariatName || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, secretariatName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                  <datalist id="secretariats-list-init">
+                    {secretariats.map(s => (
+                      <option key={s.id} value={s.name} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">أهداف المبادرة (كل هدف في سطر)</label>
                 <textarea
@@ -5060,7 +5167,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <ImageFieldWithPicker
-                label="صورة أو غلاف المبادرة"
+                label="صورة أو غلاف المبادرة الرئيسي"
                 value={editingInitiative.coverUrl || ''}
                 onChange={url => setEditingInitiative({ ...editingInitiative, coverUrl: url })}
                 media={media}
@@ -5068,6 +5175,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 shape="banner"
                 helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة"
                 pickerTitle={`اختيار صورة لمبادرة: ${editingInitiative.title || ''}`}
+              />
+
+              <MultiImageGalleryField
+                label="ألبوم صور المبادرة (صور متعددة)"
+                images={editingInitiative.galleryImages || []}
+                onChange={imgs => setEditingInitiative({ ...editingInitiative, galleryImages: imgs })}
+                media={media}
+                onMediaCreated={handleMediaCreated}
+                pickerTitle={`ألبوم صور مبادرة: ${editingInitiative.title || ''}`}
+              />
+
+              <VideosRepeaterField
+                label="مقاطع الفيديو التوثيقية للمبادرة"
+                videos={editingInitiative.videos || []}
+                onChange={vids => setEditingInitiative({ ...editingInitiative, videos: vids })}
+                helpText="أضف أكثر من مقطع فيديو لأنشطة وفعاليات المبادرة"
               />
             </div>
 
@@ -5179,7 +5302,69 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              <div className="flex items-center gap-4 pt-2">
+              {/* Publisher & Secretariat Responsible ("مين اللي منزل الخبر وامانته ايه") */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">ناشر الخبر (المحرر)</label>
+                  <input
+                    type="text"
+                    placeholder="اسم من قام بنشر الخبر..."
+                    value={editingNews.publisherName || ''}
+                    onChange={e => setEditingNews({ ...editingNews, publisherName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة الناشر</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: مسؤول المركز الإعلامي..."
+                    value={editingNews.publisherRole || ''}
+                    onChange={e => setEditingNews({ ...editingNews, publisherRole: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">أمانة الناشر</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: أمانة الإعلام، أمانة الشباب..."
+                    list="secretariats-list-news"
+                    value={editingNews.publisherSecretariat || ''}
+                    onChange={e => setEditingNews({ ...editingNews, publisherSecretariat: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                  <datalist id="secretariats-list-news">
+                    {secretariats.map(s => (
+                      <option key={s.id} value={s.name} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
+              <VideosRepeaterField
+                label="مقاطع الفيديو المرفقة بالخبر"
+                videos={editingNews.videos || []}
+                onChange={vids => setEditingNews({ ...editingNews, videos: vids })}
+                helpText="أضف أكثر من مقطع فيديو متعلق بالخبر (YouTube أو روابط مباشرة)"
+              />
+
+              <div className="flex flex-wrap items-center gap-4 pt-2">
+                <label className="flex items-center gap-2 cursor-pointer bg-red-50 border border-red-300 px-3 py-1.5 rounded-xl">
+                  <input
+                    type="checkbox"
+                    checked={editingNews.isBreaking || false}
+                    onChange={e => setEditingNews({ ...editingNews, isBreaking: e.target.checked })}
+                    className="w-4 h-4 text-red-700 accent-red-700"
+                  />
+                  <span className="text-xs font-black text-red-800 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+                    <span>🔥 خبر عاجل (عاجل)</span>
+                  </span>
+                </label>
+
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -5277,13 +5462,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الجهة المنظمة</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الجهة المنظمة العامة</label>
                   <input
                     type="text"
                     value={editingEvent.organizer || ''}
                     onChange={e => setEditingEvent({ ...editingEvent, organizer: e.target.value })}
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                   />
+                </div>
+              </div>
+
+              {/* Responsible Organizer & Secretariat ("والفعاليات مين اللي عامل الفاعليه وامانه ايه") */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">اسم من أقام الفعالية</label>
+                  <input
+                    type="text"
+                    placeholder="اسم المسؤول أو المنظم..."
+                    value={editingEvent.organizerName || ''}
+                    onChange={e => setEditingEvent({ ...editingEvent, organizerName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة المنظم</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: أمين الشباب، منسق الفعالية..."
+                    value={editingEvent.organizerRole || ''}
+                    onChange={e => setEditingEvent({ ...editingEvent, organizerRole: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الأمانة المنظمة</label>
+                  <input
+                    type="text"
+                    placeholder="مثل: أمانة العمل الجماهيري..."
+                    list="secretariats-list-event"
+                    value={editingEvent.organizerSecretariat || ''}
+                    onChange={e => setEditingEvent({ ...editingEvent, organizerSecretariat: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
+                  />
+                  <datalist id="secretariats-list-event">
+                    {secretariats.map(s => (
+                      <option key={s.id} value={s.name} />
+                    ))}
+                  </datalist>
                 </div>
               </div>
 
@@ -5308,12 +5535,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <MultiImageGalleryField
-                label="ألبوم صور وتغطية الفعالية"
+                label="ألبوم صور وتغطية الفعالية (صور متعددة)"
                 images={editingEvent.images || []}
                 onChange={imgs => setEditingEvent({ ...editingEvent, images: imgs })}
                 media={media}
                 onMediaCreated={handleMediaCreated}
                 pickerTitle={`ألبوم صور وتغطية فعالية: ${editingEvent.title || ''}`}
+              />
+
+              <VideosRepeaterField
+                label="مقاطع الفيديو المرفقة بالفعالية"
+                videos={editingEvent.videos || []}
+                onChange={vids => setEditingEvent({ ...editingEvent, videos: vids })}
+                helpText="أضف أكثر من مقطع فيديو لتوثيق الفعالية (YouTube أو MP4)"
               />
             </div>
 

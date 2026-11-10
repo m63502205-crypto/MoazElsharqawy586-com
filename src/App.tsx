@@ -185,7 +185,6 @@ function MainApp() {
         <div>
           <h2 className="text-xl font-black text-stone-900">حزب الجبهة الوطنية</h2>
           <p className="text-xs text-stone-500 mt-1">أمانة قسم ثالث أكتوبر – محافظة الجيزة</p>
-          <p className="text-[11px] text-amber-700 font-bold mt-1">«مصر للجميع»</p>
         </div>
       </div>
     );

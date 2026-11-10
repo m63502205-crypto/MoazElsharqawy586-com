@@ -65,11 +65,17 @@ export interface Initiative {
   title: string;
   logoUrl?: string;
   coverUrl?: string;
+  galleryImages?: string[]; // ألبوم صور متعددة
+  videos?: Array<{ title?: string; url: string }>; // مقاطع فيديو متعددة
   description: string;
   goals: string[];
   startDate: string;
   endDate?: string;
   status: 'active' | 'paused' | 'completed';
+  leaderName?: string; // من قام بالمبادرة
+  leaderRole?: string; // صفته
+  secretariatName?: string; // اسم الأمانة المسؤولة
+  linkedSecretariatId?: string; // الأمانة المرتبطة
   activities: Array<{ title: string; date: string; description: string }>;
   isVisible: boolean;
   createdAt: string;
@@ -81,11 +87,15 @@ export interface NewsItem {
   content: string;
   excerpt: string;
   coverImage?: string;
-  galleryImages: string[];
+  galleryImages: string[]; // ألبوم صور متعددة
   videoUrl?: string;
+  videos?: Array<{ title?: string; url: string }>; // مقاطع فيديو متعددة
   publishDate: string;
   linkedSecretariatId?: string;
   linkedInitiativeId?: string;
+  publisherName?: string; // من قام بنشر الخبر
+  publisherRole?: string; // صفة الناشر
+  publisherSecretariat?: string; // الأمانة التابع لها
   isFeatured: boolean;
   isBreaking?: boolean;
   isDraft: boolean;
@@ -99,8 +109,14 @@ export interface EventItem {
   dateTime: string;
   venue: string;
   organizer: string;
-  images: string[];
+  organizerName?: string; // من أقام الفعالية
+  organizerRole?: string; // صفة المنظم
+  organizerSecretariat?: string; // الأمانة المنظمة
+  linkedSecretariatId?: string;
+  images: string[]; // ألبوم صور متعددة
+  coverUrl?: string;
   videoUrl?: string;
+  videos?: Array<{ title?: string; url: string }>; // مقاطع فيديو متعددة
   status: 'upcoming' | 'ongoing' | 'completed' | 'cancelled';
   postReport?: string;
   isVisible: boolean;

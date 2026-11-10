@@ -396,10 +396,55 @@
       ],
       "isActive": true,
       "createdAt": "2026-11-06T13:18:52.360Z",
-      "lastLogin": "2026-11-09T18:44:09.598Z"
+      "lastLogin": "2026-11-10T19:53:47.275Z"
     }
   ],
   "auditLogs": [
+    {
+      "id": "log-1794340427278-96b8p",
+      "adminEmail": "moazmahmoud586@gmail.com",
+      "adminName": "معاذ محمود (المدير الرئيسي)",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-10T19:53:47.278Z"
+    },
+    {
+      "id": "log-1794340422554-9voqn",
+      "adminEmail": "moazmahmoud586@gmail.com",
+      "adminName": "معاذ محمود (المدير الرئيسي)",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-10T19:53:42.554Z"
+    },
+    {
+      "id": "log-1794340417862-kh16d",
+      "adminEmail": "moazmahmoud586@gmail.com",
+      "adminName": "معاذ محمود (المدير الرئيسي)",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-10T19:53:37.862Z"
+    },
+    {
+      "id": "log-1794340408470-wxfb0",
+      "adminEmail": "moazmahmoud586@gmail.com",
+      "adminName": "معاذ محمود (المدير الرئيسي)",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-10T19:53:28.470Z"
+    },
+    {
+      "id": "log-1794340402089-ufzsq",
+      "adminEmail": "moazmahmoud586@gmail.com",
+      "adminName": "معاذ محمود (المدير الرئيسي)",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-10T19:53:22.089Z"
+    },
     {
       "id": "log-1794249999150-hq7a3",
       "adminEmail": "moazmahmoud586@gmail.com",

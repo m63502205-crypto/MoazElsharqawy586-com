@@ -71,6 +71,7 @@ export interface Initiative {
   endDate?: string;
   status: 'active' | 'paused' | 'completed';
   activities: Array<{ title: string; date: string; description: string }>;
+  galleryImages?: string[];
   isVisible: boolean;
   createdAt: string;
 }
@@ -80,6 +81,7 @@ export interface NewsItem {
   title: string;
   content: string;
   excerpt: string;
+  summary?: string;
   coverImage?: string;
   galleryImages: string[];
   videoUrl?: string;
@@ -89,6 +91,8 @@ export interface NewsItem {
   isFeatured: boolean;
   isUrgent?: boolean;
   isDraft: boolean;
+  authorName?: string;
+  authorPosition?: string;
   createdAt: string;
 }
 
@@ -100,6 +104,9 @@ export interface EventItem {
   venue: string;
   organizer: string;
   images: string[];
+  galleryImages?: string[];
+  coverUrl?: string;
+  coverImage?: string;
   videoUrl?: string;
   status: 'upcoming' | 'ongoing' | 'completed' | 'cancelled';
   postReport?: string;
@@ -115,6 +122,8 @@ export interface MediaItem {
   url: string;
   thumbnail?: string;
   albumName: string;
+  isSpecial?: boolean; // معرض خاص
+  specialCategory?: string;
   linkedSecretariatId?: string;
   linkedInitiativeId?: string;
   linkedEventId?: string;
@@ -259,6 +268,7 @@ export interface SiteSettings {
   membershipSubtitle?: string;
   membershipCtaText?: string;
   membershipWhatsapp?: string;
+  membershipFieldRequirements?: Record<string, boolean>;
   customTexts?: any;
   socialLinks: Array<{ id: string; platform: string; url: string; label: string }>;
   aboutParty: string;

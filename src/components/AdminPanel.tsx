@@ -76,6 +76,30 @@ import {
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
+const MEMBERSHIP_FORM_FIELDS = [
+  { key: 'fullName', label: 'الاسم الرباعي كاملاً' },
+  { key: 'nationalId', label: 'الرقم القومي (14 رقماً)' },
+  { key: 'dateOfBirth', label: 'تاريخ الميلاد' },
+  { key: 'gender', label: 'النوع (الجنس)' },
+  { key: 'maritalStatus', label: 'الحالة الاجتماعية' },
+  { key: 'governorate', label: 'المحافظة' },
+  { key: 'district', label: 'القسم / المركز / المدينة' },
+  { key: 'address', label: 'العنوان بالتفصيل' },
+  { key: 'phone', label: 'رقم الهاتف المحمول' },
+  { key: 'whatsapp', label: 'رقم الواتساب' },
+  { key: 'email', label: 'البريد الإلكتروني' },
+  { key: 'qualification', label: 'المؤهل الدراسي' },
+  { key: 'job', label: 'المهنة / الوظيفة الحالية' },
+  { key: 'workplace', label: 'جهة العمل' },
+  { key: 'skills', label: 'المهارات والخبرات العملية' },
+  { key: 'interests', label: 'الاهتمامات والمجالات المفضلة' },
+  { key: 'volunteerExperience', label: 'الخبرات التطوعية والعمل العام' },
+  { key: 'reasonForJoining', label: 'سبب الرغبة في الانضمام' },
+  { key: 'personalPhotoUrl', label: 'الصورة الشخصية الحديثة' },
+  { key: 'nationalIdFrontUrl', label: 'صورة بطاقة الرقم القومي (الوجه الأمامي)' },
+  { key: 'nationalIdBackUrl', label: 'صورة بطاقة الرقم القومي (الوجه الخلفي)' },
+];
+
 interface AdminPanelProps {
   onBackToSite: () => void;
   onRefreshPublicData: () => void;
@@ -189,6 +213,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [newSecVideoTitle, setNewSecVideoTitle] = useState('');
   const [newSecVideoUrl, setNewSecVideoUrl] = useState('');
   const [heroSlidePickerIdx, setHeroSlidePickerIdx] = useState<number | null>(null);
+  const [adminMediaFilter, setAdminMediaFilter] = useState<'all' | 'special' | 'photo' | 'video'>('all');
 
   // Handle new media created via picker or upload
   const handleMediaCreated = (newMedia: MediaItem) => {
@@ -716,7 +741,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
           </aside>
 
           {/* Main Dashboard Canvas (9 columns) */}
-          <main className="lg:col-span-9 bg-white rounded-3xl border border-stone-200 p-6 sm:p-8 shadow-xs text-right">
+          <main className="lg:col-span-9 bg-white rounded-3xl border border-stone-200 p-4 sm:p-8 shadow-xs text-right min-w-0 max-w-full overflow-x-hidden">
             
             {/* TAB: STATS OVERVIEW */}
             {activeTab === 'stats' && (
@@ -1531,9 +1556,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         setEditingSecMember({
                           secretariatId: secretariats[0]?.id || '',
                           role: 'member',
-                          joinDate: new Date().toISOString().split('T')[0]
+                          assignmentDate: new Date().toISOString().split('T')[0]
                         });
-                        setShowMemberAssignmentModal(true);
+                        setShowSecMemberModal(true);
                       }}
                       className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
                     >
@@ -2359,8 +2384,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </button>
                 </div>
 
+                {/* Filter Tabs */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdminMediaFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      adminMediaFilter === 'all'
+                        ? 'bg-stone-900 text-white'
+                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                    }`}
+                  >
+                    كافة الوسائط ({media.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdminMediaFilter('special')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      adminMediaFilter === 'special'
+                        ? 'bg-amber-500 text-stone-950 font-black shadow-xs'
+                        : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                    <span>المعرض الخاص ⭐ ({media.filter(m => m.isSpecial || m.albumName === 'خاص').length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdminMediaFilter('photo')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      adminMediaFilter === 'photo'
+                        ? 'bg-red-700 text-white'
+                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                    }`}
+                  >
+                    الصور ({media.filter(m => m.type === 'photo').length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAdminMediaFilter('video')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      adminMediaFilter === 'video'
+                        ? 'bg-red-700 text-white'
+                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                    }`}
+                  >
+                    الفيديوهات ({media.filter(m => m.type === 'video').length})
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {media.map(m => (
+                  {media.filter(m => {
+                    const isSpec = Boolean(m.isSpecial || m.albumName === 'خاص');
+                    if (adminMediaFilter === 'special') return isSpec;
+                    if (adminMediaFilter === 'photo') return m.type === 'photo';
+                    if (adminMediaFilter === 'video') return m.type === 'video';
+                    return true;
+                  }).map(m => (
                     <div key={m.id} className="border border-stone-200 rounded-xl overflow-hidden bg-white shadow-xs">
                       <div className="aspect-square bg-stone-100 relative">
                         {m.type === 'photo' ? (
@@ -2373,6 +2456,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         <span className="absolute top-1 right-1 bg-stone-900/80 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">
                           {m.albumName}
                         </span>
+                        {(m.isSpecial || m.albumName === 'خاص') && (
+                          <span className="absolute top-1 left-1 bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 font-black text-[9px] px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                            <Sparkles className="w-2.5 h-2.5" />
+                            <span>معرض خاص ⭐</span>
+                          </span>
+                        )}
                       </div>
                       <div className="p-3 text-right">
                         <h4 className="font-bold text-xs text-stone-900 line-clamp-1">{m.title}</h4>
@@ -4328,6 +4417,102 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
 
+                  {/* DYNAMIC MEMBERSHIP APPLICATION FIELD SETTINGS */}
+                  <div className="bg-stone-50 border-2 border-amber-500/30 rounded-3xl p-6 sm:p-8 space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 pb-4">
+                      <div>
+                        <h3 className="text-base sm:text-lg font-black text-stone-900 flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5 text-amber-600" />
+                          <span>إعدادات استمارة العضوية (التحكم في الحقول الإجبارية والاختيارية)</span>
+                        </h3>
+                        <p className="text-xs text-stone-500 mt-0.5">
+                          تحديد أي حقول مطلوبة إجبارياً للقبول أو اختيارية، وتطبق فوراً على نموذج انضمام المواطنين بالبوابة
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allReq: Record<string, boolean> = {};
+                            MEMBERSHIP_FORM_FIELDS.forEach(f => {
+                              allReq[f.key] = true;
+                            });
+                            setSettings({
+                              ...settings,
+                              membershipFieldRequirements: allReq
+                            });
+                          }}
+                          className="bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-bold px-3 py-1.5 rounded-xl border border-amber-300 transition-colors cursor-pointer"
+                        >
+                          تعيين كافة الحقول إجبارية (الافتراضي)
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allOptional: Record<string, boolean> = {};
+                            MEMBERSHIP_FORM_FIELDS.forEach(f => {
+                              // keep fullName and nationalId and phone as required, others optional
+                              allOptional[f.key] = ['fullName', 'nationalId', 'phone'].includes(f.key);
+                            });
+                            setSettings({
+                              ...settings,
+                              membershipFieldRequirements: allOptional
+                            });
+                          }}
+                          className="bg-stone-200 hover:bg-stone-300 text-stone-700 text-xs font-bold px-3 py-1.5 rounded-xl border border-stone-300 transition-colors cursor-pointer"
+                        >
+                          جعل الحقول الإضافية اختيارية
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {MEMBERSHIP_FORM_FIELDS.map(field => {
+                        const isReq = (settings.membershipFieldRequirements?.[field.key] !== false);
+                        return (
+                          <div
+                            key={field.key}
+                            className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-2 ${
+                              isReq
+                                ? 'bg-white border-red-200 shadow-xs'
+                                : 'bg-stone-100/70 border-stone-200 opacity-80'
+                            }`}
+                          >
+                            <div className="text-right">
+                              <span className="text-xs font-bold text-stone-900 block">
+                                {field.label}
+                              </span>
+                              <span className={`text-[10px] font-semibold ${isReq ? 'text-red-700 font-bold' : 'text-stone-500'}`}>
+                                {isReq ? 'إجباري بالاستمارة (*)' : 'اختياري للمتقدم'}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const currentReqs = { ...(settings.membershipFieldRequirements || {}) };
+                                currentReqs[field.key] = !isReq;
+                                setSettings({
+                                  ...settings,
+                                  membershipFieldRequirements: currentReqs
+                                });
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 ${
+                                isReq
+                                  ? 'bg-red-700 hover:bg-red-800 text-white'
+                                  : 'bg-stone-200 hover:bg-stone-300 text-stone-700'
+                              }`}
+                            >
+                              {isReq ? 'إجباري' : 'اختياري'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {/* Bottom Save & Actions Bar */}
                   <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                     <div className="text-center sm:text-right">
@@ -5675,7 +5860,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
         <MediaPickerModal
           isOpen={true}
           onClose={() => setHeroSlidePickerIdx(null)}
-          onSelect={(url) => {
+          onSelect={(selectedUrls) => {
+            const url = selectedUrls[0] || '';
             const updated = [...(settings.heroSlides || [])];
             if (updated[heroSlidePickerIdx]) {
               updated[heroSlidePickerIdx] = {
@@ -5858,6 +6044,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة"
                 pickerTitle={`اختيار صورة لمبادرة: ${editingInitiative.title || ''}`}
               />
+
+              <MultiImageGalleryField
+                label="ألبوم ومعرض صور المبادرة (صور متعددة)"
+                images={editingInitiative.galleryImages || []}
+                onChange={imgs => setEditingInitiative({ ...editingInitiative, galleryImages: imgs })}
+                media={media}
+                onMediaCreated={handleMediaCreated}
+                pickerTitle={`معرض صور مبادرة: ${editingInitiative.title || ''}`}
+              />
             </div>
 
             <div className="flex items-center gap-3 pt-3">
@@ -5965,6 +6160,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       <option key={s.id} value={s.id}>{s.name}</option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              {/* Publisher / Author Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    اسم ناشر الخبر / المحرر
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أ. معاذ محمود / الأمانة الإعلامية"
+                    value={editingNews.authorName || ''}
+                    onChange={e => setEditingNews({ ...editingNews, authorName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    المنصب أو الصفة الحزبية
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أمين التنظيم / أمين الإعلام / عضو هيئة المكتب"
+                    value={editingNews.authorPosition || ''}
+                    onChange={e => setEditingNews({ ...editingNews, authorPosition: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
+                  />
                 </div>
               </div>
 
@@ -6109,9 +6333,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <MultiImageGalleryField
-                label="ألبوم صور وتغطية الفعالية"
-                images={editingEvent.images || []}
-                onChange={imgs => setEditingEvent({ ...editingEvent, images: imgs })}
+                label="ألبوم صور وتغطية الفعالية (إضافة أكثر من صورة)"
+                images={editingEvent.images || editingEvent.galleryImages || []}
+                onChange={imgs => setEditingEvent({ ...editingEvent, images: imgs, galleryImages: imgs })}
                 media={media}
                 onMediaCreated={handleMediaCreated}
                 pickerTitle={`ألبوم صور وتغطية فعالية: ${editingEvent.title || ''}`}
@@ -6297,6 +6521,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs font-mono"
                       dir="ltr"
                     />
+                  </div>
+                )}
+              </div>
+
+              {/* SPECIAL GALLERY TOGGLE */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-3.5 space-y-2">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-600" />
+                    <div>
+                      <span className="text-xs font-black text-amber-950 block">إدراج في "المعرض الخاص" (VIP / أرشيف حصري)</span>
+                      <span className="text-[11px] text-amber-700 block">عرض الوسيط بشكل مميز داخل قسم "معرض خاص" بالبوابة</span>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={editingMedia.isSpecial || false}
+                    onChange={e => setEditingMedia({ ...editingMedia, isSpecial: e.target.checked })}
+                    className="w-4 h-4 text-amber-600 rounded cursor-pointer accent-amber-600"
+                  />
+                </label>
+
+                {editingMedia.isSpecial && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-900 mb-1">تصنيف المعرض الخاص</label>
+                    <input
+                      type="text"
+                      list="special-gallery-categories"
+                      value={editingMedia.specialCategory || 'مؤتمرات ولقاءات كبرى'}
+                      onChange={e => setEditingMedia({ ...editingMedia, specialCategory: e.target.value })}
+                      placeholder="مثال: مؤتمرات كبرى، زيارات رسمية، لقاءات حصرية..."
+                      className="w-full border border-amber-300 rounded-xl px-3 py-1.5 text-xs bg-white text-stone-900"
+                    />
+                    <datalist id="special-gallery-categories">
+                      <option value="مؤتمرات ولقاءات كبرى" />
+                      <option value="زيارات رسمية وتفقدية" />
+                      <option value="لقاءات حصرية وخاصة" />
+                      <option value="بروتوكولات واتفاقيات" />
+                      <option value="تغطيات خاصة للأمانة العامة" />
+                    </datalist>
                   </div>
                 )}
               </div>

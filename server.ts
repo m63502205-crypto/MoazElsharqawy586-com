@@ -321,31 +321,71 @@ app.get('/api/public/initiative/:slug', (req: Request, res: Response) => {
 
 // 4. Submit Membership Application
 app.post('/api/public/apply', (req: Request, res: Response) => {
-  const body = req.body;
-  if (!body.fullName || !body.nationalId || !body.phone) {
-    return res.status(400).json({ error: 'يرجى استيفاء البيانات الإلزامية: الاسم الرباعي، الرقم القومي، ورقم الهاتف' });
-  }
-
-  // Validate National ID (must be exactly 14 digits)
-  const cleanNID = String(body.nationalId).trim();
-  if (!/^\d{14}$/.test(cleanNID)) {
-    return res.status(400).json({ error: 'الرقم القومي غير صالح، يجب أن يتكون من 14 رقماً بالضبط' });
-  }
-
+  const body = req.body || {};
   const data = db.get();
-  // Check duplicate national ID in existing applications or members
-  const existingApp = data.applications.find(a => a.nationalId === cleanNID && a.status !== 'مرفوض');
-  if (existingApp) {
-    return res.status(409).json({
-      error: `يوجد طلب انضمام مسجل مسبقاً لهذا الرقم القومي برقم متابعة (${existingApp.applicationNumber}) وحالته الحالية: ${existingApp.status}`
-    });
+  const reqs = data.settings.membershipFieldRequirements || {};
+  const isReq = (k: string) => reqs[k] !== false; // Default to true (mandatory) unless explicitly disabled
+
+  const fieldLabels: Record<string, string> = {
+    fullName: 'الاسم الرباعي كاملاً',
+    nationalId: 'الرقم القومي',
+    dateOfBirth: 'تاريخ الميلاد',
+    gender: 'النوع',
+    maritalStatus: 'الحالة الاجتماعية',
+    address: 'العنوان التفصيلي',
+    phone: 'رقم الهاتف المحمول',
+    whatsapp: 'رقم الواتساب',
+    email: 'البريد الإلكتروني',
+    qualification: 'المؤهل الدراسي',
+    job: 'الوظيفة الحالية',
+    workplace: 'جهة العمل',
+    skills: 'المهارات والخبرات العملية',
+    interests: 'الاهتمامات الحزبية',
+    volunteerExperience: 'الخبرات التطوعية السابقة',
+    reasonForJoining: 'سبب الرغبة في الانضمام',
+    personalPhotoUrl: 'الصورة الشخصية',
+    nationalIdFrontUrl: 'صورة وجه بطاقة الرقم القومي',
+    nationalIdBackUrl: 'صورة ظهر بطاقة الرقم القومي'
+  };
+
+  for (const [key, label] of Object.entries(fieldLabels)) {
+    if (isReq(key)) {
+      const val = body[key];
+      if (!val || (typeof val === 'string' && !val.trim())) {
+        return res.status(400).json({ error: `يرجى استيفاء الحقل الإجباري: ${label}` });
+      }
+    }
   }
 
-  const existingMember = data.members.find(m => m.nationalId === cleanNID);
-  if (existingMember) {
-    return res.status(409).json({
-      error: 'هذا الرقم القومي مسجل بالفعل في سجل أعضاء الحزب'
-    });
+  // Validate National ID
+  const cleanNID = String(body.nationalId || '').trim();
+  if (cleanNID || isReq('nationalId')) {
+    if (!/^\d{14}$/.test(cleanNID)) {
+      return res.status(400).json({ error: 'الرقم القومي غير صالح، يجب أن يتكون من 14 رقماً بالضبط' });
+    }
+  }
+
+  if (!body.phone || !String(body.phone).trim()) {
+    if (isReq('phone')) {
+      return res.status(400).json({ error: 'يرجى إدخال رقم الهاتف للتواصل' });
+    }
+  }
+
+  // Check duplicate national ID in existing applications or members
+  if (cleanNID) {
+    const existingApp = data.applications.find(a => a.nationalId === cleanNID && a.status !== 'مرفوض');
+    if (existingApp) {
+      return res.status(409).json({
+        error: `يوجد طلب انضمام مسجل مسبقاً لهذا الرقم القومي برقم متابعة (${existingApp.applicationNumber}) وحالته الحالية: ${existingApp.status}`
+      });
+    }
+
+    const existingMember = data.members.find(m => m.nationalId === cleanNID);
+    if (existingMember) {
+      return res.status(409).json({
+        error: 'هذا الرقم القومي مسجل بالفعل في سجل أعضاء الحزب'
+      });
+    }
   }
 
   const year = new Date().getFullYear();

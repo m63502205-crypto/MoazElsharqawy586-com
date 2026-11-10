@@ -159,7 +159,7 @@ export const api = {
   deleteSecretariatLeader: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/admin/secretariat-leaders/${id}`, { method: 'DELETE' }),
 
-  // Specialized Secretariats
+  // Specialized Secretariats (Secured Admin Endpoints)
   createSecretariat: (sec: Partial<SpecializedSecretariat>) =>
     apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>('/api/admin/secretariats', {
       method: 'POST',

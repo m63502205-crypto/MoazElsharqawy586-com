@@ -221,7 +221,7 @@ function MainApp() {
 
   // Public View
   return (
-    <div className="min-h-screen bg-stone-50 flex flex-col selection:bg-red-700 selection:text-white" dir="rtl">
+    <div className="min-h-screen bg-stone-50 flex flex-col selection:bg-red-700 selection:text-white w-full max-w-full overflow-x-hidden" dir="rtl">
       <Navbar
         currentView={currentView}
         setCurrentView={handleSetCurrentView}
@@ -229,7 +229,7 @@ function MainApp() {
         slogan={data.settings.slogan}
       />
 
-      <main className="flex-1">
+      <main className="flex-1 w-full max-w-full overflow-x-hidden">
         <PublicPages
           currentView={currentView}
           setCurrentView={handleSetCurrentView}

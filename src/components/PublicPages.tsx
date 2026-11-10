@@ -43,6 +43,7 @@ import {
   Trash2,
   Save,
   Edit2,
+  Sparkles,
   X
 } from 'lucide-react';
 import { api } from '../api';
@@ -173,7 +174,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
   // Filter states
   const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>('all');
-  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'photo' | 'video'>('all');
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'special' | 'photo' | 'video'>('all');
   const [mediaAlbumFilter, setMediaAlbumFilter] = useState<string>('all');
   const [newsSearch, setNewsSearch] = useState<string>('');
   const [eventsFilter, setEventsFilter] = useState<'all' | 'upcoming' | 'completed'>('all');
@@ -251,18 +252,109 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const isFieldReq = (k: string) => {
+    return data.settings.membershipFieldRequirements?.[k] !== false; // Default true (mandatory) unless explicitly disabled
+  };
+
   const handleApplicationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAppError(null);
 
-    // Validate 14-digit National ID
-    if (!/^\d{14}$/.test(appForm.nationalId.trim())) {
-      setAppError('الرقم القومي غير صحيح، يجب أن يتكون من 14 رقماً بالضبط');
+    // Validation based on admin requirements (all mandatory by default)
+    if (isFieldReq('fullName') && !appForm.fullName.trim()) {
+      setAppError('يرجى إدخال الاسم الرباعي كاملاً كما ببطاقة الرقم القومي');
       return;
     }
 
-    if (!appForm.phone.trim()) {
+    if (isFieldReq('nationalId') || appForm.nationalId.trim()) {
+      if (!/^\d{14}$/.test(appForm.nationalId.trim())) {
+        setAppError('الرقم القومي غير صحيح، يجب أن يتكون من 14 رقماً بالضبط');
+        return;
+      }
+    }
+
+    if (isFieldReq('dateOfBirth') && !appForm.dateOfBirth) {
+      setAppError('يرجى تحديد تاريخ الميلاد');
+      return;
+    }
+
+    if (isFieldReq('gender') && !appForm.gender) {
+      setAppError('يرجى تحديد النوع');
+      return;
+    }
+
+    if (isFieldReq('maritalStatus') && !appForm.maritalStatus) {
+      setAppError('يرجى تحديد الحالة الاجتماعية');
+      return;
+    }
+
+    if (isFieldReq('address') && !appForm.address.trim()) {
+      setAppError('يرجى إدخال العنوان التفصيلي');
+      return;
+    }
+
+    if (isFieldReq('phone') && !appForm.phone.trim()) {
       setAppError('يرجى إدخال رقم الهاتف للتواصل');
+      return;
+    }
+
+    if (isFieldReq('whatsapp') && !appForm.whatsapp.trim()) {
+      setAppError('يرجى إدخال رقم الواتساب للتواصل');
+      return;
+    }
+
+    if (isFieldReq('email') && !appForm.email.trim()) {
+      setAppError('يرجى إدخال البريد الإلكتروني');
+      return;
+    }
+
+    if (isFieldReq('qualification') && !appForm.qualification.trim()) {
+      setAppError('يرجى إدخال المؤهل الدراسي');
+      return;
+    }
+
+    if (isFieldReq('job') && !appForm.job.trim()) {
+      setAppError('يرجى إدخال المهنة / الوظيفة الحالية');
+      return;
+    }
+
+    if (isFieldReq('workplace') && !appForm.workplace.trim()) {
+      setAppError('يرجى إدخال جهة العمل');
+      return;
+    }
+
+    if (isFieldReq('skills') && !appForm.skills.trim()) {
+      setAppError('يرجى ذكر المهارات والخبرات العملية');
+      return;
+    }
+
+    if (isFieldReq('interests') && !appForm.interests.trim()) {
+      setAppError('يرجى تحديد الاهتمامات الحزبية أو الأمانات المفضلة');
+      return;
+    }
+
+    if (isFieldReq('volunteerExperience') && !appForm.volunteerExperience.trim()) {
+      setAppError('يرجى كتابة الخبرات التطوعية السابقة');
+      return;
+    }
+
+    if (isFieldReq('reasonForJoining') && !appForm.reasonForJoining.trim()) {
+      setAppError('يرجى كتابة سبب الرغبة في الانضمام');
+      return;
+    }
+
+    if (isFieldReq('personalPhotoUrl') && !appForm.personalPhotoUrl) {
+      setAppError('يرجى رفع الصورة الشخصية الحديثة (إجباري)');
+      return;
+    }
+
+    if (isFieldReq('nationalIdFrontUrl') && !appForm.nationalIdFrontUrl) {
+      setAppError('يرجى رفع صورة بطاقة الرقم القومي - الوجه الأمامي (إجباري)');
+      return;
+    }
+
+    if (isFieldReq('nationalIdBackUrl') && !appForm.nationalIdBackUrl) {
+      setAppError('يرجى رفع صورة بطاقة الرقم القومي - الوجه الخلفي (إجباري)');
       return;
     }
 
@@ -601,42 +693,26 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         </section>
 
         {/* Section 1: Party Leaders Preview */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
-            <div>
-              <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
-                {ct.partyLeadersBadge || 'التسلسل القيادي'}
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
-                {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-500 mt-1">
-                {ct.partyLeadersSubtitle || 'قيادات الحزب على مستوى الجمهورية والمحافظات'}
-              </p>
+        {data.partyLeaders.length > 0 && (
+          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
+                  {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
+                </h2>
+              </div>
+              <button
+                onClick={() => {
+                  setCurrentView('party-leaders');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
+              >
+                <span>عرض جميع قيادات الحزب</span>
+                <ChevronLeft className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={() => {
-                setCurrentView('party-leaders');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
-            >
-              <span>عرض جميع قيادات الحزب</span>
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-          </div>
 
-          {data.partyLeaders.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-stone-200 p-8 text-center text-stone-600 shadow-xs">
-              <Award className="w-12 h-12 text-amber-500 mx-auto mb-3 opacity-80" />
-              <h4 className="font-bold text-stone-900 text-base mb-1">
-                {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
-              </h4>
-              <p className="text-xs text-stone-500 max-w-md mx-auto">
-                البيانات والتشكيلات القيادية على مستوى الجمهورية والمحافظات قيد الاعتماد والمراجعة التنظيمية الرسمية.
-              </p>
-            </div>
-          ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {data.partyLeaders.slice(0, 4).map(leader => (
                 <div
@@ -671,46 +747,30 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         {/* Section 2: Secretariat Leaders Preview (3rd October Giza) */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
-            <div>
-              <span className="text-xs font-bold text-amber-600 uppercase tracking-widest">
-                {ct.secLeadersBadge || 'الهيكل التنظيمي الميداني'}
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
-                {ct.secLeadersTitle || 'قيادات أمانة قسم ثالث أكتوبر'}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-500 mt-1">
-                {ct.secLeadersSubtitle || 'هيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة'}
-              </p>
+        {data.secretariatLeaders.length > 0 && (
+          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+              <div>
+                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
+                  {ct.secLeadersTitle || 'قيادات أمانة قسم ثالث أكتوبر'}
+                </h2>
+              </div>
+              <button
+                onClick={() => {
+                  setCurrentView('secretariat-leaders');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-700 hover:text-amber-800 transition-colors cursor-pointer"
+              >
+                <span>عرض جميع قيادات الأمانة</span>
+                <ChevronLeft className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={() => {
-                setCurrentView('secretariat-leaders');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-700 hover:text-amber-800 transition-colors cursor-pointer"
-            >
-              <span>عرض جميع قيادات الأمانة</span>
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-          </div>
 
-          {data.secretariatLeaders.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-stone-200 p-8 text-center text-stone-600 shadow-xs">
-              <Users className="w-12 h-12 text-red-600 mx-auto mb-3 opacity-80" />
-              <h4 className="font-bold text-stone-900 text-base mb-1">
-                {ct.secLeadersTitle || 'قيادات أمانة قسم ثالث أكتوبر'}
-              </h4>
-              <p className="text-xs text-stone-500 max-w-md mx-auto">
-                الهيكل التنظيمي والقيادي لأمانة قسم ثالث أكتوبر بمحافظة الجيزة قيد الاعتماد والاستكمال الرسمي.
-              </p>
-            </div>
-          ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {data.secretariatLeaders.slice(0, 4).map(leader => (
                 <div
@@ -745,8 +805,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
         {/* Section 3: Specialized Secretariats Grid */}
         <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -941,6 +1001,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <p className="text-xs text-stone-500 line-clamp-2 mt-1">
                           {item.excerpt}
                         </p>
+                        {(item.authorName || item.authorPosition) && (
+                          <div className="text-[10px] text-amber-900 font-bold mt-1.5 flex items-center gap-1.5">
+                            <span>{item.authorName ? `بقلم: ${item.authorName}` : 'المكتب الإعلامي'}</span>
+                            {item.authorPosition && (
+                              <span className="text-stone-500 font-normal text-[9px]">({item.authorPosition})</span>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <SocialShareButtons
@@ -1156,16 +1224,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        <div className="text-center space-y-3">
-          <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
-            {ct.partyLeadersBadge || 'التسلسل القيادي العام'}
-          </span>
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
+        <div className="text-center space-y-2">
+          <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight">
             {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
           </h1>
-          <p className="text-xs sm:text-sm text-stone-500 max-w-xl mx-auto">
-            {ct.partyLeadersSubtitle || 'يعرض هذا القسم المستقل قيادات الحزب على مستوى الهيئة العليا والمحافظات (رئيس الحزب، النواب، الأمين العام، وأمناء المحافظات).'}
-          </p>
         </div>
 
         {/* Filter bar */}
@@ -1218,20 +1280,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         </div>
 
         {filteredLeaders.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-dashed border-stone-300 p-12 text-center text-stone-500 max-w-lg mx-auto">
-            <Award className="w-16 h-16 text-stone-300 mx-auto mb-4" />
-            <h3 className="font-bold text-stone-800 text-lg mb-2">
-              لم تُضف قيادات حزبية بعد في هذا المستوى
+          <div className="bg-white rounded-3xl border border-stone-200/80 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
+            <Award className="w-14 h-14 text-stone-300 mx-auto mb-4" />
+            <h3 className="font-bold text-stone-900 text-lg mb-1.5">
+              التشكيل القيادي قيد المراجعة الرسمية
             </h3>
-            <p className="text-xs text-stone-500 mb-6 leading-relaxed">
-              يمكن للإدارة إضافة أي قيادة حزبية واختيار مستواها القيادي (الهيئة العليا، قيادات المحافظات، أو أي مسمى مخصص) من لوحة التحكم مباشرة.
+            <p className="text-xs sm:text-sm text-stone-500 leading-relaxed">
+              يجري حالياً مراجعة واعتماد التشكيلات القيادية للحزب وفق اللوائح والقرارات التنظيمية.
             </p>
-            <button
-              onClick={() => setCurrentView('admin')}
-              className="bg-red-700 hover:bg-red-800 text-white px-5 py-2.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-            >
-              الدخول للوحة التحكم لإضافة القيادات
-            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -1331,33 +1387,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   if (currentView === 'secretariat-leaders') {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        <div className="text-center space-y-3">
-          <span className="text-xs font-bold text-amber-600 uppercase tracking-widest">
-            قسم منفصل ومستقل
-          </span>
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
+        <div className="text-center space-y-2">
+          <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight">
             قيادات أمانة قسم ثالث أكتوبر
           </h1>
-          <p className="text-xs sm:text-sm text-stone-500 max-w-xl mx-auto">
-            يختص هذا القسم بقيادات أمانة قسم ثالث أكتوبر بمحافظة الجيزة فقط (أمين الأمانة، أمين مساعد، أمين إعلام، أمين تنظيم، أمين تكنولوجيا، أمين تدريب وتثقيف، أمين علاقات عامة، أمين تسويق، أمين موارد بشرية، أمين متابعة وتقييم، أمين بحث وتطوير، عضو أمانة).
-          </p>
         </div>
 
         {data.secretariatLeaders.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-dashed border-stone-300 p-12 text-center text-stone-500 max-w-lg mx-auto">
-            <Users className="w-16 h-16 text-amber-500 mx-auto mb-4" />
-            <h3 className="font-bold text-stone-800 text-lg mb-2">
-              لم تُضف قيادات أمانة أكتوبر بعد
+          <div className="bg-white rounded-3xl border border-stone-200/80 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
+            <Users className="w-14 h-14 text-stone-300 mx-auto mb-4" />
+            <h3 className="font-bold text-stone-900 text-lg mb-1.5">
+              التشكيل القيادي قيد الاعتماد الرسمي
             </h3>
-            <p className="text-xs text-stone-500 mb-6 leading-relaxed">
-              وفقاً لتوجيهاتكم، لا توجد أسماء أو مناصب افتراضية، ويمكنكم إضافة القيادات والمسميات الوظيفية الفعلية بحرية من لوحة التحكم.
+            <p className="text-xs sm:text-sm text-stone-500 leading-relaxed">
+              يجري حالياً مراجعة واعتماد تشكيل قيادات أمانة قسم ثالث أكتوبر بمحافظة الجيزة وفق اللوائح والقرارات التنظيمية للحزب.
             </p>
-            <button
-              onClick={() => setCurrentView('admin')}
-              className="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-            >
-              إضافة قيادات أمانة أكتوبر من لوحة التحكم
-            </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -2023,6 +2067,35 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
             </div>
           )}
+
+          {/* Multi-image Gallery */}
+          {((init.galleryImages && init.galleryImages.length > 0) || init.coverUrl) && (
+            <div className="space-y-4 pt-4 border-t border-stone-100">
+              <h3 className="font-extrabold text-stone-900 text-lg flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-amber-600" />
+                <span>معرض صور وتوثيق المبادرة</span>
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {init.coverUrl && (
+                  <img
+                    src={init.coverUrl}
+                    alt={init.title}
+                    className="w-full aspect-video object-cover rounded-2xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
+                    onClick={() => window.open(init.coverUrl, '_blank')}
+                  />
+                )}
+                {(init.galleryImages || []).map((img, idx) => (
+                  <img
+                    key={idx}
+                    src={img}
+                    alt={`${init.title} - صورة ${idx + 1}`}
+                    className="w-full aspect-video object-cover rounded-2xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
+                    onClick={() => window.open(img, '_blank')}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2112,6 +2185,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <p className="text-xs text-stone-600 line-clamp-3 leading-relaxed">
                     {item.excerpt}
                   </p>
+                  {(item.authorName || item.authorPosition) && (
+                    <div className="pt-2 border-t border-stone-100 flex items-center gap-1.5 text-[11px] text-amber-900 font-bold">
+                      <span>{item.authorName ? `بقلم: ${item.authorName}` : 'المكتب الإعلامي'}</span>
+                      {item.authorPosition && (
+                        <span className="text-stone-500 font-normal text-[10px]">({item.authorPosition})</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2169,6 +2250,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {selectedNews.title}
                 </h2>
 
+                {/* Author / Publisher Information */}
+                {(selectedNews.authorName || selectedNews.authorPosition) && (
+                  <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
+                      {(selectedNews.authorName || 'ح').charAt(0)}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs font-bold text-stone-900">
+                        {selectedNews.authorName ? `بقلم: ${selectedNews.authorName}` : 'المكتب الإعلامي للأمانة'}
+                      </div>
+                      {selectedNews.authorPosition && (
+                        <div className="text-[11px] font-semibold text-amber-800">
+                          {selectedNews.authorPosition}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {selectedNews.coverImage && (
                   <img
                     src={selectedNews.coverImage}
@@ -2181,6 +2281,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
                   {selectedNews.content}
                 </div>
+
+                {/* Multiple Images Gallery */}
+                {selectedNews.galleryImages && selectedNews.galleryImages.length > 0 && (
+                  <div className="pt-3 border-t border-stone-100 space-y-2">
+                    <h4 className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-600" />
+                      <span>معرض صور الخبر ({selectedNews.galleryImages.length} صورة)</span>
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {selectedNews.galleryImages.map((img, idx) => (
+                        <img
+                          key={idx}
+                          src={img}
+                          alt={`${selectedNews.title} - صورة ${idx + 1}`}
+                          className="w-full aspect-video object-cover rounded-xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
+                          onClick={() => window.open(img, '_blank')}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {selectedNews.videoUrl && (
                   <div className="pt-4 border-t border-stone-100">
@@ -2316,6 +2437,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               )}
 
+              {/* Event Multi-image Gallery */}
+              {((event.images && event.images.length > 0) || (event.galleryImages && event.galleryImages.length > 0) || event.coverUrl || event.coverImage) && (
+                <div className="pt-3 border-t border-stone-100 space-y-2">
+                  <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
+                    <ImageIcon className="w-4 h-4 text-amber-600" />
+                    <span>تغطية وصور الفعالية ({Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).length} صورة)</span>
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).map((img, i) => (
+                      <img
+                        key={i}
+                        src={img}
+                        alt={`${event.title} - صورة ${i + 1}`}
+                        className="w-full aspect-video object-cover rounded-xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
+                        onClick={() => window.open(img, '_blank')}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Share Buttons for Event */}
               <SocialShareButtons
                 title={event.title}
@@ -2334,8 +2476,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // 11. MEDIA GALLERY VIEW (Photos & Videos)
   // -------------------------------------------------------------
   if (currentView === 'gallery') {
+    const isSpecialMedia = (m: MediaItem) => Boolean(m.isSpecial || m.albumName === 'خاص' || m.specialCategory);
     const filteredMedia = data.media.filter(m => {
-      if (mediaTypeFilter !== 'all' && m.type !== mediaTypeFilter) return false;
+      if (mediaTypeFilter === 'special') return isSpecialMedia(m);
+      if (mediaTypeFilter === 'photo') return m.type === 'photo';
+      if (mediaTypeFilter === 'video') return m.type === 'video';
       if (mediaAlbumFilter !== 'all' && m.albumName !== mediaAlbumFilter) return false;
       return true;
     });
@@ -2358,24 +2503,35 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
         {/* Filter bars */}
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <div className="inline-flex bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs font-bold">
+          <div className="inline-flex flex-wrap items-center justify-center bg-stone-100 p-1 rounded-2xl border border-stone-200 text-xs font-bold gap-1 shadow-xs">
             <button
               onClick={() => setMediaTypeFilter('all')}
-              className={`px-4 py-2 rounded-lg cursor-pointer ${mediaTypeFilter === 'all' ? 'bg-red-700 text-white' : 'text-stone-600'}`}
+              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'all' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
             >
               الكل ({data.media.length})
             </button>
             <button
-              onClick={() => setMediaTypeFilter('photo')}
-              className={`px-4 py-2 rounded-lg cursor-pointer ${mediaTypeFilter === 'photo' ? 'bg-red-700 text-white' : 'text-stone-600'}`}
+              onClick={() => setMediaTypeFilter('special')}
+              className={`px-4 py-2 rounded-xl cursor-pointer flex items-center gap-1.5 transition-all ${
+                mediaTypeFilter === 'special'
+                  ? 'bg-amber-500 text-stone-950 font-black shadow-md'
+                  : 'text-amber-800 bg-amber-50 hover:bg-amber-100 font-bold'
+              }`}
             >
-              الصور فقط
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>المعرض الخاص ⭐ ({data.media.filter(isSpecialMedia).length})</span>
+            </button>
+            <button
+              onClick={() => setMediaTypeFilter('photo')}
+              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'photo' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
+            >
+              الصور فقط ({data.media.filter(m => m.type === 'photo').length})
             </button>
             <button
               onClick={() => setMediaTypeFilter('video')}
-              className={`px-4 py-2 rounded-lg cursor-pointer ${mediaTypeFilter === 'video' ? 'bg-red-700 text-white' : 'text-stone-600'}`}
+              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'video' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
             >
-              الفيديوهات فقط
+              الفيديوهات فقط ({data.media.filter(m => m.type === 'video').length})
             </button>
           </div>
 
@@ -2383,7 +2539,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             <select
               value={mediaAlbumFilter}
               onChange={e => setMediaAlbumFilter(e.target.value)}
-              className="bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-medium text-stone-800"
+              className="bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-medium text-stone-800 shadow-xs"
             >
               <option value="all">كافة الألبومات</option>
               {albums.map((alb, i) => (
@@ -2393,31 +2549,48 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {filteredMedia.map(item => (
-            <div
-              key={item.id}
-              onClick={() => setSelectedMedia(item)}
-              className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="aspect-square bg-stone-100 overflow-hidden relative">
-                {item.type === 'photo' ? (
-                  <img
-                    src={item.url}
-                    alt={item.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-stone-900 text-white p-4">
-                    <Play className="w-12 h-12 text-red-600 mb-2 fill-current" />
-                    <span className="text-xs font-bold">فيديو</span>
+        {filteredMedia.length === 0 ? (
+          <div className="bg-white rounded-3xl border border-stone-200 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
+            <Sparkles className="w-12 h-12 text-amber-500 mx-auto mb-3 opacity-70" />
+            <h3 className="font-bold text-stone-900 text-base mb-1">
+              {mediaTypeFilter === 'special' ? 'المعرض الخاص قيد إدراج التغطيات والزيارات الحصرية' : 'لا توجد وسائط في هذا القسم بعد'}
+            </h3>
+            <p className="text-xs text-stone-500 leading-relaxed">
+              سيتم نشر وتحديث ألبومات الصور والفيديوهات تباعاً عبر المركز الإعلامي للحزب.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {filteredMedia.map(item => (
+              <div
+                key={item.id}
+                onClick={() => setSelectedMedia(item)}
+                className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div className="aspect-square bg-stone-100 overflow-hidden relative">
+                  {item.type === 'photo' ? (
+                    <img
+                      src={item.url}
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-stone-900 text-white p-4">
+                      <Play className="w-12 h-12 text-red-600 mb-2 fill-current" />
+                      <span className="text-xs font-bold">فيديو</span>
+                    </div>
+                  )}
+                  <div className="absolute top-2 right-2 bg-stone-900/80 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                    {item.albumName || 'عام'}
                   </div>
-                )}
-                <div className="absolute top-2 right-2 bg-stone-900/80 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                  {item.albumName || 'عام'}
+                  {(item.isSpecial || item.albumName === 'خاص') && (
+                    <div className="absolute top-2 left-2 bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 text-[10px] font-black px-2 py-0.5 rounded shadow-xs flex items-center gap-1">
+                      <Sparkles className="w-2.5 h-2.5" />
+                      <span>معرض خاص ⭐</span>
+                    </div>
+                  )}
                 </div>
-              </div>
 
               <div className="p-4 text-right">
                 <h3 className="font-bold text-stone-900 text-sm group-hover:text-red-700 transition-colors line-clamp-1">
@@ -2432,6 +2605,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           ))}
         </div>
+        )}
 
         {/* Media Lightbox Modal */}
         {selectedMedia && (
@@ -2783,12 +2957,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      الاسم الرباعي كما في بطاقة الرقم القومي <span className="text-red-600">*</span>
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>الاسم الرباعي كما في بطاقة الرقم القومي</span>
+                      {isFieldReq('fullName') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
-                      required
+                      required={isFieldReq('fullName')}
                       placeholder="مثال: أحمد محمد علي إبراهيم"
                       value={appForm.fullName}
                       onChange={e => setAppForm({ ...appForm, fullName: e.target.value })}
@@ -2797,12 +2976,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      الرقم القومي (14 رقماً) <span className="text-red-600">*</span>
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>الرقم القومي (14 رقماً)</span>
+                      {isFieldReq('nationalId') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
-                      required
+                      required={isFieldReq('nationalId')}
                       maxLength={14}
                       placeholder="أدخل الـ 14 رقماً بدون مسافات"
                       value={appForm.nationalId}
@@ -2813,11 +2997,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      تاريخ الميلاد
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>تاريخ الميلاد</span>
+                      {isFieldReq('dateOfBirth') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="date"
+                      required={isFieldReq('dateOfBirth')}
                       value={appForm.dateOfBirth}
                       onChange={e => setAppForm({ ...appForm, dateOfBirth: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -2826,10 +3016,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">
-                        النوع
+                      <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                        <span>النوع</span>
+                        {isFieldReq('gender') ? (
+                          <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 py-0.5 rounded-md">*</span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1 py-0.5 rounded-md">اختياري</span>
+                        )}
                       </label>
                       <select
+                        required={isFieldReq('gender')}
                         value={appForm.gender}
                         onChange={e => setAppForm({ ...appForm, gender: e.target.value as any })}
                         className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -2840,10 +3036,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1">
-                        الحالة الاجتماعية
+                      <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                        <span>الحالة الاجتماعية</span>
+                        {isFieldReq('maritalStatus') ? (
+                          <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 py-0.5 rounded-md">*</span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1 py-0.5 rounded-md">اختياري</span>
+                        )}
                       </label>
                       <select
+                        required={isFieldReq('maritalStatus')}
                         value={appForm.maritalStatus}
                         onChange={e => setAppForm({ ...appForm, maritalStatus: e.target.value as any })}
                         className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -2885,11 +3087,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      العنوان التفصيلي (المنطقة / الحي / الشارع)
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>العنوان التفصيلي</span>
+                      {isFieldReq('address') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('address')}
                       placeholder="مثال: الحي الأول، مجاورة 3، عمارة 12"
                       value={appForm.address}
                       onChange={e => setAppForm({ ...appForm, address: e.target.value })}
@@ -2907,12 +3115,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      رقم الهاتف المحمول <span className="text-red-600">*</span>
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>رقم الهاتف المحمول</span>
+                      {isFieldReq('phone') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="tel"
-                      required
+                      required={isFieldReq('phone')}
                       placeholder="010XXXXXXXX"
                       value={appForm.phone}
                       onChange={e => setAppForm({ ...appForm, phone: e.target.value })}
@@ -2922,11 +3135,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      رقم واتساب
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>رقم واتساب</span>
+                      {isFieldReq('whatsapp') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="tel"
+                      required={isFieldReq('whatsapp')}
                       placeholder="010XXXXXXXX"
                       value={appForm.whatsapp}
                       onChange={e => setAppForm({ ...appForm, whatsapp: e.target.value })}
@@ -2936,11 +3155,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      البريد الإلكتروني
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>البريد الإلكتروني</span>
+                      {isFieldReq('email') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="email"
+                      required={isFieldReq('email')}
                       placeholder="example@mail.com"
                       value={appForm.email}
                       onChange={e => setAppForm({ ...appForm, email: e.target.value })}
@@ -2959,11 +3184,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      المؤهل الدراسي
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>المؤهل الدراسي</span>
+                      {isFieldReq('qualification') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('qualification')}
                       placeholder="مثال: بكالوريوس تجارة / ليسانس حقوق"
                       value={appForm.qualification}
                       onChange={e => setAppForm({ ...appForm, qualification: e.target.value })}
@@ -2972,11 +3203,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      الوظيفة الحالية
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>الوظيفة الحالية</span>
+                      {isFieldReq('job') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('job')}
                       placeholder="مثال: مهندس برمجيات / محاسب / طالب"
                       value={appForm.job}
                       onChange={e => setAppForm({ ...appForm, job: e.target.value })}
@@ -2985,11 +3222,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      جهة العمل
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>جهة العمل</span>
+                      {isFieldReq('workplace') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('workplace')}
                       placeholder="مثال: قطاع خاص / حكومي / أعمال حرة"
                       value={appForm.workplace}
                       onChange={e => setAppForm({ ...appForm, workplace: e.target.value })}
@@ -3007,11 +3250,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      المهارات والخبرات العملية
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>المهارات والخبرات العملية</span>
+                      {isFieldReq('skills') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <textarea
                       rows={2}
+                      required={isFieldReq('skills')}
                       placeholder="المهارات القيادية، التقنية، التنظيمية، العلاقات..."
                       value={appForm.skills}
                       onChange={e => setAppForm({ ...appForm, skills: e.target.value })}
@@ -3020,11 +3269,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      الاهتمامات الحزبية والأمانات المفضلة
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>الاهتمامات الحزبية والأمانات المفضلة</span>
+                      {isFieldReq('interests') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <textarea
                       rows={2}
+                      required={isFieldReq('interests')}
                       placeholder="مثال: أمانة التكنولوجيا، أمانة التنظيم، أمانة التدريب والتثقيف..."
                       value={appForm.interests}
                       onChange={e => setAppForm({ ...appForm, interests: e.target.value })}
@@ -3033,11 +3288,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      الخبرات التطوعية السابقة
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>الخبرات التطوعية السابقة</span>
+                      {isFieldReq('volunteerExperience') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('volunteerExperience')}
                       placeholder="جمعيات أهلية، مبادرات شبابية، أعمال تطوعية..."
                       value={appForm.volunteerExperience}
                       onChange={e => setAppForm({ ...appForm, volunteerExperience: e.target.value })}
@@ -3046,11 +3307,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">
-                      سبب الرغبة في الانضمام لحزب الجبهة الوطنية
+                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                      <span>سبب الرغبة في الانضمام لحزب الجبهة الوطنية</span>
+                      {isFieldReq('reasonForJoining') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
                     </label>
                     <input
                       type="text"
+                      required={isFieldReq('reasonForJoining')}
                       placeholder="رؤيتكم للمشاركة في خدمة أهالي قسم ثالث أكتوبر ومصر..."
                       value={appForm.reasonForJoining}
                       onChange={e => setAppForm({ ...appForm, reasonForJoining: e.target.value })}
@@ -3071,8 +3338,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   {/* Personal Photo */}
-                  <div className="border border-stone-300 rounded-2xl p-4 text-center hover:border-red-700 transition-colors">
-                    <span className="text-xs font-bold text-stone-800 block mb-2">الصورة الشخصية</span>
+                  <div className={`border rounded-2xl p-4 text-center transition-colors ${isFieldReq('personalPhotoUrl') && !appForm.personalPhotoUrl ? 'border-amber-300 bg-amber-50/20' : 'border-stone-300 hover:border-red-700'}`}>
+                    <span className="text-xs font-bold text-stone-800 flex items-center justify-between mb-2">
+                      <span>الصورة الشخصية</span>
+                      {isFieldReq('personalPhotoUrl') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
+                    </span>
                     {appForm.personalPhotoUrl ? (
                       <div className="space-y-2">
                         <img src={appForm.personalPhotoUrl} alt="شخصية" className="w-20 h-20 object-cover rounded-xl mx-auto shadow-xs" />
@@ -3099,8 +3373,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   {/* ID Front */}
-                  <div className="border border-stone-300 rounded-2xl p-4 text-center hover:border-red-700 transition-colors">
-                    <span className="text-xs font-bold text-stone-800 block mb-2">بطاقة الرقم القومي (الوجه)</span>
+                  <div className={`border rounded-2xl p-4 text-center transition-colors ${isFieldReq('nationalIdFrontUrl') && !appForm.nationalIdFrontUrl ? 'border-amber-300 bg-amber-50/20' : 'border-stone-300 hover:border-red-700'}`}>
+                    <span className="text-xs font-bold text-stone-800 flex items-center justify-between mb-2">
+                      <span>بطاقة الرقم القومي (الوجه)</span>
+                      {isFieldReq('nationalIdFrontUrl') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
+                    </span>
                     {appForm.nationalIdFrontUrl ? (
                       <div className="space-y-2">
                         <img src={appForm.nationalIdFrontUrl} alt="وجه البطاقة" className="w-28 h-16 object-cover rounded-lg mx-auto shadow-xs" />
@@ -3127,8 +3408,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   {/* ID Back */}
-                  <div className="border border-stone-300 rounded-2xl p-4 text-center hover:border-red-700 transition-colors">
-                    <span className="text-xs font-bold text-stone-800 block mb-2">بطاقة الرقم القومي (الظهر)</span>
+                  <div className={`border rounded-2xl p-4 text-center transition-colors ${isFieldReq('nationalIdBackUrl') && !appForm.nationalIdBackUrl ? 'border-amber-300 bg-amber-50/20' : 'border-stone-300 hover:border-red-700'}`}>
+                    <span className="text-xs font-bold text-stone-800 flex items-center justify-between mb-2">
+                      <span>بطاقة الرقم القومي (الظهر)</span>
+                      {isFieldReq('nationalIdBackUrl') ? (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                      ) : (
+                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                      )}
+                    </span>
                     {appForm.nationalIdBackUrl ? (
                       <div className="space-y-2">
                         <img src={appForm.nationalIdBackUrl} alt="ظهر البطاقة" className="w-28 h-16 object-cover rounded-lg mx-auto shadow-xs" />

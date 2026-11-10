@@ -21,7 +21,6 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import { ImageFieldWithPicker } from './ImageFieldWithPicker';
 import { MultiImageGalleryField } from './MultiImageGalleryField';
-import { VideosRepeaterField } from './VideosRepeaterField';
 import { MediaPickerModal } from './MediaPickerModal';
 import {
   Shield,
@@ -53,6 +52,9 @@ import {
   ArrowRight,
   ExternalLink,
   ChevronLeft,
+  ChevronUp,
+  ChevronDown,
+  Film,
   ArrowLeftRight,
   Printer,
   Key,
@@ -186,46 +188,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [showMediaPickerModal, setShowMediaPickerModal] = useState(false);
   const [newSecVideoTitle, setNewSecVideoTitle] = useState('');
   const [newSecVideoUrl, setNewSecVideoUrl] = useState('');
-
-  // Universal Save feedback toast
-  const [universalSaveToast, setUniversalSaveToast] = useState<string | null>(null);
-  const [saveLoading, setSaveLoading] = useState(false);
-
-  // Reusable Save Footer for every admin section ("وضيف فى كل قسم فى الإدارة فى اخر الصفحة كلمة حفظ التغييرات")
-  const renderSectionSaveFooter = (sectionName: string, onSaveAction?: () => Promise<void> | void) => (
-    <div className="mt-8 pt-5 border-t-2 border-stone-200 bg-gradient-to-r from-stone-50 to-amber-50/40 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xs">
-      <div className="flex items-center gap-2 text-stone-700 text-xs font-semibold">
-        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-        <span>حفظ كافة التغييرات والإضافات في قسم ({sectionName}) وتثبيتها فوراً بالخادم وقاعدة البيانات.</span>
-      </div>
-      <button
-        type="button"
-        disabled={saveLoading}
-        onClick={async () => {
-          setSaveLoading(true);
-          try {
-            if (onSaveAction) {
-              await onSaveAction();
-            } else if (settings) {
-              await api.updateSettings(settings);
-            }
-            await loadAdminData();
-            onRefreshPublicData();
-            setUniversalSaveToast(`تم حفظ جميع التغييرات في قسم «${sectionName}» بنجاح`);
-            setTimeout(() => setUniversalSaveToast(null), 3500);
-          } catch (e: any) {
-            alert('حدث خطأ أثناء الحفظ: ' + (e?.message || 'يرجى المحاولة ثانية'));
-          } finally {
-            setSaveLoading(false);
-          }
-        }}
-        className="w-full sm:w-auto bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-black text-xs px-6 py-2.5 rounded-xl shadow-md transition-all hover:scale-102 flex items-center justify-center gap-2 cursor-pointer"
-      >
-        <Save className="w-4 h-4 text-amber-300" />
-        <span>حفظ التغييرات</span>
-      </button>
-    </div>
-  );
+  const [heroSlidePickerIdx, setHeroSlidePickerIdx] = useState<number | null>(null);
 
   // Handle new media created via picker or upload
   const handleMediaCreated = (newMedia: MediaItem) => {
@@ -919,7 +882,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {renderSectionSaveFooter('قيادات الحزب')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد قيادات الحزب</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وتحديث كافة تعديلات قيادات الحزب في الموقع فوراً
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingPartyLeader({ level: 'national', isVisible: true, sortOrder: partyLeaders.length + 1 });
+                        setShowPartyLeaderModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة قيادة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة بيانات قيادات الحزب بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ القيادات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1014,7 +1019,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {renderSectionSaveFooter('قيادات أمانة أكتوبر')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد قيادات أمانة أكتوبر</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وتحديث قيادات أمانة قسم ثالث أكتوبر في المنصة فوراً
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSecLeader({ isVisible: true, sortOrder: secretariatLeaders.length + 1 });
+                        setShowSecLeaderModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة قيادة بالأمانة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد قيادات أمانة قسم ثالث أكتوبر بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ القيادات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1296,8 +1343,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           await api.saveAllSecretariats(secretariats);
                           await loadAdminData();
                           onRefreshPublicData();
-                          setUniversalSaveToast('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح في قاعدة البيانات');
-                          setTimeout(() => setUniversalSaveToast(null), 3500);
+                          alert('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح!');
                         } catch (err: any) {
                           alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
                         }
@@ -1305,7 +1351,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
                       <Save className="w-5 h-5 text-amber-300" />
-                      <span>حفظ التغييرات</span>
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -1466,7 +1512,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {renderSectionSaveFooter('تشكيلات الأمانات وهيئات المكاتب')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد أعضاء وهيئات المكاتب</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وتحديث هيئات المكاتب وتكليفات الأعضاء بالأمانات
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSecMember({
+                          secretariatId: secretariats[0]?.id || '',
+                          role: 'member',
+                          joinDate: new Date().toISOString().split('T')[0]
+                        });
+                        setShowMemberAssignmentModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>تعيين كادر</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة تكليفات وأعضاء الأمانات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الأعضاء');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1674,6 +1766,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </table>
                   </div>
                 )}
+
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد مراجعة طلبات الانضمام</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد مراجعة الطلبات والقرارات الصادرة وحفظ التغييرات
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد سجل طلبات الانضمام بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الطلبات');
+                        }
+                      }}
+                      className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1819,6 +1943,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </table>
                   </div>
                 )}
+
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد السجل المركزي للأعضاء والتكليفات</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وتحديث سجل الأعضاء والتكليفات التنظيمية النشطة والمنتهية
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد السجل المركزي للأعضاء بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ سجل الأعضاء');
+                        }
+                      }}
+                      className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1886,7 +2042,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {renderSectionSaveFooter('المبادرات المجتمعية')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد المبادرات الميدانية والمجتمعية</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ كافة التعديلات والتحديثات للمبادرات التنموية فوراً
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingInitiative({ status: 'active', isVisible: true, goals: [], activities: [] });
+                        setShowInitiativeModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة مبادرة جديدة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة المبادرات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ المبادرات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1920,7 +2118,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       <div className="flex items-center gap-4">
                         <img src={item.coverImage || settings?.officialLogo} alt="" className="w-16 h-16 object-cover rounded-xl bg-stone-100 shrink-0" />
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.isUrgent && (
+                              <span className="bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded flex items-center gap-1 animate-pulse shadow-xs">
+                                <span>⚡ عاجل</span>
+                              </span>
+                            )}
                             {item.isFeatured && <span className="bg-amber-100 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded">مميز</span>}
                             {item.isDraft && <span className="bg-stone-200 text-stone-700 text-[10px] font-bold px-1.5 py-0.5 rounded">مسودة</span>}
                             <span className="text-[11px] text-stone-400 font-mono">{item.publishDate}</span>
@@ -1930,6 +2133,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
+                        {/* Quick Toggle Urgent */}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const newUrgent = !item.isUrgent;
+                            await api.updateNews(item.id, { ...item, isUrgent: newUrgent });
+                            loadAdminData();
+                            onRefreshPublicData();
+                          }}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors border ${
+                            item.isUrgent
+                              ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                              : 'bg-stone-100 text-stone-600 border-stone-200 hover:bg-stone-200'
+                          }`}
+                          title={item.isUrgent ? 'إلغاء وسم عاجل' : 'تحديد كخبر عاجل'}
+                        >
+                          {item.isUrgent ? '⚡ إلغاء العاجل' : '⚡ تعيين كعاجل'}
+                        </button>
+
                         <button
                           onClick={() => {
                             setEditingNews(item);
@@ -1956,7 +2178,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {renderSectionSaveFooter('الأخبار والبيانات الصحفية')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد نشر الأخبار والبيانات الرسمية</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد ونشر كافة التعديلات والتحديثات الإخبارية على المنصة فوراً
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingNews({ publishDate: new Date().toISOString().split('T')[0], isFeatured: false, isDraft: false, isUrgent: false });
+                        setShowNewsModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة خبر جديد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة الأخبار والبيانات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الأخبار');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2025,7 +2289,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {renderSectionSaveFooter('الفعاليات والأنشطة')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد الأجندة والفعاليات الحزبية</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ جدول الأنشطة والفعاليات الميدانية على الموقع
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingEvent({ status: 'upcoming', isVisible: true, dateTime: new Date().toISOString().substring(0, 16) });
+                        setShowEventModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة فعالية جديدة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة الفعاليات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الفعاليات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2098,7 +2404,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {renderSectionSaveFooter('معرض الصور والفيديوهات')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد وسائط ومعارض الحزب</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ كافة الصور والفيديوهات والتصنيفات في المعرض العام
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingMedia({ type: 'photo', isVisible: true, albumName: 'عام' });
+                        setShowMediaModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة وسيط جديد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة وسائط المعرض بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ المعرض');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2174,12 +2522,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     />
                   </div>
 
-                  <button
-                    type="submit"
-                    className="bg-red-700 hover:bg-red-800 text-white font-bold px-6 py-2.5 rounded-xl text-xs cursor-pointer"
-                  >
-                    حفظ إعدادات البث
-                  </button>
+                  {/* Bottom Save & Actions Bar */}
+                  <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-center sm:text-right">
+                      <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                        <Save className="w-4 h-4" />
+                        <span>تأكيد واعتماد مشغل البث المباشر</span>
+                      </h4>
+                      <p className="text-[11px] text-stone-300 mt-0.5">
+                        اضغط حفظ لتأكيد تفعيل البث أو إيقافه وتحديث رابط التضمين على الموقع فوراً
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                      <button
+                        type="submit"
+                        className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                      >
+                        <Save className="w-5 h-5 text-amber-300" />
+                        <span>حفظ</span>
+                      </button>
+                    </div>
+                  </div>
                 </form>
               </div>
             )}
@@ -2302,7 +2666,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   )}
                 </div>
 
-                {renderSectionSaveFooter('صفحات الموقع والتعريف')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد محتوى الصفحات الثابتة (CMS)</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ ونشر كافة تعديلات الصفحات الثابتة فوراً على الموقع
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingPage({
+                          title: '',
+                          slug: '',
+                          subtitle: '',
+                          content: '',
+                          coverImage: '',
+                          galleryImages: [],
+                          metaDescription: '',
+                          isPublished: true
+                        });
+                        setShowPageModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إنشاء صفحة جديدة</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          onRefreshPublicData();
+                          alert('تم حفظ واعتماد كافة الصفحات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الصفحات');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2418,7 +2833,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {renderSectionSaveFooter('الأدوار والصلاحيات')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد الأدوار والصلاحيات (RBAC)</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ مصفوفة الصلاحيات والأدوار الإدارية المخصصة
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingRole({
+                          name: '',
+                          description: '',
+                          isSystem: false,
+                          permissions: ['news', 'events']
+                        });
+                        setShowRoleModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إنشاء دور إداري جديد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          alert('تم حفظ واعتماد كافة الأدوار والصلاحيات بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ الأدوار');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2507,7 +2968,54 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   })}
                 </div>
 
-                {renderSectionSaveFooter('المشرفون وحسابات الإدارة')}
+                {/* Bottom Save & Actions Bar */}
+                <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="text-center sm:text-right">
+                    <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد حسابات المشرفين</span>
+                    </h4>
+                    <p className="text-[11px] text-stone-300 mt-0.5">
+                      اضغط حفظ لتأكيد وحفظ بيانات حسابات المشرفين وصلاحياتهم الإدارية
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingUser({
+                          role: 'sub_admin',
+                          roleId: 'role-content-manager',
+                          adminScope: 'general',
+                          permissions: ['news', 'pages'],
+                          isActive: true
+                        });
+                        setShowUserModal(true);
+                      }}
+                      className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-amber-400" />
+                      <span>إضافة مشرف جديد</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await loadAdminData();
+                          alert('تم حفظ واعتماد كافة حسابات المشرفين بنجاح!');
+                        } catch (err: any) {
+                          alert(err.message || 'حدث خطأ أثناء حفظ المشرفين');
+                        }
+                      }}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                    >
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2677,49 +3185,93 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </div>
 
                       {/* Multi-slide automatic flipper manager */}
-                      <div className="sm:col-span-2 border-t border-stone-800 pt-4 mt-1 space-y-3">
-                        <div className="flex items-center justify-between">
+                      <div className="sm:col-span-2 border-t border-stone-800 pt-5 mt-2 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-stone-900/90 p-4 rounded-2xl border border-stone-800">
                           <div>
-                            <h4 className="text-xs font-bold text-amber-300">
-                              شرائح وفيديوهات البانر (يقلب تلقائياً كل 4.5 ثوانٍ)
+                            <h4 className="text-sm font-black text-amber-400 flex items-center gap-2">
+                              <Film className="w-4 h-4 text-amber-400" />
+                              <span>إدارة شرائح البانر الرئيسي (صور وفيديوهات تقلب تلقائياً)</span>
                             </h4>
-                            <p className="text-[10px] text-stone-400">
-                              يمكنك إضافة عدة فيديوهات أو صور لتقلب تلقائياً في أعلى الموقع بدون أي عناصر تعيق المشاهدة.
+                            <p className="text-[11px] text-stone-300 mt-1">
+                              يمكنك إضافة عدة صور وفيديوهات لتعرض وراء بعضها بشكل تلقائي وسلس في أعلى الموقع، مع إمكانية ترتيبها وحذفها واختيارها من المعرض أو رفعها مباشرة.
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newSlide = {
-                                id: `slide-${Date.now()}`,
-                                type: 'image' as const,
-                                url: '',
-                                title: '',
-                                caption: ''
-                              };
-                              setSettings({
-                                ...settings,
-                                heroSlides: [...(settings.heroSlides || []), newSlide]
-                              });
-                            }}
-                            className="text-xs bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>إضافة شريحة / فيديو</span>
-                          </button>
+                          
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <label className="text-xs bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs">
+                              <Upload className="w-3.5 h-3.5 text-amber-400" />
+                              <span>رفع وسيط من الجهاز</span>
+                              <input
+                                type="file"
+                                accept="image/*,video/*"
+                                className="hidden"
+                                onChange={e => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  if (file.size > 25 * 1024 * 1024) {
+                                    alert('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 25 ميجابايت');
+                                    return;
+                                  }
+                                  const isVid = file.type.startsWith('video/');
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    const newSlide = {
+                                      id: `slide-${Date.now()}`,
+                                      type: (isVid ? 'video' : 'image') as 'video' | 'image',
+                                      url: reader.result as string,
+                                      title: file.name.replace(/\.[^/.]+$/, ''),
+                                      caption: 'أمانة قسم ثالث أكتوبر'
+                                    };
+                                    setSettings({
+                                      ...settings,
+                                      heroSlides: [...(settings.heroSlides || []), newSlide]
+                                    });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }}
+                              />
+                            </label>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newSlide = {
+                                  id: `slide-${Date.now()}`,
+                                  type: 'image' as const,
+                                  url: '',
+                                  title: '',
+                                  caption: ''
+                                };
+                                const updated = [...(settings.heroSlides || []), newSlide];
+                                setSettings({
+                                  ...settings,
+                                  heroSlides: updated
+                                });
+                                // Automatically open media picker for newly added slide
+                                setHeroSlidePickerIdx(updated.length - 1);
+                              }}
+                              className="text-xs bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-md active:scale-95"
+                            >
+                              <Plus className="w-4 h-4 text-stone-950" />
+                              <span>إضافة شريحة جديدة</span>
+                            </button>
+                          </div>
                         </div>
 
-                        {settings.heroSlides && settings.heroSlides.length > 0 && (
+                        {settings.heroSlides && settings.heroSlides.length > 0 ? (
                           <div className="space-y-3">
                             {settings.heroSlides.map((slide, sIdx) => (
                               <div
                                 key={slide.id || sIdx}
-                                className="p-3 bg-stone-950 border border-stone-800 rounded-xl space-y-2 text-xs"
+                                className="p-4 bg-stone-950 border border-stone-800 rounded-2xl space-y-3 text-xs shadow-md hover:border-amber-500/40 transition-colors"
                               >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-300 flex items-center justify-center font-bold text-[10px]">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-800/80 pb-2.5">
+                                  <div className="flex items-center gap-2.5">
+                                    <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-300 flex items-center justify-center font-black text-xs border border-amber-500/30">
                                       {sIdx + 1}
+                                    </span>
+                                    <span className="font-bold text-stone-200">
+                                      {slide.title || `شريحة ${sIdx + 1}`}
                                     </span>
                                     <select
                                       value={slide.type}
@@ -2728,52 +3280,188 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                         updated[sIdx] = { ...slide, type: e.target.value as 'video' | 'image' };
                                         setSettings({ ...settings, heroSlides: updated });
                                       }}
-                                      className="bg-stone-900 border border-stone-700 text-white rounded-lg px-2 py-1 text-xs"
+                                      className="bg-stone-900 border border-stone-700 text-amber-300 rounded-lg px-2.5 py-1 text-xs font-bold"
                                     >
                                       <option value="image">صورة (Image)</option>
                                       <option value="video">فيديو (Video MP4)</option>
                                     </select>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const updated = (settings.heroSlides || []).filter((_, i) => i !== sIdx);
-                                      setSettings({ ...settings, heroSlides: updated });
-                                    }}
-                                    className="text-red-400 hover:text-red-300 p-1"
-                                    title="حذف الشريحة"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
+
+                                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                                    {/* Reorder Up */}
+                                    <button
+                                      type="button"
+                                      disabled={sIdx === 0}
+                                      onClick={() => {
+                                        if (sIdx <= 0 || !settings.heroSlides) return;
+                                        const updated = [...settings.heroSlides];
+                                        const temp = updated[sIdx];
+                                        updated[sIdx] = updated[sIdx - 1];
+                                        updated[sIdx - 1] = temp;
+                                        setSettings({ ...settings, heroSlides: updated });
+                                      }}
+                                      className={`p-1.5 rounded-lg border border-stone-700 text-stone-300 hover:text-white hover:bg-stone-800 cursor-pointer ${sIdx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                      title="تحريك لأعلى"
+                                    >
+                                      <ChevronUp className="w-4 h-4" />
+                                    </button>
+
+                                    {/* Reorder Down */}
+                                    <button
+                                      type="button"
+                                      disabled={sIdx === (settings.heroSlides?.length || 0) - 1}
+                                      onClick={() => {
+                                        if (!settings.heroSlides || sIdx >= settings.heroSlides.length - 1) return;
+                                        const updated = [...settings.heroSlides];
+                                        const temp = updated[sIdx];
+                                        updated[sIdx] = updated[sIdx + 1];
+                                        updated[sIdx + 1] = temp;
+                                        setSettings({ ...settings, heroSlides: updated });
+                                      }}
+                                      className={`p-1.5 rounded-lg border border-stone-700 text-stone-300 hover:text-white hover:bg-stone-800 cursor-pointer ${sIdx === (settings.heroSlides?.length || 0) - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                      title="تحريك لأسفل"
+                                    >
+                                      <ChevronDown className="w-4 h-4" />
+                                    </button>
+
+                                    {/* Delete Slide */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm(`هل أنت متأكد من حذف هذه الشريحة؟`)) {
+                                          const updated = (settings.heroSlides || []).filter((_, i) => i !== sIdx);
+                                          setSettings({ ...settings, heroSlides: updated });
+                                        }
+                                      }}
+                                      className="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1.5 rounded-lg border border-red-900/40 cursor-pointer transition-colors"
+                                      title="حذف الشريحة"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                  <input
-                                    type="text"
-                                    placeholder="رابط الصورة أو ملف الفيديو"
-                                    value={slide.url}
-                                    onChange={e => {
-                                      const updated = [...(settings.heroSlides || [])];
-                                      updated[sIdx] = { ...slide, url: e.target.value };
-                                      setSettings({ ...settings, heroSlides: updated });
-                                    }}
-                                    className="sm:col-span-2 border border-stone-700 bg-stone-900 text-white rounded-lg px-2.5 py-1.5 font-mono text-xs"
-                                    dir="ltr"
-                                  />
-                                  <input
-                                    type="text"
-                                    placeholder="عنوان الشريحة (اختياري)"
-                                    value={slide.title || ''}
-                                    onChange={e => {
-                                      const updated = [...(settings.heroSlides || [])];
-                                      updated[sIdx] = { ...slide, title: e.target.value };
-                                      setSettings({ ...settings, heroSlides: updated });
-                                    }}
-                                    className="border border-stone-700 bg-stone-900 text-white rounded-lg px-2.5 py-1.5 text-xs"
-                                  />
+                                {/* Slide Content & Preview */}
+                                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
+                                  {/* Thumbnail Preview */}
+                                  <div className="sm:col-span-3">
+                                    <div className="aspect-video w-full rounded-xl bg-stone-900 border border-stone-800 overflow-hidden relative flex items-center justify-center">
+                                      {slide.url ? (
+                                        slide.type === 'video' ? (
+                                          <div className="w-full h-full bg-black flex flex-col items-center justify-center text-amber-400 gap-1 p-2 text-center">
+                                            <Video className="w-6 h-6 text-red-500" />
+                                            <span className="text-[10px] font-mono text-stone-300 line-clamp-1">مقطع فيديو</span>
+                                          </div>
+                                        ) : (
+                                          <img
+                                            src={slide.url}
+                                            alt=""
+                                            className="w-full h-full object-cover"
+                                            onError={e => {
+                                              (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg';
+                                            }}
+                                          />
+                                        )
+                                      ) : (
+                                        <div className="text-stone-600 flex flex-col items-center justify-center p-2 text-center">
+                                          <ImageIcon className="w-6 h-6 mb-1 opacity-50" />
+                                          <span className="text-[10px]">لا يوجد وسيط</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Inputs and actions */}
+                                  <div className="sm:col-span-9 space-y-2">
+                                    <div className="flex flex-col sm:flex-row gap-2">
+                                      <input
+                                        type="text"
+                                        placeholder="رابط الصورة أو مسار الفيديو (URL)"
+                                        value={slide.url}
+                                        onChange={e => {
+                                          const updated = [...(settings.heroSlides || [])];
+                                          updated[sIdx] = { ...slide, url: e.target.value };
+                                          setSettings({ ...settings, heroSlides: updated });
+                                        }}
+                                        className="flex-1 border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-2 font-mono text-xs focus:border-amber-500 focus:outline-none"
+                                        dir="ltr"
+                                      />
+
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => setHeroSlidePickerIdx(sIdx)}
+                                          className="bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-colors"
+                                        >
+                                          <ImageIcon className="w-3.5 h-3.5" />
+                                          <span>من المعرض</span>
+                                        </button>
+
+                                        <label className="bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-colors">
+                                          <Upload className="w-3.5 h-3.5" />
+                                          <span>رفع</span>
+                                          <input
+                                            type="file"
+                                            accept="image/*,video/*"
+                                            className="hidden"
+                                            onChange={e => {
+                                              const file = e.target.files?.[0];
+                                              if (!file) return;
+                                              if (file.size > 25 * 1024 * 1024) {
+                                                alert('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 25 ميجابايت');
+                                                return;
+                                              }
+                                              const isVid = file.type.startsWith('video/');
+                                              const reader = new FileReader();
+                                              reader.onload = () => {
+                                                const updated = [...(settings.heroSlides || [])];
+                                                updated[sIdx] = {
+                                                  ...slide,
+                                                  url: reader.result as string,
+                                                  type: isVid ? 'video' : 'image',
+                                                  title: slide.title || file.name.replace(/\.[^/.]+$/, '')
+                                                };
+                                                setSettings({ ...settings, heroSlides: updated });
+                                              };
+                                              reader.readAsDataURL(file);
+                                            }}
+                                          />
+                                        </label>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                      <input
+                                        type="text"
+                                        placeholder="عنوان الشريحة الرئيسي (يظهر فوق الوسيط)"
+                                        value={slide.title || ''}
+                                        onChange={e => {
+                                          const updated = [...(settings.heroSlides || [])];
+                                          updated[sIdx] = { ...slide, title: e.target.value };
+                                          setSettings({ ...settings, heroSlides: updated });
+                                        }}
+                                        className="border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-1.5 text-xs focus:border-amber-500 focus:outline-none"
+                                      />
+                                      <input
+                                        type="text"
+                                        placeholder="وصف أو شارة الشريحة (اختياري)"
+                                        value={slide.caption || ''}
+                                        onChange={e => {
+                                          const updated = [...(settings.heroSlides || [])];
+                                          updated[sIdx] = { ...slide, caption: e.target.value };
+                                          setSettings({ ...settings, heroSlides: updated });
+                                        }}
+                                        className="border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-1.5 text-xs focus:border-amber-500 focus:outline-none"
+                                      />
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             ))}
+                          </div>
+                        ) : (
+                          <div className="p-6 text-center border border-dashed border-stone-800 rounded-2xl bg-stone-950/60 text-stone-400 text-xs">
+                            لا توجد شرائح مخصصة حالياً. اضغط على «إضافة شريحة جديدة» أو «رفع وسيط» لإضافة صور وفيديوهات للبانر.
                           </div>
                         )}
                       </div>
@@ -3640,14 +4328,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-stone-200">
-                    <button
-                      type="submit"
-                      className="bg-emerald-700 hover:bg-emerald-800 text-white font-black px-8 py-3 rounded-xl text-xs cursor-pointer shadow-md flex items-center gap-2"
-                    >
-                      <Save className="w-4 h-4 text-amber-300" />
-                      <span>حفظ التغييرات</span>
-                    </button>
+                  {/* Bottom Save & Actions Bar */}
+                  <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="text-center sm:text-right">
+                      <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
+                        <Save className="w-4 h-4" />
+                        <span>تأكيد واعتماد هوية وإعدادات المنصة</span>
+                      </h4>
+                      <p className="text-[11px] text-stone-300 mt-0.5">
+                        اضغط حفظ لتأكيد وحفظ كافة بيانات الهوية، البانر، أرقام التواصل، والروابط على الفور
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                      <button
+                        type="submit"
+                        className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
+                      >
+                        <Save className="w-5 h-5 text-amber-300" />
+                        <span>حفظ</span>
+                      </button>
+                    </div>
                   </div>
                 </form>
               </div>
@@ -4969,6 +5670,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
         </div>
       )}
 
+      {/* HERO SLIDE MEDIA PICKER MODAL */}
+      {heroSlidePickerIdx !== null && settings && (
+        <MediaPickerModal
+          isOpen={true}
+          onClose={() => setHeroSlidePickerIdx(null)}
+          onSelect={(url) => {
+            const updated = [...(settings.heroSlides || [])];
+            if (updated[heroSlidePickerIdx]) {
+              updated[heroSlidePickerIdx] = {
+                ...updated[heroSlidePickerIdx],
+                url: url,
+                type: 'image'
+              };
+              setSettings({ ...settings, heroSlides: updated });
+            }
+            setHeroSlidePickerIdx(null);
+          }}
+          media={media}
+          onMediaCreated={handleMediaCreated}
+          title="اختيار وسيط لشريحة البانر الرئيسي من المعرض"
+        />
+      )}
+
       {/* MEDIA PICKER MODAL (Choose from general album into secretariat) */}
       {showMediaPickerModal && editingSecretariat && (
         <div className="fixed inset-0 z-70 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
@@ -5114,48 +5838,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              {/* Leader & Secretariat Responsible */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">القائم على المبادرة / من أطلقها</label>
-                  <input
-                    type="text"
-                    placeholder="اسم المسؤول أو العضو..."
-                    value={editingInitiative.leaderName || ''}
-                    onChange={e => setEditingInitiative({ ...editingInitiative, leaderName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة القائم عليها</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: أمين التنظيم، منسق المبادرة..."
-                    value={editingInitiative.leaderRole || ''}
-                    onChange={e => setEditingInitiative({ ...editingInitiative, leaderRole: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الأمانة المسؤولة</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: أمانة العلاقات العامة..."
-                    list="secretariats-list-init"
-                    value={editingInitiative.secretariatName || ''}
-                    onChange={e => setEditingInitiative({ ...editingInitiative, secretariatName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                  <datalist id="secretariats-list-init">
-                    {secretariats.map(s => (
-                      <option key={s.id} value={s.name} />
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">أهداف المبادرة (كل هدف في سطر)</label>
                 <textarea
@@ -5167,7 +5849,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <ImageFieldWithPicker
-                label="صورة أو غلاف المبادرة الرئيسي"
+                label="صورة أو غلاف المبادرة"
                 value={editingInitiative.coverUrl || ''}
                 onChange={url => setEditingInitiative({ ...editingInitiative, coverUrl: url })}
                 media={media}
@@ -5175,22 +5857,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 shape="banner"
                 helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة"
                 pickerTitle={`اختيار صورة لمبادرة: ${editingInitiative.title || ''}`}
-              />
-
-              <MultiImageGalleryField
-                label="ألبوم صور المبادرة (صور متعددة)"
-                images={editingInitiative.galleryImages || []}
-                onChange={imgs => setEditingInitiative({ ...editingInitiative, galleryImages: imgs })}
-                media={media}
-                onMediaCreated={handleMediaCreated}
-                pickerTitle={`ألبوم صور مبادرة: ${editingInitiative.title || ''}`}
-              />
-
-              <VideosRepeaterField
-                label="مقاطع الفيديو التوثيقية للمبادرة"
-                videos={editingInitiative.videos || []}
-                onChange={vids => setEditingInitiative({ ...editingInitiative, videos: vids })}
-                helpText="أضف أكثر من مقطع فيديو لأنشطة وفعاليات المبادرة"
               />
             </div>
 
@@ -5302,66 +5968,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              {/* Publisher & Secretariat Responsible ("مين اللي منزل الخبر وامانته ايه") */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">ناشر الخبر (المحرر)</label>
-                  <input
-                    type="text"
-                    placeholder="اسم من قام بنشر الخبر..."
-                    value={editingNews.publisherName || ''}
-                    onChange={e => setEditingNews({ ...editingNews, publisherName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة الناشر</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: مسؤول المركز الإعلامي..."
-                    value={editingNews.publisherRole || ''}
-                    onChange={e => setEditingNews({ ...editingNews, publisherRole: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">أمانة الناشر</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: أمانة الإعلام، أمانة الشباب..."
-                    list="secretariats-list-news"
-                    value={editingNews.publisherSecretariat || ''}
-                    onChange={e => setEditingNews({ ...editingNews, publisherSecretariat: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                  <datalist id="secretariats-list-news">
-                    {secretariats.map(s => (
-                      <option key={s.id} value={s.name} />
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-
-              <VideosRepeaterField
-                label="مقاطع الفيديو المرفقة بالخبر"
-                videos={editingNews.videos || []}
-                onChange={vids => setEditingNews({ ...editingNews, videos: vids })}
-                helpText="أضف أكثر من مقطع فيديو متعلق بالخبر (YouTube أو روابط مباشرة)"
-              />
-
               <div className="flex flex-wrap items-center gap-4 pt-2">
-                <label className="flex items-center gap-2 cursor-pointer bg-red-50 border border-red-300 px-3 py-1.5 rounded-xl">
+                <label className="flex items-center gap-2 cursor-pointer bg-red-50 border border-red-200 px-3 py-1.5 rounded-xl">
                   <input
                     type="checkbox"
-                    checked={editingNews.isBreaking || false}
-                    onChange={e => setEditingNews({ ...editingNews, isBreaking: e.target.checked })}
-                    className="w-4 h-4 text-red-700 accent-red-700"
+                    checked={editingNews.isUrgent || false}
+                    onChange={e => setEditingNews({ ...editingNews, isUrgent: e.target.checked })}
+                    className="w-4 h-4 text-red-600 focus:ring-red-500 rounded"
                   />
-                  <span className="text-xs font-black text-red-800 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
-                    <span>🔥 خبر عاجل (عاجل)</span>
+                  <span className="text-xs font-black text-red-700 flex items-center gap-1">
+                    <span>⚡ خبر عاجل (عاجل)</span>
                   </span>
                 </label>
 
@@ -5370,7 +5986,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     type="checkbox"
                     checked={editingNews.isFeatured || false}
                     onChange={e => setEditingNews({ ...editingNews, isFeatured: e.target.checked })}
-                    className="w-4 h-4 text-red-700"
+                    className="w-4 h-4 text-amber-600"
                   />
                   <span className="text-xs font-bold text-stone-800">خبر مميز</span>
                 </label>
@@ -5462,55 +6078,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الجهة المنظمة العامة</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">الجهة المنظمة</label>
                   <input
                     type="text"
                     value={editingEvent.organizer || ''}
                     onChange={e => setEditingEvent({ ...editingEvent, organizer: e.target.value })}
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                   />
-                </div>
-              </div>
-
-              {/* Responsible Organizer & Secretariat ("والفعاليات مين اللي عامل الفاعليه وامانه ايه") */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-stone-50 border border-stone-200 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">اسم من أقام الفعالية</label>
-                  <input
-                    type="text"
-                    placeholder="اسم المسؤول أو المنظم..."
-                    value={editingEvent.organizerName || ''}
-                    onChange={e => setEditingEvent({ ...editingEvent, organizerName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">صفة المنظم</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: أمين الشباب، منسق الفعالية..."
-                    value={editingEvent.organizerRole || ''}
-                    onChange={e => setEditingEvent({ ...editingEvent, organizerRole: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">الأمانة المنظمة</label>
-                  <input
-                    type="text"
-                    placeholder="مثل: أمانة العمل الجماهيري..."
-                    list="secretariats-list-event"
-                    value={editingEvent.organizerSecretariat || ''}
-                    onChange={e => setEditingEvent({ ...editingEvent, organizerSecretariat: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
-                  />
-                  <datalist id="secretariats-list-event">
-                    {secretariats.map(s => (
-                      <option key={s.id} value={s.name} />
-                    ))}
-                  </datalist>
                 </div>
               </div>
 
@@ -5535,19 +6109,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <MultiImageGalleryField
-                label="ألبوم صور وتغطية الفعالية (صور متعددة)"
+                label="ألبوم صور وتغطية الفعالية"
                 images={editingEvent.images || []}
                 onChange={imgs => setEditingEvent({ ...editingEvent, images: imgs })}
                 media={media}
                 onMediaCreated={handleMediaCreated}
                 pickerTitle={`ألبوم صور وتغطية فعالية: ${editingEvent.title || ''}`}
-              />
-
-              <VideosRepeaterField
-                label="مقاطع الفيديو المرفقة بالفعالية"
-                videos={editingEvent.videos || []}
-                onChange={vids => setEditingEvent({ ...editingEvent, videos: vids })}
-                helpText="أضف أكثر من مقطع فيديو لتوثيق الفعالية (YouTube أو MP4)"
               />
             </div>
 

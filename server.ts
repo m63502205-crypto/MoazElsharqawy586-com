@@ -151,6 +151,106 @@ ${xmlUrls}
   res.type('application/xml').send(sitemapXml);
 });
 
+// Helper to serve preview HTML with custom Open Graph & Twitter Card tags for shared links (WhatsApp, Facebook, Twitter, Telegram)
+function renderOgHtml(options: {
+  title: string;
+  description: string;
+  imageUrl?: string;
+  url: string;
+  redirectTo?: string;
+}): string {
+  const indexPath = path.resolve(process.cwd(), 'index.html');
+  let html = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf-8') : '<!doctype html><html><head></head><body></body></html>';
+
+  const cleanTitle = (options.title || '').replace(/"/g, '&quot;');
+  const cleanDesc = (options.description || '').replace(/"/g, '&quot;').replace(/\r?\n/g, ' ').slice(0, 200);
+  const cleanImage = options.imageUrl || 'https://ais-pre-5o6jzg5bcobr3p6xsmps5j-492594759043.europe-west2.run.app/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+  const cleanUrl = options.url;
+
+  // Replace Title
+  html = html.replace(/<title>.*?<\/title>/, `<title>${cleanTitle} | حزب الجبهة الوطنية</title>`);
+  // Replace Description
+  html = html.replace(/<meta name="description" content=".*?" \/>/, `<meta name="description" content="${cleanDesc}" />`);
+  // Replace OG tags
+  html = html.replace(/<meta property="og:title" content=".*?" \/>/, `<meta property="og:title" content="${cleanTitle} | حزب الجبهة الوطنية" />`);
+  html = html.replace(/<meta property="og:description" content=".*?" \/>/, `<meta property="og:description" content="${cleanDesc}" />`);
+  html = html.replace(/<meta property="og:url" content=".*?" \/>/, `<meta property="og:url" content="${cleanUrl}" />`);
+  html = html.replace(/<meta property="og:image" content=".*?" \/>/, `<meta property="og:image" content="${cleanImage}" />`);
+  html = html.replace(/<meta property="og:image:secure_url" content=".*?" \/>/, `<meta property="og:image:secure_url" content="${cleanImage}" />`);
+  // Replace Twitter tags
+  html = html.replace(/<meta name="twitter:title" content=".*?" \/>/, `<meta name="twitter:title" content="${cleanTitle}" />`);
+  html = html.replace(/<meta name="twitter:description" content=".*?" \/>/, `<meta name="twitter:description" content="${cleanDesc}" />`);
+  html = html.replace(/<meta name="twitter:image" content=".*?" \/>/, `<meta name="twitter:image" content="${cleanImage}" />`);
+
+  if (options.redirectTo) {
+    const redirectScript = `<script>
+      // Immediate redirect for human browsers to the SPA view
+      if (!navigator.userAgent.match(/bot|spider|facebookexternalhit|whatsapp|telegram|twitterbot|pinterest|slackbot/i)) {
+        window.location.replace('${options.redirectTo}');
+      }
+    </script>`;
+    html = html.replace('</head>', `${redirectScript}</head>`);
+  }
+
+  return html;
+}
+
+// Public Open Graph & Direct Landing Route for News Articles (WhatsApp & Facebook rich previews)
+app.get('/news/:id', (req: Request, res: Response) => {
+  const data = db.get();
+  const id = req.params.id;
+  const item = (data.news || []).find(n => n.id === id || (n as any).slug === id);
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.get('host') || 'localhost:3000';
+  const baseUrl = `${protocol}://${host}`;
+
+  if (!item) {
+    return res.redirect('/#news');
+  }
+
+  const imageUrl = item.coverImage?.startsWith('http')
+    ? item.coverImage
+    : (item.coverImage ? `${baseUrl}${item.coverImage.startsWith('/') ? '' : '/'}${item.coverImage}` : undefined);
+
+  const html = renderOgHtml({
+    title: item.title,
+    description: item.content || item.summary || 'خبر رسمي صادر عن حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+    imageUrl: imageUrl,
+    url: `${baseUrl}/news/${id}`,
+    redirectTo: `/#news?id=${encodeURIComponent(item.id)}`
+  });
+
+  res.type('text/html').send(html);
+});
+
+// Public Open Graph & Direct Landing Route for Events
+app.get('/events/:id', (req: Request, res: Response) => {
+  const data = db.get();
+  const id = req.params.id;
+  const item = (data.events || []).find(e => e.id === id || (e as any).slug === id);
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.get('host') || 'localhost:3000';
+  const baseUrl = `${protocol}://${host}`;
+
+  if (!item) {
+    return res.redirect('/#events');
+  }
+
+  const imageUrl = item.coverImage?.startsWith('http')
+    ? item.coverImage
+    : (item.coverImage ? `${baseUrl}${item.coverImage.startsWith('/') ? '' : '/'}${item.coverImage}` : undefined);
+
+  const html = renderOgHtml({
+    title: item.title,
+    description: item.description || 'فعالية حزبية رسمية – حزب الجبهة الوطنية',
+    imageUrl: imageUrl,
+    url: `${baseUrl}/events/${id}`,
+    redirectTo: `/#events?id=${encodeURIComponent(item.id)}`
+  });
+
+  res.type('text/html').send(html);
+});
+
 // 1. Get all public portal data
 app.get('/api/public/data', (_req: Request, res: Response) => {
   const data = db.get();
@@ -857,6 +957,7 @@ app.post('/api/admin/news', authenticateAdmin, requirePermission('news'), (req: 
     linkedSecretariatId: body.linkedSecretariatId || '',
     linkedInitiativeId: body.linkedInitiativeId || '',
     isFeatured: !!body.isFeatured,
+    isUrgent: !!body.isUrgent,
     isDraft: !!body.isDraft,
     createdAt: new Date().toISOString()
   };

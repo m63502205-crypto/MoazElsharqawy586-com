@@ -88,8 +88,8 @@ Sitemap: ${baseUrl}/sitemap.xml
 // Dynamic Sitemap.xml
 app.get('/sitemap.xml', (req: Request, res: Response) => {
   const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  const host = req.get('host') || 'localhost:3000';
-  const baseUrl = process.env.APP_URL || `${protocol}://${host}`;
+  const host = req.get('host') || 'algabhaalwataniya-oct3.rf.gd';
+  const baseUrl = process.env.APP_URL || (host.includes('localhost') ? `${protocol}://${host}` : 'https://algabhaalwataniya-oct3.rf.gd');
   const data = db.get();
 
   interface SitemapEntry {
@@ -108,8 +108,7 @@ app.get('/sitemap.xml', (req: Request, res: Response) => {
     { path: '#initiatives', changefreq: 'weekly', priority: '0.8' },
     { path: '#news', changefreq: 'daily', priority: '0.9' },
     { path: '#events', changefreq: 'weekly', priority: '0.8' },
-    { path: '#gallery', changefreq: 'weekly', priority: '0.7' },
-    { path: '#join', changefreq: 'monthly', priority: '0.9' },
+    { path: '#join', changefreq: 'monthly', priority: '0.95' },
     { path: '#contact', changefreq: 'monthly', priority: '0.8' }
   ];
 
@@ -164,7 +163,7 @@ function renderOgHtml(options: {
 
   const cleanTitle = (options.title || '').replace(/"/g, '&quot;');
   const cleanDesc = (options.description || '').replace(/"/g, '&quot;').replace(/\r?\n/g, ' ').slice(0, 200);
-  const cleanImage = options.imageUrl || 'https://ais-pre-5o6jzg5bcobr3p6xsmps5j-492594759043.europe-west2.run.app/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+  const cleanImage = options.imageUrl || 'https://algabhaalwataniya-oct3.rf.gd/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
   const cleanUrl = options.url;
 
   // Replace Title

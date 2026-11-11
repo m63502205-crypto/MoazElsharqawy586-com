@@ -122,7 +122,7 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
               {value.startsWith('data:video') ? 'فيديو مرفوع من الجهاز' : 'رابط خارجي'}
             </span>
           </div>
-          <div className="max-w-md mx-auto aspect-video rounded-xl overflow-hidden border border-stone-300 bg-black shadow-sm">
+          <div className="max-w-md mx-auto aspect-video rounded-2xl overflow-hidden border border-stone-300 bg-stone-900 shadow-md">
             <VideoPlayer url={value} className="w-full h-full" />
           </div>
         </div>

@@ -156,6 +156,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [settings, setSettings] = useState<SiteSettings | null>(null);
   const [gaTestStatus, setGaTestStatus] = useState<string | null>(null);
   const [copiedSiteUrl, setCopiedSiteUrl] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Modals & sub-state
   const [selectedApp, setSelectedApp] = useState<MembershipApplication | null>(null);

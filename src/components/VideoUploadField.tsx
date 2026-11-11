@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Video, Upload, X, Play, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Video, Upload, X, Play, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { VideoPlayer } from './VideoPlayer';
+import { api } from '../api';
 
 interface VideoUploadFieldProps {
   label: string;
@@ -20,7 +21,7 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -34,10 +35,20 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
     setIsUploading(true);
 
     const reader = new FileReader();
-    reader.onload = ev => {
+    reader.onload = async ev => {
       const dataUrl = ev.target?.result as string;
       if (dataUrl) {
-        onChange(dataUrl);
+        try {
+          const res = await api.uploadMedia(dataUrl, file.name);
+          if (res && res.url) {
+            onChange(res.url);
+          } else {
+            onChange(dataUrl);
+          }
+        } catch {
+          // If server upload fails, fallback to local dataUrl
+          onChange(dataUrl);
+        }
       }
       setIsUploading(false);
     };
@@ -46,7 +57,6 @@ export const VideoUploadField: React.FC<VideoUploadFieldProps> = ({
       setIsUploading(false);
     };
     reader.readAsDataURL(file);
-    // Reset input
     e.target.value = '';
   };
 

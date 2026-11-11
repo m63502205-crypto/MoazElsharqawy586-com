@@ -253,8 +253,10 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string;
+  heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
   heroPosterUrl?: string;
+  heroImages?: string[];
   heroSlides?: Array<{
     id: string;
     type: 'video' | 'image';

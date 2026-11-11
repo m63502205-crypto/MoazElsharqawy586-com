@@ -754,8 +754,8 @@ function getInitialDatabase(): AppDatabase {
         'العدالة الاجتماعية والتنمية المستدامة وتكافؤ الفرص لكافة المواطنين.',
         'بيت خبرة وطني يخدم مصلحة الوطن العليا ويجمع بين طاقات الشباب وخبرات الأجيال.'
       ],
-      locationUrl: 'https://maps.google.com/?q=29.980836,30.840788+(%D9%85%D9%82%D8%B1+%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+-+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1)',
-      mapEmbedUrl: 'https://maps.google.com/maps?q=29.980836,30.840788+(%D9%85%D9%82%D8%B1+%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+-+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1)&t=&z=17&ie=UTF8&iwloc=B&output=embed',
+      locationUrl: 'https://maps.app.goo.gl/iw7sGSbbb2K1g6yZ7?g_st=ac',
+      mapEmbedUrl: 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed',
       coordinates: '29.980836, 30.840788'
     }
   };

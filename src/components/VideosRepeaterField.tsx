@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Video, Plus, Trash2, ExternalLink, Play } from 'lucide-react';
+import { Video, Plus, Trash2, ExternalLink, Play, Upload } from 'lucide-react';
 
 export interface VideoEntry {
   title?: string;
@@ -17,10 +17,44 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
   label = 'مقاطع الفيديو المرفقة',
   videos = [],
   onChange,
-  helpText = 'يمكنك إضافة أكثر من فيديو (روابط يوتيوب أو روابط مباشرة MP4)'
+  helpText = 'يمكنك إضافة أكثر من فيديو (روابط يوتيوب أو روابط مباشرة MP4 أو رفع ملف فيديو مباشرة)'
 }) => {
   const [newUrl, setNewUrl] = useState('');
   const [newTitle, setNewTitle] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 45 * 1024 * 1024) {
+      alert('حجم الفيديو كبير، يرجى اختيار ملف أقل من 45 ميجابايت أو لصق رابط يوتيوب.');
+      return;
+    }
+
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const result = ev.target?.result as string;
+      if (result) {
+        onChange([
+          ...videos,
+          {
+            url: result,
+            title: newTitle.trim() || file.name.replace(/\.[^/.]+$/, "")
+          }
+        ]);
+        setNewTitle('');
+      }
+      setIsUploading(false);
+    };
+    reader.onerror = () => {
+      alert('تعذر قراءة ملف الفيديو');
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   const handleAdd = () => {
     if (!newUrl.trim()) return;
@@ -56,43 +90,60 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
         {helpText && <span className="text-[10px] text-stone-400">{helpText}</span>}
       </div>
 
-      {/* New Video Input Box */}
-      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-2.5 bg-white border border-stone-200 rounded-xl">
-        <div className="sm:col-span-5">
-          <input
-            type="text"
-            placeholder="عنوان الفيديو (مثال: كلمة الأمين العام)..."
-            value={newTitle}
-            onChange={e => setNewTitle(e.target.value)}
-            className="w-full border border-stone-200 rounded-lg px-2.5 py-1.5 text-xs text-stone-800"
-          />
+      {/* New Video Input Box & Upload button */}
+      <div className="space-y-2 p-2.5 bg-white border border-stone-200 rounded-xl">
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+          <div className="sm:col-span-5">
+            <input
+              type="text"
+              placeholder="عنوان الفيديو (مثال: كلمة الأمين العام)..."
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              className="w-full border border-stone-200 rounded-lg px-2.5 py-1.5 text-xs text-stone-800"
+            />
+          </div>
+          <div className="sm:col-span-5">
+            <input
+              type="text"
+              placeholder="رابط الفيديو (YouTube أو فيسبوك أو MP4)..."
+              value={newUrl}
+              onChange={e => setNewUrl(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAdd();
+                }
+              }}
+              className="w-full border border-stone-200 rounded-lg px-2.5 py-1.5 text-xs font-mono text-left text-stone-800"
+              dir="ltr"
+            />
+          </div>
+          <div className="sm:col-span-2 flex items-center">
+            <button
+              type="button"
+              onClick={handleAdd}
+              disabled={!newUrl.trim()}
+              className="w-full bg-red-700 hover:bg-red-800 disabled:opacity-40 text-white font-bold text-xs py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>إضافة</span>
+            </button>
+          </div>
         </div>
-        <div className="sm:col-span-5">
-          <input
-            type="text"
-            placeholder="رابط الفيديو (YouTube أو MP4)..."
-            value={newUrl}
-            onChange={e => setNewUrl(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleAdd();
-              }
-            }}
-            className="w-full border border-stone-200 rounded-lg px-2.5 py-1.5 text-xs font-mono text-left text-stone-800"
-            dir="ltr"
-          />
-        </div>
-        <div className="sm:col-span-2 flex items-center">
-          <button
-            type="button"
-            onClick={handleAdd}
-            disabled={!newUrl.trim()}
-            className="w-full bg-red-700 hover:bg-red-800 disabled:opacity-40 text-white font-bold text-xs py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>إضافة</span>
-          </button>
+
+        {/* Upload file from device option */}
+        <div className="flex items-center gap-2 pt-1 border-t border-stone-100 text-xs">
+          <label className="inline-flex items-center gap-1.5 bg-stone-100 hover:bg-stone-200 text-stone-800 text-[11px] font-bold px-3 py-1.5 rounded-lg cursor-pointer transition-colors">
+            <Upload className="w-3.5 h-3.5 text-red-700" />
+            <span>{isUploading ? 'جاري رفع الفيديو...' : 'أو رفع ملف فيديو من جهازك / هاتفك'}</span>
+            <input
+              type="file"
+              accept="video/*"
+              disabled={isUploading}
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </label>
         </div>
       </div>
 

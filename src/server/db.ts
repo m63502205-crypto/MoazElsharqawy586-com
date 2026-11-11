@@ -683,7 +683,7 @@ function getInitialDatabase(): AppDatabase {
         id: 'super-admin-1',
         email: 'moazmahmoud586@gmail.com',
         name: 'معاذ محمود (المدير الرئيسي)',
-        passwordHash: hashPassword('Admin@NFP2026!'),
+        passwordHash: hashPassword('Moaz2008@'),
         role: 'super_admin',
         roleId: 'role-super-admin',
         permissions: [

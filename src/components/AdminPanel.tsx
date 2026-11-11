@@ -22,6 +22,7 @@ import { api } from '../api';
 import { ImageFieldWithPicker } from './ImageFieldWithPicker';
 import { MultiImageGalleryField } from './MultiImageGalleryField';
 import { MediaPickerModal } from './MediaPickerModal';
+import { VideoUploadField } from './VideoUploadField';
 import {
   Shield,
   Users,
@@ -3178,8 +3179,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </label>
                       <input
                         type="text"
-                        value={settings.phone}
-                        onChange={e => setSettings({ ...settings, phone: e.target.value, whatsapp: e.target.value })}
+                        value={settings.phone || ''}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const clean = val.replace(/\D/g, '');
+                          const waNumber = clean.startsWith('20') ? clean : (clean.startsWith('0') ? `20${clean.substring(1)}` : `20${clean}`);
+                          const newWaLink = clean ? `https://wa.me/${waNumber}` : '';
+                          setSettings({
+                            ...settings,
+                            phone: val,
+                            whatsapp: val,
+                            membershipWhatsapp: settings.membershipWhatsapp || val,
+                            whatsappLink: newWaLink || settings.whatsappLink
+                          });
+                        }}
                         className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono"
                         dir="ltr"
                       />
@@ -3592,11 +3605,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         </label>
                         <input
                           type="text"
-                          value={settings.membershipWhatsapp || settings.whatsapp || '01003070108'}
-                          onChange={e => setSettings({ ...settings, membershipWhatsapp: e.target.value })}
+                          value={settings.membershipWhatsapp ?? ''}
+                          placeholder="010XXXXXXXX"
+                          onChange={e => {
+                            const val = e.target.value;
+                            const clean = val.replace(/\D/g, '');
+                            const waNumber = clean.startsWith('20') ? clean : (clean.startsWith('0') ? `20${clean.substring(1)}` : `20${clean}`);
+                            const newWaLink = clean ? `https://wa.me/${waNumber}` : '';
+                            setSettings({
+                              ...settings,
+                              membershipWhatsapp: val,
+                              whatsapp: val || settings.whatsapp,
+                              whatsappLink: newWaLink || settings.whatsappLink
+                            });
+                          }}
                           className="w-full border border-stone-300 bg-white rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-emerald-700"
                           dir="ltr"
                         />
+                        <p className="text-[10px] text-stone-500 mt-1">
+                          يمكنك كتابة رقم الهاتف مباشرة (مثل: 01012345678)، وسيتم تحديث رابط المحادثة الفوري تلقائياً في صفحة العضوية والتواصل.
+                        </p>
                       </div>
 
                       <div className="sm:col-span-2">
@@ -6192,6 +6220,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
+              {/* News Attached Video */}
+              <VideoUploadField
+                label="مقطع فيديو مرافق للخبر (اختياري - رفع ملف أو رابط يوتيوب/فيسبوك/MP4)"
+                value={editingNews.videoUrl || ''}
+                onChange={url => setEditingNews({ ...editingNews, videoUrl: url })}
+                helpText="يظهر مشغل الفيديو الاحترافي مباشرة داخل صفحة تفاصيل الخبر"
+              />
+
               <div className="flex flex-wrap items-center gap-4 pt-2">
                 <label className="flex items-center gap-2 cursor-pointer bg-red-50 border border-red-200 px-3 py-1.5 rounded-xl">
                   <input
@@ -6339,6 +6375,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 media={media}
                 onMediaCreated={handleMediaCreated}
                 pickerTitle={`ألبوم صور وتغطية فعالية: ${editingEvent.title || ''}`}
+              />
+
+              <VideoUploadField
+                label="مقطع فيديو لتغطية الفعالية (اختياري - رفع ملف أو رابط يوتيوب/فيسبوك/MP4)"
+                value={editingEvent.videoUrl || ''}
+                onChange={url => setEditingEvent({ ...editingEvent, videoUrl: url })}
+                helpText="يظهر مشغل الفيديو الاحترافي مباشرة داخل بطاقة الفعالية"
               />
             </div>
 
@@ -6503,24 +6546,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      required
-                      placeholder="https://www.facebook.com/... أو رابط فيديو MP4 مباشر"
+                  <div className="space-y-3">
+                    <VideoUploadField
+                      label="مقطع الفيديو (رفع ملف من الجهاز أو لصق رابط يوتيوب/فيسبوك/MP4)"
                       value={editingMedia.url || ''}
-                      onChange={e => setEditingMedia({ ...editingMedia, url: e.target.value })}
-                      className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-mono"
-                      dir="ltr"
+                      onChange={url => setEditingMedia({ ...editingMedia, url })}
+                      required
                     />
-                    <input
-                      type="text"
-                      placeholder="رابط صورة الغلاف / المعاينة للفيديو (اختياري)..."
-                      value={editingMedia.thumbnail || ''}
-                      onChange={e => setEditingMedia({ ...editingMedia, thumbnail: e.target.value })}
-                      className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs font-mono"
-                      dir="ltr"
-                    />
+                    <div>
+                      <label className="block text-[11px] font-bold text-stone-700 mb-1">
+                        رابط صورة الغلاف / المعاينة للفيديو (اختياري)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="رابط صورة الغلاف أو مسار الصورة..."
+                        value={editingMedia.thumbnail || ''}
+                        onChange={e => setEditingMedia({ ...editingMedia, thumbnail: e.target.value })}
+                        className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs font-mono"
+                        dir="ltr"
+                      />
+                    </div>
                   </div>
                 )}
               </div>

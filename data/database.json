@@ -376,7 +376,7 @@
       "id": "super-admin-1",
       "email": "moazmahmoud586@gmail.com",
       "name": "معاذ محمود (المدير الرئيسي)",
-      "passwordHash": "db8dfb8d4e83d3c264b8b8b8973de44f1363e9eb003bbf9f26dd7c3228fb7d61",
+      "passwordHash": "148b1ac857c4ffeff7d4ab236a153fddbd87af72c8a18921524c3f5e1f6d0e88",
       "role": "super_admin",
       "permissions": [
         "leaders_party",

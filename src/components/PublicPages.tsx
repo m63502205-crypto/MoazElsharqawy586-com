@@ -44,11 +44,13 @@ import {
   Save,
   Edit2,
   Sparkles,
+  Maximize2,
   X
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface PublicPagesProps {
   currentView: string;
@@ -79,7 +81,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+
+  // Lightbox Modal for high-resolution interactive viewing of images
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxTitle, setLightboxTitle] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  const openLightbox = (images: string[], index = 0, title = '') => {
+    const valid = images.filter(Boolean);
+    if (valid.length === 0) return;
+    setLightboxImages(valid);
+    setLightboxIndex(index >= 0 && index < valid.length ? index : 0);
+    setLightboxTitle(title);
+    setLightboxOpen(true);
+  };
 
   // Automated Hero Reel / Slider state ("يقعد يقلب تلقائي")
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
@@ -174,8 +190,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
   // Filter states
   const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>('all');
-  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'special' | 'photo' | 'video'>('all');
-  const [mediaAlbumFilter, setMediaAlbumFilter] = useState<string>('all');
   const [newsSearch, setNewsSearch] = useState<string>('');
   const [eventsFilter, setEventsFilter] = useState<'all' | 'upcoming' | 'completed'>('all');
 
@@ -2069,34 +2083,46 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           )}
 
           {/* Multi-image Gallery */}
-          {((init.galleryImages && init.galleryImages.length > 0) || init.coverUrl) && (
-            <div className="space-y-4 pt-4 border-t border-stone-100">
-              <h3 className="font-extrabold text-stone-900 text-lg flex items-center gap-2">
-                <ImageIcon className="w-5 h-5 text-amber-600" />
-                <span>معرض صور وتوثيق المبادرة</span>
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {init.coverUrl && (
-                  <img
-                    src={init.coverUrl}
-                    alt={init.title}
-                    className="w-full aspect-video object-cover rounded-2xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
-                    onClick={() => window.open(init.coverUrl, '_blank')}
-                  />
-                )}
-                {(init.galleryImages || []).map((img, idx) => (
-                  <img
-                    key={idx}
-                    src={img}
-                    alt={`${init.title} - صورة ${idx + 1}`}
-                    className="w-full aspect-video object-cover rounded-2xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
-                    onClick={() => window.open(img, '_blank')}
-                  />
-                ))}
+          {((init.galleryImages && init.galleryImages.length > 0) || init.coverUrl) && (() => {
+            const allInitImgs = Array.from(new Set([...(init.coverUrl ? [init.coverUrl] : []), ...(init.galleryImages || [])])).filter(Boolean);
+            return (
+              <div className="space-y-4 pt-4 border-t border-stone-100">
+                <h3 className="font-extrabold text-stone-900 text-lg flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-amber-600" />
+                  <span>معرض صور وتوثيق المبادرة ({allInitImgs.length} صورة)</span>
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {allInitImgs.map((img, idx) => (
+                    <div
+                      key={idx}
+                      className="relative group cursor-pointer overflow-hidden rounded-2xl border border-stone-200 aspect-video shadow-xs"
+                      onClick={() => openLightbox(allInitImgs, idx, `${init.title} - توثيق المبادرة`)}
+                    >
+                      <img
+                        src={img}
+                        alt={`${init.title} - صورة ${idx + 1}`}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                        <Maximize2 className="w-5 h-5" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
+
+        {/* Interactive Lightbox Modal */}
+        <ImageLightboxModal
+          isOpen={lightboxOpen}
+          onClose={() => setLightboxOpen(false)}
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          title={lightboxTitle}
+        />
       </div>
     );
   }
@@ -2270,12 +2296,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 )}
 
                 {selectedNews.coverImage && (
-                  <img
-                    src={selectedNews.coverImage}
-                    alt={selectedNews.title}
-                    className="w-full aspect-video object-cover rounded-xl bg-stone-100"
-                    referrerPolicy="no-referrer"
-                  />
+                  <div
+                    className="relative group cursor-pointer overflow-hidden rounded-xl bg-stone-100"
+                    onClick={() => {
+                      const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
+                      openLightbox(allImgs, 0, selectedNews.title);
+                    }}
+                  >
+                    <img
+                      src={selectedNews.coverImage}
+                      alt={selectedNews.title}
+                      className="w-full aspect-video object-cover rounded-xl group-hover:scale-102 transition-transform duration-200"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
+                      <Maximize2 className="w-5 h-5" />
+                      <span>عرض الصورة بحجم كامل</span>
+                    </div>
+                  </div>
                 )}
 
                 <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
@@ -2290,15 +2328,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <span>معرض صور الخبر ({selectedNews.galleryImages.length} صورة)</span>
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                      {selectedNews.galleryImages.map((img, idx) => (
-                        <img
-                          key={idx}
-                          src={img}
-                          alt={`${selectedNews.title} - صورة ${idx + 1}`}
-                          className="w-full aspect-video object-cover rounded-xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
-                          onClick={() => window.open(img, '_blank')}
-                        />
-                      ))}
+                      {selectedNews.galleryImages.map((img, idx) => {
+                        const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
+                        const targetIdx = selectedNews.coverImage ? idx + 1 : idx;
+                        return (
+                          <div
+                            key={idx}
+                            className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                            onClick={() => openLightbox(allImgs, targetIdx, `${selectedNews.title} - صورة ${idx + 1}`)}
+                          >
+                            <img
+                              src={img}
+                              alt={`${selectedNews.title} - صورة ${idx + 1}`}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                              <Maximize2 className="w-4 h-4" />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -2328,6 +2378,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           </div>
         )}
+
+        {/* Interactive Lightbox Modal */}
+        <ImageLightboxModal
+          isOpen={lightboxOpen}
+          onClose={() => setLightboxOpen(false)}
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          title={lightboxTitle}
+        />
       </div>
     );
   }
@@ -2438,25 +2497,36 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               )}
 
               {/* Event Multi-image Gallery */}
-              {((event.images && event.images.length > 0) || (event.galleryImages && event.galleryImages.length > 0) || event.coverUrl || event.coverImage) && (
-                <div className="pt-3 border-t border-stone-100 space-y-2">
-                  <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
-                    <ImageIcon className="w-4 h-4 text-amber-600" />
-                    <span>تغطية وصور الفعالية ({Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).length} صورة)</span>
-                  </span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).map((img, i) => (
-                      <img
-                        key={i}
-                        src={img}
-                        alt={`${event.title} - صورة ${i + 1}`}
-                        className="w-full aspect-video object-cover rounded-xl border border-stone-200 hover:scale-105 transition-transform cursor-pointer shadow-xs"
-                        onClick={() => window.open(img, '_blank')}
-                      />
-                    ))}
+              {((event.images && event.images.length > 0) || (event.galleryImages && event.galleryImages.length > 0) || event.coverUrl || event.coverImage) && (() => {
+                const allEventImgs = Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).filter(Boolean);
+                return (
+                  <div className="pt-3 border-t border-stone-100 space-y-2">
+                    <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-600" />
+                      <span>تغطية وصور الفعالية ({allEventImgs.length} صورة)</span>
+                    </span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      {allEventImgs.map((img, i) => (
+                        <div
+                          key={i}
+                          className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                          onClick={() => openLightbox(allEventImgs, i, `${event.title} - تغطية مصورة`)}
+                        >
+                          <img
+                            src={img}
+                            alt={`${event.title} - صورة ${i + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                            <Maximize2 className="w-4 h-4" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Share Buttons for Event */}
               <SocialShareButtons
@@ -2468,193 +2538,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           ))}
         </div>
+
+        {/* Interactive Lightbox Modal */}
+        <ImageLightboxModal
+          isOpen={lightboxOpen}
+          onClose={() => setLightboxOpen(false)}
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          title={lightboxTitle}
+        />
       </div>
     );
   }
 
   // -------------------------------------------------------------
-  // 11. MEDIA GALLERY VIEW (Photos & Videos)
+  // 11. MEDIA GALLERY VIEW (Removed per user instruction)
   // -------------------------------------------------------------
   if (currentView === 'gallery') {
-    const isSpecialMedia = (m: MediaItem) => Boolean(m.isSpecial || m.albumName === 'خاص' || m.specialCategory);
-    const filteredMedia = data.media.filter(m => {
-      if (mediaTypeFilter === 'special') return isSpecialMedia(m);
-      if (mediaTypeFilter === 'photo') return m.type === 'photo';
-      if (mediaTypeFilter === 'video') return m.type === 'video';
-      if (mediaAlbumFilter !== 'all' && m.albumName !== mediaAlbumFilter) return false;
-      return true;
-    });
-
-    const albums = Array.from(new Set(data.media.map(m => m.albumName).filter(Boolean)));
-
-    return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        <div className="text-center space-y-3">
-          <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
-            التوثيق المرئي
-          </span>
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
-            معرض الصور والفيديوهات
-          </h1>
-          <p className="text-xs sm:text-sm text-stone-500 max-w-xl mx-auto">
-            ألبومات وتوثيق لكافة فعاليات ومؤتمرات ومبادرات حزب الجبهة الوطنية.
-          </p>
-        </div>
-
-        {/* Filter bars */}
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <div className="inline-flex flex-wrap items-center justify-center bg-stone-100 p-1 rounded-2xl border border-stone-200 text-xs font-bold gap-1 shadow-xs">
-            <button
-              onClick={() => setMediaTypeFilter('all')}
-              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'all' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
-            >
-              الكل ({data.media.length})
-            </button>
-            <button
-              onClick={() => setMediaTypeFilter('special')}
-              className={`px-4 py-2 rounded-xl cursor-pointer flex items-center gap-1.5 transition-all ${
-                mediaTypeFilter === 'special'
-                  ? 'bg-amber-500 text-stone-950 font-black shadow-md'
-                  : 'text-amber-800 bg-amber-50 hover:bg-amber-100 font-bold'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>المعرض الخاص ⭐ ({data.media.filter(isSpecialMedia).length})</span>
-            </button>
-            <button
-              onClick={() => setMediaTypeFilter('photo')}
-              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'photo' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
-            >
-              الصور فقط ({data.media.filter(m => m.type === 'photo').length})
-            </button>
-            <button
-              onClick={() => setMediaTypeFilter('video')}
-              className={`px-4 py-2 rounded-xl cursor-pointer transition-colors ${mediaTypeFilter === 'video' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'}`}
-            >
-              الفيديوهات فقط ({data.media.filter(m => m.type === 'video').length})
-            </button>
-          </div>
-
-          {albums.length > 0 && (
-            <select
-              value={mediaAlbumFilter}
-              onChange={e => setMediaAlbumFilter(e.target.value)}
-              className="bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs font-medium text-stone-800 shadow-xs"
-            >
-              <option value="all">كافة الألبومات</option>
-              {albums.map((alb, i) => (
-                <option key={i} value={alb}>{alb}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {filteredMedia.length === 0 ? (
-          <div className="bg-white rounded-3xl border border-stone-200 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
-            <Sparkles className="w-12 h-12 text-amber-500 mx-auto mb-3 opacity-70" />
-            <h3 className="font-bold text-stone-900 text-base mb-1">
-              {mediaTypeFilter === 'special' ? 'المعرض الخاص قيد إدراج التغطيات والزيارات الحصرية' : 'لا توجد وسائط في هذا القسم بعد'}
-            </h3>
-            <p className="text-xs text-stone-500 leading-relaxed">
-              سيتم نشر وتحديث ألبومات الصور والفيديوهات تباعاً عبر المركز الإعلامي للحزب.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {filteredMedia.map(item => (
-              <div
-                key={item.id}
-                onClick={() => setSelectedMedia(item)}
-                className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-              >
-                <div className="aspect-square bg-stone-100 overflow-hidden relative">
-                  {item.type === 'photo' ? (
-                    <img
-                      src={item.url}
-                      alt={item.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-stone-900 text-white p-4">
-                      <Play className="w-12 h-12 text-red-600 mb-2 fill-current" />
-                      <span className="text-xs font-bold">فيديو</span>
-                    </div>
-                  )}
-                  <div className="absolute top-2 right-2 bg-stone-900/80 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                    {item.albumName || 'عام'}
-                  </div>
-                  {(item.isSpecial || item.albumName === 'خاص') && (
-                    <div className="absolute top-2 left-2 bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 text-[10px] font-black px-2 py-0.5 rounded shadow-xs flex items-center gap-1">
-                      <Sparkles className="w-2.5 h-2.5" />
-                      <span>معرض خاص ⭐</span>
-                    </div>
-                  )}
-                </div>
-
-              <div className="p-4 text-right">
-                <h3 className="font-bold text-stone-900 text-sm group-hover:text-red-700 transition-colors line-clamp-1">
-                  {item.title}
-                </h3>
-                {item.description && (
-                  <p className="text-[11px] text-stone-500 line-clamp-2 mt-1">
-                    {item.description}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-        )}
-
-        {/* Media Lightbox Modal */}
-        {selectedMedia && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl max-w-3xl w-full p-6 text-right shadow-2xl relative max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => setSelectedMedia(null)}
-                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
-              >
-                ✕
-              </button>
-
-              <div className="space-y-4">
-                <h3 className="text-xl font-bold text-stone-900">
-                  {selectedMedia.title}
-                </h3>
-
-                {selectedMedia.type === 'photo' ? (
-                  <img
-                    src={selectedMedia.url}
-                    alt={selectedMedia.title}
-                    className="w-full max-h-[60vh] object-contain rounded-xl bg-stone-100 mx-auto"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="aspect-video bg-black rounded-xl overflow-hidden flex items-center justify-center">
-                    <a
-                      href={selectedMedia.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-red-700 hover:bg-red-800 text-white px-6 py-3 rounded-xl font-bold text-sm flex items-center gap-2"
-                    >
-                      <Play className="w-5 h-5 fill-current" />
-                      <span>فتح الفيديو في نافذة مستقلة</span>
-                    </a>
-                  </div>
-                )}
-
-                {selectedMedia.description && (
-                  <p className="text-xs text-stone-600">
-                    {selectedMedia.description}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
+    setCurrentView('home');
+    return null;
   }
 
   // -------------------------------------------------------------
@@ -2968,7 +2870,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('fullName')}
-                      placeholder="مثال: أحمد محمد علي إبراهيم"
                       value={appForm.fullName}
                       onChange={e => setAppForm({ ...appForm, fullName: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -2988,7 +2889,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       type="text"
                       required={isFieldReq('nationalId')}
                       maxLength={14}
-                      placeholder="أدخل الـ 14 رقماً بدون مسافات"
                       value={appForm.nationalId}
                       onChange={e => setAppForm({ ...appForm, nationalId: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3098,7 +2998,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('address')}
-                      placeholder="مثال: الحي الأول، مجاورة 3، عمارة 12"
                       value={appForm.address}
                       onChange={e => setAppForm({ ...appForm, address: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3126,7 +3025,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="tel"
                       required={isFieldReq('phone')}
-                      placeholder="010XXXXXXXX"
                       value={appForm.phone}
                       onChange={e => setAppForm({ ...appForm, phone: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3146,7 +3044,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="tel"
                       required={isFieldReq('whatsapp')}
-                      placeholder="010XXXXXXXX"
                       value={appForm.whatsapp}
                       onChange={e => setAppForm({ ...appForm, whatsapp: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3166,7 +3063,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="email"
                       required={isFieldReq('email')}
-                      placeholder="example@mail.com"
                       value={appForm.email}
                       onChange={e => setAppForm({ ...appForm, email: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3195,7 +3091,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('qualification')}
-                      placeholder="مثال: بكالوريوس تجارة / ليسانس حقوق"
                       value={appForm.qualification}
                       onChange={e => setAppForm({ ...appForm, qualification: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3214,7 +3109,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('job')}
-                      placeholder="مثال: مهندس برمجيات / محاسب / طالب"
                       value={appForm.job}
                       onChange={e => setAppForm({ ...appForm, job: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3233,7 +3127,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('workplace')}
-                      placeholder="مثال: قطاع خاص / حكومي / أعمال حرة"
                       value={appForm.workplace}
                       onChange={e => setAppForm({ ...appForm, workplace: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3261,7 +3154,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <textarea
                       rows={2}
                       required={isFieldReq('skills')}
-                      placeholder="المهارات القيادية، التقنية، التنظيمية، العلاقات..."
                       value={appForm.skills}
                       onChange={e => setAppForm({ ...appForm, skills: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3280,7 +3172,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <textarea
                       rows={2}
                       required={isFieldReq('interests')}
-                      placeholder="مثال: أمانة التكنولوجيا، أمانة التنظيم، أمانة التدريب والتثقيف..."
                       value={appForm.interests}
                       onChange={e => setAppForm({ ...appForm, interests: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3299,7 +3190,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('volunteerExperience')}
-                      placeholder="جمعيات أهلية، مبادرات شبابية، أعمال تطوعية..."
                       value={appForm.volunteerExperience}
                       onChange={e => setAppForm({ ...appForm, volunteerExperience: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
@@ -3318,7 +3208,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <input
                       type="text"
                       required={isFieldReq('reasonForJoining')}
-                      placeholder="رؤيتكم للمشاركة في خدمة أهالي قسم ثالث أكتوبر ومصر..."
                       value={appForm.reasonForJoining}
                       onChange={e => setAppForm({ ...appForm, reasonForJoining: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"

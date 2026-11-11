@@ -13,6 +13,7 @@ import { api } from './api';
 import { PublicPortalData } from './types';
 import { Loader2 } from 'lucide-react';
 import { initGoogleAnalytics, trackPageView } from './utils/analytics';
+import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
 
 function MainApp() {
   const [currentView, setCurrentView] = useState<string>('home');
@@ -22,6 +23,7 @@ function MainApp() {
   const [data, setData] = useState<PublicPortalData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState<boolean>(false);
 
   const loadData = async () => {
     try {
@@ -38,6 +40,18 @@ function MainApp() {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Global search shortcut (Ctrl+K or Cmd+K)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setSearchOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Initialize or re-configure Google Analytics when site settings are loaded
@@ -58,7 +72,6 @@ function MainApp() {
       initiatives: 'المبادرات التنموية والمجتمعية | حزب الجبهة الوطنية',
       news: 'الأخبار والبيانات الصحفية | حزب الجبهة الوطنية',
       events: 'الفعاليات والمؤتمرات | حزب الجبهة الوطنية',
-      gallery: 'معرض الصور والوسائط | حزب الجبهة الوطنية',
       join: 'طلب الانضمام والعضوية | حزب الجبهة الوطنية',
       contact: 'اتصل بنا ومقر الأمانة | حزب الجبهة الوطنية',
       admin: 'لوحة التحكم المركزية | حزب الجبهة الوطنية'
@@ -87,6 +100,13 @@ function MainApp() {
 
       const fullHash = window.location.hash.replace(/^#\/?/, '');
       if (!fullHash) return;
+
+      // Gallery section is removed per user instruction; redirect to home
+      if (fullHash === 'gallery' || fullHash.startsWith('gallery/')) {
+        setCurrentView('home');
+        window.location.hash = 'home';
+        return;
+      }
 
       if (fullHash.startsWith('page/')) {
         const slug = fullHash.replace('page/', '');
@@ -149,7 +169,6 @@ function MainApp() {
           'initiatives',
           'news',
           'events',
-          'gallery',
           'join',
           'contact'
         ].includes(cleanView)
@@ -165,6 +184,10 @@ function MainApp() {
 
   // Update hash when currentView changes
   const handleSetCurrentView = (view: string) => {
+    // Gallery is removed; redirect to home
+    if (view === 'gallery') {
+      view = 'home';
+    }
     setCurrentView(view);
     if (view === 'admin') {
       window.location.hash = 'admin';
@@ -174,6 +197,34 @@ function MainApp() {
       window.location.hash = view;
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectSearchResult = (res: SearchResultItem) => {
+    setSearchOpen(false);
+    if (res.type === 'news') {
+      setSelectedNewsId(res.rawItem.id);
+      handleSetCurrentView('news');
+    } else if (res.type === 'event') {
+      setSelectedEventId(res.rawItem.id);
+      handleSetCurrentView('events');
+    } else if (res.type === 'initiative') {
+      setSelectedSlug(res.rawItem.slug || res.rawItem.id);
+      handleSetCurrentView('initiative-detail');
+    } else if (res.type === 'secretariat') {
+      setSelectedSlug(res.rawItem.slug || res.rawItem.id);
+      handleSetCurrentView('secretariat-detail');
+    } else if (res.type === 'leader') {
+      if (res.typeLabel.includes('أكتوبر') || res.rawItem.secretariatName) {
+        handleSetCurrentView('secretariat-leaders');
+      } else {
+        handleSetCurrentView('party-leaders');
+      }
+    } else if (res.type === 'page') {
+      setSelectedSlug(res.rawItem.slug);
+      handleSetCurrentView('cms-page');
+    } else if (res.type === 'join') {
+      handleSetCurrentView('join');
+    }
   };
 
   if (loading) {
@@ -227,6 +278,7 @@ function MainApp() {
         setCurrentView={handleSetCurrentView}
         officialLogo={data.settings.officialLogo}
         slogan={data.settings.slogan}
+        onOpenSearch={() => setSearchOpen(true)}
       />
 
       <main className="flex-1 w-full max-w-full overflow-x-hidden">
@@ -245,6 +297,14 @@ function MainApp() {
       <Footer
         settings={data.settings}
         setCurrentView={handleSetCurrentView}
+      />
+
+      {/* Site-wide Search Modal */}
+      <SiteSearchModal
+        isOpen={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        data={data}
+        onSelectResult={handleSelectSearchResult}
       />
     </div>
   );

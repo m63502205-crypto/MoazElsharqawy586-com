@@ -3,4 +3,4 @@ Allow: /
 Disallow: /api/admin/
 Disallow: /#admin
 
-Sitemap: https://algabhaalwataniya-oct3.rf.gd/sitemap.xml
+Sitemap: https://algabhaalwataniya-oct3.org/sitemap.xml

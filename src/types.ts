@@ -336,10 +336,9 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-XXXXXXXXXX)
-  heroMediaType?: 'video' | 'images' | 'both';
+  customTexts?: SiteCustomTexts;
   heroVideoUrl?: string;
   heroPosterUrl?: string;
-  heroImages?: string[];
   heroSlides?: Array<{
     id: string;
     type: 'video' | 'image';

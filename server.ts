@@ -13,42 +13,6 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Ensure uploads directory exists and serve statically
-const UPLOADS_DIR = path.resolve(process.cwd(), 'data', 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-app.use('/uploads', express.static(UPLOADS_DIR));
-
-// Helper to persist base64 data URLs to disk as actual static media files
-function persistDataUrlIfAny(urlOrData: string, prefix: string = 'media'): string {
-  if (!urlOrData || typeof urlOrData !== 'string') return urlOrData;
-  if (!urlOrData.startsWith('data:')) return urlOrData;
-
-  try {
-    const match = urlOrData.match(/^data:([a-zA-Z0-9\/\+.-]+);base64,(.+)$/);
-    if (!match) return urlOrData;
-
-    const mime = match[1];
-    const buffer = Buffer.from(match[2], 'base64');
-    let ext = 'bin';
-    if (mime.includes('mp4')) ext = 'mp4';
-    else if (mime.includes('webm')) ext = 'webm';
-    else if (mime.includes('quicktime') || mime.includes('mov')) ext = 'mov';
-    else if (mime.includes('jpeg') || mime.includes('jpg')) ext = 'jpg';
-    else if (mime.includes('png')) ext = 'png';
-    else if (mime.includes('webp')) ext = 'webp';
-
-    const safeName = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
-    const filePath = path.join(UPLOADS_DIR, safeName);
-    fs.writeFileSync(filePath, buffer);
-    return `/uploads/${safeName}`;
-  } catch (e) {
-    console.error('Error persisting base64 data to disk:', e);
-    return urlOrData;
-  }
-}
-
 // In-memory session token store (token -> AdminUser)
 const sessionStore = new Map<string, { admin: AdminUser; expiresAt: number }>();
 
@@ -124,8 +88,8 @@ Sitemap: ${baseUrl}/sitemap.xml
 // Dynamic Sitemap.xml
 app.get('/sitemap.xml', (req: Request, res: Response) => {
   const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
-  const host = req.get('host') || 'algabhaalwataniya-oct3.rf.gd';
-  const baseUrl = process.env.APP_URL || (host.includes('localhost') ? `${protocol}://${host}` : 'https://algabhaalwataniya-oct3.rf.gd');
+  const host = req.get('host') || 'localhost:3000';
+  const baseUrl = process.env.APP_URL || `${protocol}://${host}`;
   const data = db.get();
 
   interface SitemapEntry {
@@ -144,7 +108,8 @@ app.get('/sitemap.xml', (req: Request, res: Response) => {
     { path: '#initiatives', changefreq: 'weekly', priority: '0.8' },
     { path: '#news', changefreq: 'daily', priority: '0.9' },
     { path: '#events', changefreq: 'weekly', priority: '0.8' },
-    { path: '#join', changefreq: 'monthly', priority: '0.95' },
+    { path: '#gallery', changefreq: 'weekly', priority: '0.7' },
+    { path: '#join', changefreq: 'monthly', priority: '0.9' },
     { path: '#contact', changefreq: 'monthly', priority: '0.8' }
   ];
 
@@ -199,7 +164,7 @@ function renderOgHtml(options: {
 
   const cleanTitle = (options.title || '').replace(/"/g, '&quot;');
   const cleanDesc = (options.description || '').replace(/"/g, '&quot;').replace(/\r?\n/g, ' ').slice(0, 200);
-  const cleanImage = options.imageUrl || 'https://algabhaalwataniya-oct3.rf.gd/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+  const cleanImage = options.imageUrl || 'https://ais-pre-5o6jzg5bcobr3p6xsmps5j-492594759043.europe-west2.run.app/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
   const cleanUrl = options.url;
 
   // Replace Title
@@ -1773,66 +1738,17 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
   res.json({ success: true });
 });
 
-// --- FILE & MEDIA UPLOAD ENDPOINT ---
-app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) => {
-  try {
-    const { fileData, fileName } = req.body || {};
-    if (!fileData) {
-      return res.status(400).json({ error: 'لم يتم إرسال أي ملف' });
-    }
-
-    const savedUrl = persistDataUrlIfAny(fileData, 'uploaded');
-    res.json({ success: true, url: savedUrl });
-  } catch (err: any) {
-    console.error('Upload error in server:', err);
-    res.status(500).json({ error: 'فشل رفع وحفظ الملف: ' + (err.message || '') });
-  }
-});
-
 // --- SETTINGS MANAGEMENT ---
 app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'), (req: Request, res: Response) => {
-  try {
-    const admin = (req as any).admin as AdminUser;
-    const data = db.get();
-    const body = { ...(req.body || {}) };
-
-    // Auto-persist all large media files from base64 to disk
-    if (body.heroVideoUrl) {
-      body.heroVideoUrl = persistDataUrlIfAny(body.heroVideoUrl, 'hero_video');
-    }
-    if (body.heroPosterUrl) {
-      body.heroPosterUrl = persistDataUrlIfAny(body.heroPosterUrl, 'hero_poster');
-    }
-    if (body.officialLogo) {
-      body.officialLogo = persistDataUrlIfAny(body.officialLogo, 'logo');
-    }
-    if (body.entranceImageUrl) {
-      body.entranceImageUrl = persistDataUrlIfAny(body.entranceImageUrl, 'entrance');
-    }
-    if (Array.isArray(body.heroImages)) {
-      body.heroImages = body.heroImages.map((img: string, idx: number) =>
-        persistDataUrlIfAny(img, `hero_img_${idx}`)
-      );
-    }
-    if (Array.isArray(body.heroSlides)) {
-      body.heroSlides = body.heroSlides.map((slide: any, idx: number) => ({
-        ...slide,
-        url: persistDataUrlIfAny(slide.url, `slide_${idx}`),
-        posterUrl: slide.posterUrl ? persistDataUrlIfAny(slide.posterUrl, `slide_poster_${idx}`) : undefined
-      }));
-    }
-
-    data.settings = {
-      ...data.settings,
-      ...body
-    };
-    db.save();
-    db.addAuditLog(admin.email, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل وتثبيت إعدادات وهوية وبيانات التواصل والوسائط للمنصة');
-    res.json({ success: true, settings: data.settings });
-  } catch (err: any) {
-    console.error('Settings update error in server:', err);
-    res.status(500).json({ error: 'فشل حفظ الإعدادات: ' + (err.message || '') });
-  }
+  const admin = (req as any).admin as AdminUser;
+  const data = db.get();
+  data.settings = {
+    ...data.settings,
+    ...req.body
+  };
+  db.save();
+  db.addAuditLog(admin.email, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل للمنصة');
+  res.json({ success: true, settings: data.settings });
 });
 
 // --- AUDIT LOGS ---

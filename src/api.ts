@@ -318,12 +318,6 @@ export const api = {
       body: JSON.stringify(settings)
     }),
 
-  uploadMedia: (fileData: string, fileName?: string) =>
-    apiFetch<{ success: boolean; url: string }>('/api/admin/upload', {
-      method: 'POST',
-      body: JSON.stringify({ fileData, fileName })
-    }),
-
   // Audit Logs
   getAuditLogs: () => apiFetch<AuditLog[]>('/api/admin/audit-logs'),
 

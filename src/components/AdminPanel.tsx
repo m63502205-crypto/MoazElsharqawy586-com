@@ -156,7 +156,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [settings, setSettings] = useState<SiteSettings | null>(null);
   const [gaTestStatus, setGaTestStatus] = useState<string | null>(null);
   const [copiedSiteUrl, setCopiedSiteUrl] = useState(false);
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   // Modals & sub-state
   const [selectedApp, setSelectedApp] = useState<MembershipApplication | null>(null);
@@ -3243,13 +3242,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="sm:col-span-2">
-                        <VideoUploadField
-                          label="فيديو واجهة الموقع التلقائي (Hero Video)"
+                      <div>
+                        <label className="block text-xs font-bold text-amber-300 mb-1">
+                          رابط فيديو البانر الرئيسي (MP4 Video URL)
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://.../video.mp4 أو مسار ملف الفيديو"
                           value={settings.heroVideoUrl || ''}
-                          onChange={url => setSettings({ ...settings, heroVideoUrl: url })}
-                          helpText="يمكنك رفع مقطع فيديو من هاتفك أو جهازك، أو لصق رابط MP4/يوتيوب. يشتغل تلقائياً بانسيابية عالية وبدون أي مساحات سوداء."
+                          onChange={e => setSettings({ ...settings, heroVideoUrl: e.target.value })}
+                          className="w-full border border-stone-700 bg-stone-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                          dir="ltr"
                         />
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          يتم تشغيله تلقائياً مع تكرار دائم في أعلى الصفحة الرئيسية كفيديو صامت عالي الدقة.
+                        </p>
                       </div>
 
                       <div>
@@ -3741,11 +3748,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </div>
                     </div>
 
-                    {/* Section 2: Statistics & Counters (Archived/Hidden per request) */}
-                    <details className="bg-stone-50 p-4 rounded-2xl border border-stone-200 space-y-3">
-                      <summary className="text-xs font-bold text-stone-600 cursor-pointer select-none">
-                        أرقام وعدادات إضافية (مخفية حالياً من الواجهة حسب الطلب)
-                      </summary>
+                    {/* Section 2: Statistics & Counters */}
+                    <div className="bg-white p-4 rounded-2xl border border-stone-200 space-y-3">
+                      <h4 className="text-xs font-black text-amber-800 border-r-2 border-amber-600 pr-2">
+                        2. أرقام وعدادات الواجهة الرئيسية (Stats Strip)
+                      </h4>
+                      <p className="text-[11px] text-stone-500">
+                        يمكنك كتابة أي رقم أو رمز أو نسبة مئوية (مثل 9، 100%، 1، 2) وعنوانه والوصف التابع له.
+                      </p>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {/* Card 1 */}
@@ -3920,7 +3930,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           </div>
                         </div>
                       </div>
-                    </details>
+                    </div>
 
                     {/* Section 3: Section Titles & Badges */}
                     <div className="bg-white p-4 rounded-2xl border border-stone-200 space-y-3">
@@ -4108,12 +4118,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         />
                       </div>
 
-                      {/* Google Maps Location Link - Single Simple Input */}
-                      <div className="bg-amber-50/70 border border-amber-300 rounded-2xl p-4 space-y-3">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                          <label className="block text-xs font-black text-amber-950 flex items-center gap-1.5">
-                            <MapPin className="w-4 h-4 text-red-700" />
-                            <span>رابط موقع مقر الحزب على خرائط جوجل (Google Maps Link)</span>
+                      {/* Google Maps Location URL */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-stone-700">
+                            رابط اللوكيشن على خرائط جوجل (Google Maps Link)
                           </label>
                           {settings.locationUrl && (
                             <a
@@ -4127,57 +4136,78 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             </a>
                           )}
                         </div>
-
                         <input
                           type="url"
                           placeholder="https://maps.app.goo.gl/... أو https://maps.google.com/?q=..."
                           value={settings.locationUrl || ''}
-                          onChange={e => {
-                            const newUrl = e.target.value.trim();
-                            let generatedEmbed = '';
-                            const iframeMatch = newUrl.match(/src=["'](.*?)["']/);
-                            if (iframeMatch && iframeMatch[1]) {
-                              generatedEmbed = iframeMatch[1];
-                            } else if (newUrl.includes('google.com/maps/embed')) {
-                              generatedEmbed = newUrl;
-                            } else if (newUrl.includes('iw7sGSbbb2K1g6yZ7') || newUrl.includes('maps.app.goo.gl')) {
-                              generatedEmbed = 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed';
-                            } else if (newUrl) {
-                              const qMatch = newUrl.match(/[?&]q=([^&]+)/);
-                              const query = qMatch ? decodeURIComponent(qMatch[1]) : (settings.address || 'حزب الجبهة الوطنية قسم ثالث أكتوبر');
-                              generatedEmbed = `https://maps.google.com/maps?q=${encodeURIComponent(query)}&t=&z=16&ie=UTF8&iwloc=B&output=embed`;
-                            }
-                            setSettings({
-                              ...settings,
-                              locationUrl: newUrl,
-                              ...(generatedEmbed ? { mapEmbedUrl: generatedEmbed } : {})
-                            });
-                          }}
-                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white focus:border-red-700"
+                          onChange={e => setSettings({ ...settings, locationUrl: e.target.value })}
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
                           dir="ltr"
                         />
-                        <p className="text-[11px] text-stone-600">
-                          يكفي لصق الرابط فقط هنا؛ ويقوم الموقع تلقائياً بإنشاء الخريطة التفاعلية وزر الانتقال للمقر دون الحاجة لكتابة إحداثيات أو أكواد تضمين.
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          الرابط الذي يفتح تطبيق خرائط جوجل مباشرة عند ضغط المواطن على "فتح اللوكيشن".
                         </p>
+                      </div>
 
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSettings({
-                                ...settings,
-                                address: 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020',
-                                locationUrl: 'https://maps.app.goo.gl/iw7sGSbbb2K1g6yZ7?g_st=ac',
-                                mapEmbedUrl: 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed',
-                                coordinates: '29.980836, 30.840788'
-                              });
-                            }}
-                            className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl cursor-pointer transition-colors inline-flex items-center gap-1.5 shadow-xs"
-                          >
-                            <MapPin className="w-3.5 h-3.5 text-amber-300" />
-                            <span>تثبيت الرابط المعتمد لمقر الحزب (قسم ثالث أكتوبر)</span>
-                          </button>
-                        </div>
+                      {/* Embed URL */}
+                      <div>
+                        <label className="block text-xs font-bold text-stone-700 mb-1">
+                          رابط تضمين الخريطة (Google Maps Embed URL)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="https://www.google.com/maps/embed?pb=..."
+                          value={settings.mapEmbedUrl || ''}
+                          onChange={e => {
+                            let val = e.target.value;
+                            // If user pasted an iframe tag, extract the src
+                            const match = val.match(/src=["'](.*?)["']/);
+                            if (match && match[1]) {
+                              val = match[1];
+                            }
+                            setSettings({ ...settings, mapEmbedUrl: val });
+                          }}
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
+                          dir="ltr"
+                        />
+                        <p className="text-[10px] text-stone-400 mt-1">
+                          رابط iframe التضميني، أو يمكنك لصق كود التضمين بالكامل وسيتم استخراج الرابط تلقائياً.
+                        </p>
+                      </div>
+
+                      {/* Coordinates */}
+                      <div>
+                        <label className="block text-xs font-bold text-stone-700 mb-1">
+                          إحداثيات الموقع (خط العرض وخط الطول)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="29.980836, 30.840788"
+                          value={settings.coordinates || ''}
+                          onChange={e => setSettings({ ...settings, coordinates: e.target.value })}
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
+                          dir="ltr"
+                        />
+                      </div>
+
+                      {/* Quick preset helper */}
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettings({
+                              ...settings,
+                              address: 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020',
+                              locationUrl: 'https://maps.app.goo.gl/iw7sGSbbb2K1g6yZ7?g_st=ac',
+                              mapEmbedUrl: 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed',
+                              coordinates: '29.980836, 30.840788'
+                            });
+                          }}
+                          className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors w-full flex items-center justify-center gap-1.5 shadow-xs"
+                        >
+                          <MapPin className="w-4 h-4 text-amber-300" />
+                          <span>تثبيت لوكيشن مقر الحزب المعتمد (قسم ثالث أكتوبر)</span>
+                        </button>
                       </div>
                     </div>
 

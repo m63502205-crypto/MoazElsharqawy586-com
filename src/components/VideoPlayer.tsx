@@ -84,7 +84,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   url,
   title = 'فيديو',
   poster,
-  className = 'w-full aspect-video rounded-2xl overflow-hidden bg-stone-900/40 shadow-lg border border-stone-800/40',
+  className = 'w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-md',
   autoPlay = false,
   muted = false,
   loop = false
@@ -99,10 +99,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <iframe
           src={embedUrl}
           title={title}
-          className="w-full h-full border-0 bg-stone-950"
+          className="w-full h-full border-0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           allowFullScreen
-          loading="lazy"
         />
       </div>
     );
@@ -114,15 +113,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         src={url}
         controls
         playsInline
-        preload="metadata"
         autoPlay={autoPlay}
         muted={muted}
         loop={loop}
-        poster={poster || undefined}
-        className="w-full h-full object-cover"
+        poster={poster}
+        className="w-full h-full object-contain bg-black"
       >
         <source src={url} type="video/mp4" />
-        <source src={url} type="video/webm" />
         متصفحكم لا يدعم تشغيل هذا الفيديو مباشرة.
       </video>
     </div>

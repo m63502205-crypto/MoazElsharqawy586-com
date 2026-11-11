@@ -45,15 +45,12 @@ import {
   Edit2,
   Sparkles,
   Maximize2,
-  Volume2,
-  VolumeX,
   X
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
-import { VideoPlayer, parseVideoUrl } from './VideoPlayer';
 
 interface PublicPagesProps {
   currentView: string;
@@ -103,94 +100,73 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // Automated Hero Reel / Slider state ("يقعد يقلب تلقائي")
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
-  const [isHeroMuted, setIsHeroMuted] = useState(true);
 
   // Construct hero slides
   const heroSlides = React.useMemo(() => {
-    const mode = data.settings.heroMediaType || (data.settings.heroVideoUrl ? 'video' : 'both');
-
-    // 1. Gather all custom images uploaded by user
-    const customImages = (data.settings.heroImages || [])
-      .filter(url => url && typeof url === 'string' && url.trim().length > 0)
-      .map((url, idx) => ({
-        id: `hero-img-${idx}`,
-        type: 'image' as const,
-        url,
-        title: 'فعاليات وأنشطة حزب الجبهة الوطنية',
-        caption: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة'
-      }));
-
-    // 2. Gather custom slides
-    const customSlides = (data.settings.heroSlides || []).filter(
+    const validCustom = (data.settings.heroSlides || []).filter(
       s => s && typeof s.url === 'string' && s.url.trim().length > 0
     );
+    if (validCustom.length > 0) {
+      return validCustom;
+    }
+    const list: Array<{
+      id: string;
+      type: 'video' | 'image';
+      url: string;
+      posterUrl?: string;
+      title?: string;
+      caption?: string;
+    }> = [];
 
-    const allImageSlides = [
-      ...customImages,
-      ...customSlides.filter(s => s.type === 'image')
-    ];
+    if (data.settings.heroVideoUrl) {
+      list.push({
+        id: 'hero-main-vid',
+        type: 'video',
+        url: data.settings.heroVideoUrl,
+        posterUrl: data.settings.heroPosterUrl || data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
+        title: 'فعاليات حزب الجبهة الوطنية الميدانية',
+        caption: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة'
+      });
+    }
 
-    const mainVidSlide = data.settings.heroVideoUrl
-      ? {
-          id: 'hero-main-vid',
-          type: 'video' as const,
-          url: data.settings.heroVideoUrl,
-          posterUrl: data.settings.heroPosterUrl || undefined,
-          title: 'فعاليات حزب الجبهة الوطنية الميدانية',
-          caption: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة'
+    list.push({
+      id: 'hero-entrance',
+      type: 'image',
+      url: data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
+      title: 'مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر',
+      caption: 'المقر الرئيسي للعمل الحزبي وخدمة أهالي أكتوبر'
+    });
+
+    if (data.media && data.media.length > 0) {
+      data.media.slice(0, 5).forEach((m, idx) => {
+        if (m.url && !list.some(s => s.url === m.url)) {
+          list.push({
+            id: `hero-med-${idx}`,
+            type: m.type === 'video' ? 'video' : 'image',
+            url: m.url,
+            title: m.title || 'أنشطة وفعاليات الحزب',
+            caption: m.albumName || 'أمانة قسم ثالث أكتوبر'
+          });
         }
-      : null;
-
-    // Mode 1: Video only ("الفيديو يكون مفتوح على طول")
-    if (mode === 'video') {
-      if (mainVidSlide) return [mainVidSlide];
-      if (allImageSlides.length > 0) return allImageSlides;
+      });
     }
 
-    // Mode 2: Images only ("وفعل الصور برضو.. ولو صور يكون أكثر من صوره")
-    if (mode === 'images') {
-      if (allImageSlides.length > 0) return allImageSlides;
-      if (data.settings.entranceImageUrl) {
-        return [{
-          id: 'hero-entrance',
-          type: 'image' as const,
-          url: data.settings.entranceImageUrl,
-          title: 'مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-          caption: 'المقر الرئيسي للعمل الحزبي وخدمة أهالي أكتوبر'
-        }];
-      }
-    }
+    list.push({
+      id: 'hero-emblem',
+      type: 'image',
+      url: data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
+      title: 'معاً نبني مستقبلاً مشرقاً لمصر',
+      caption: 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر'
+    });
 
-    // Mode 3: Both ("كلاهما معاً")
-    if (mainVidSlide && allImageSlides.length > 0) {
-      return [mainVidSlide, ...allImageSlides];
-    }
-    if (mainVidSlide) {
-      return [mainVidSlide];
-    }
-    if (allImageSlides.length > 0) {
-      return allImageSlides;
-    }
-
-    // Fallback if nothing set
-    if (data.settings.entranceImageUrl) {
-      return [{
-        id: 'hero-entrance',
-        type: 'image' as const,
-        url: data.settings.entranceImageUrl,
-        title: 'مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-        caption: 'المقر الرئيسي للعمل الحزبي وخدمة أهالي أكتوبر'
-      }];
-    }
-
-    return [];
+    return list;
   }, [
-    data.settings.heroMediaType,
+    data.settings.heroSlides,
     data.settings.heroVideoUrl,
     data.settings.heroPosterUrl,
-    data.settings.heroImages,
-    data.settings.heroSlides,
-    data.settings.entranceImageUrl
+    data.settings.entranceImageUrl,
+    data.settings.officialLogo,
+    data.media
   ]);
 
   // Auto-flip effect every 4.5 seconds
@@ -471,12 +447,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="max-w-6xl mx-auto px-0 sm:px-4 lg:px-6">
             
             {/* Main Video / Slide Carousel Container */}
-            <div className="relative aspect-[16/9] sm:aspect-[21/9] max-h-[560px] w-full overflow-hidden bg-stone-900 sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
+            <div className="relative aspect-[16/9] sm:aspect-[21/9] max-h-[560px] w-full overflow-hidden bg-black sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
               {heroSlides.map((slide, idx) => {
                 const isActive = idx === heroSlideIndex;
-                const videoParsed = slide.type === 'video' ? parseVideoUrl(slide.url) : null;
-                const isEmbed = videoParsed?.type === 'youtube' || videoParsed?.type === 'facebook';
-
                 return (
                   <div
                     key={slide.id || idx}
@@ -485,46 +458,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     }`}
                   >
                     {slide.type === 'video' ? (
-                      isEmbed && videoParsed ? (
-                        <iframe
-                          src={videoParsed.embedUrl + (videoParsed.type === 'youtube' ? '&autoplay=1&mute=1&loop=1' : '')}
-                          title={slide.title || 'فيديو الواجهة'}
-                          className="w-full h-full border-0 bg-stone-950"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                        />
-                      ) : (
-                      <div className="relative w-full h-full">
-                        <video
-                          src={slide.url}
-                          autoPlay
-                          loop
-                          muted={isHeroMuted}
-                          playsInline
-                          preload="auto"
-                          poster={slide.posterUrl || data.settings.heroPosterUrl || undefined}
-                          className="w-full h-full object-cover"
-                        />
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setIsHeroMuted(prev => !prev);
-                          }}
-                          className="absolute top-4 left-4 z-30 bg-stone-950/75 hover:bg-amber-500 hover:text-stone-950 text-white p-2.5 rounded-full backdrop-blur-xs transition-all cursor-pointer border border-white/20 flex items-center gap-1.5 text-xs font-bold shadow-md"
-                          title={isHeroMuted ? 'تشغيل صوت الفيديو' : 'كتم الصوت'}
-                        >
-                          {isHeroMuted ? <VolumeX className="w-4 h-4 text-amber-300" /> : <Volume2 className="w-4 h-4 text-emerald-300" />}
-                          <span className="hidden sm:inline">{isHeroMuted ? 'تشغيل الصوت' : 'كتم الصوت'}</span>
-                        </button>
-                      </div>
-                      )
+                      <video
+                        src={slide.url}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       <img
                         src={slide.url}
                         alt={slide.title || 'فعاليات حزب الجبهة الوطنية'}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget as HTMLImageElement;
+                          if (!target.src.includes('Screenshot_________________Chrome_9f4025ed.jpg')) {
+                            target.src = '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg';
+                          }
+                        }}
                       />
                     )}
                     
@@ -2400,18 +2354,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 )}
 
                 {selectedNews.videoUrl && (
-                  <div className="pt-4 border-t border-stone-100 space-y-2">
-                    <h4 className="font-extrabold text-stone-900 text-xs sm:text-sm flex items-center gap-2">
-                      <Play className="w-4 h-4 text-red-700 fill-current" />
-                      <span>مقطع الفيديو التوثيقي المرافق للخبر:</span>
-                    </h4>
-                    <div className="rounded-2xl overflow-hidden shadow-md">
-                      <VideoPlayer
-                        url={selectedNews.videoUrl}
-                        poster={selectedNews.coverImage}
-                        title={selectedNews.title}
-                      />
-                    </div>
+                  <div className="pt-4 border-t border-stone-100">
+                    <a
+                      href={selectedNews.videoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 px-4 py-2 rounded-lg"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>مشاهدة الفيديو المرفق</span>
+                    </a>
                   </div>
                 )}
 
@@ -2575,23 +2527,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
                 );
               })()}
-
-              {/* Event Video Coverage */}
-              {event.videoUrl && (
-                <div className="pt-3 border-t border-stone-100 space-y-2">
-                  <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
-                    <Play className="w-4 h-4 text-red-700 fill-current" />
-                    <span>مقطع فيديو لتغطية الفعالية</span>
-                  </span>
-                  <div className="max-w-2xl rounded-2xl overflow-hidden shadow-sm">
-                    <VideoPlayer
-                      url={event.videoUrl}
-                      poster={event.coverUrl || event.coverImage}
-                      title={event.title}
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* Share Buttons for Event */}
               <SocialShareButtons

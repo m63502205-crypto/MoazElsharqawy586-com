@@ -253,8 +253,11 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string;
+  heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
   heroPosterUrl?: string;
+  heroImages?: string[];
+  heroDefaultMuted?: boolean;
   heroSlides?: Array<{
     id: string;
     type: 'video' | 'image';
@@ -780,11 +783,16 @@ class DatabaseManager {
   }
 
   private load(): AppDatabase {
+    const backupFile = `${DB_FILE}.bak`;
+    let raw = '';
     try {
       if (fs.existsSync(DB_FILE)) {
-        const raw = fs.readFileSync(DB_FILE, 'utf-8');
+        raw = fs.readFileSync(DB_FILE, 'utf-8');
+      } else if (fs.existsSync(backupFile)) {
+        raw = fs.readFileSync(backupFile, 'utf-8');
+      }
+      if (raw) {
         const parsed = JSON.parse(raw);
-        // Merge with defaults to ensure all required arrays exist
         const initial = getInitialDatabase();
         return {
           ...initial,
@@ -810,10 +818,24 @@ class DatabaseManager {
         };
       }
     } catch (err) {
-      console.error('Error loading database file, falling back to initial data:', err);
+      console.error('Error loading database file:', err);
+      // Try loading from backup
+      if (fs.existsSync(backupFile)) {
+        try {
+          const bakRaw = fs.readFileSync(backupFile, 'utf-8');
+          const parsed = JSON.parse(bakRaw);
+          const initial = getInitialDatabase();
+          return { ...initial, ...parsed };
+        } catch {
+          // ignore
+        }
+      }
     }
     const initial = getInitialDatabase();
-    this.save(initial);
+    // Only save initial if DB_FILE genuinely doesn't exist
+    if (!fs.existsSync(DB_FILE)) {
+      this.save(initial);
+    }
     return initial;
   }
 
@@ -822,8 +844,17 @@ class DatabaseManager {
       this.data = dataToSave;
     }
     try {
+      const backupFile = `${DB_FILE}.bak`;
       const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempPath, JSON.stringify(this.data, null, 2), 'utf-8');
+      const serialized = JSON.stringify(this.data, null, 2);
+      fs.writeFileSync(tempPath, serialized, 'utf-8');
+      if (fs.existsSync(DB_FILE)) {
+        try {
+          fs.copyFileSync(DB_FILE, backupFile);
+        } catch {
+          // ignore
+        }
+      }
       fs.renameSync(tempPath, DB_FILE);
     } catch (err) {
       console.error('Error saving database atomically:', err);

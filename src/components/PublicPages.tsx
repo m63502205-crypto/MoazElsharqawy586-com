@@ -100,15 +100,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // Automated Hero Reel / Slider state ("يقعد يقلب تلقائي")
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
+  const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
 
-  // Construct hero slides
+  // Construct hero slides based on heroMediaType ('video' | 'images' | 'both')
   const heroSlides = React.useMemo(() => {
-    const validCustom = (data.settings.heroSlides || []).filter(
-      s => s && typeof s.url === 'string' && s.url.trim().length > 0
-    );
-    if (validCustom.length > 0) {
-      return validCustom;
-    }
+    const mediaType = data.settings.heroMediaType || 'video';
     const list: Array<{
       id: string;
       type: 'video' | 'image';
@@ -118,63 +114,97 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       caption?: string;
     }> = [];
 
-    if (data.settings.heroVideoUrl) {
+    const mainVideoUrl = data.settings.heroVideoUrl || '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
+    const mainPosterUrl = data.settings.heroPosterUrl || data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+
+    // 1. VIDEO MODE or BOTH: Add verified party video
+    if (mediaType === 'video' || mediaType === 'both') {
       list.push({
         id: 'hero-main-vid',
         type: 'video',
-        url: data.settings.heroVideoUrl,
-        posterUrl: data.settings.heroPosterUrl || data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
-        title: 'فعاليات حزب الجبهة الوطنية الميدانية',
+        url: mainVideoUrl,
+        posterUrl: mainPosterUrl,
+        title: 'مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
         caption: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة'
       });
     }
 
-    list.push({
-      id: 'hero-entrance',
-      type: 'image',
-      url: data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg',
-      title: 'مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-      caption: 'المقر الرئيسي للعمل الحزبي وخدمة أهالي أكتوبر'
-    });
-
-    if (data.media && data.media.length > 0) {
-      data.media.slice(0, 5).forEach((m, idx) => {
-        if (m.url && !list.some(s => s.url === m.url)) {
-          list.push({
-            id: `hero-med-${idx}`,
-            type: m.type === 'video' ? 'video' : 'image',
-            url: m.url,
-            title: m.title || 'أنشطة وفعاليات الحزب',
-            caption: m.albumName || 'أمانة قسم ثالث أكتوبر'
-          });
-        }
-      });
+    // 2. IMAGES MODE or BOTH: Add user-selected/uploaded photos only
+    if (mediaType === 'images' || mediaType === 'both') {
+      if (data.settings.heroImages && data.settings.heroImages.length > 0) {
+        data.settings.heroImages.forEach((imgUrl, idx) => {
+          if (imgUrl) {
+            list.push({
+              id: `hero-img-${idx}`,
+              type: 'image',
+              url: imgUrl,
+              title: `أنشطة ومقر أمانة قسم ثالث أكتوبر (${idx + 1})`,
+              caption: 'حزب الجبهة الوطنية – محافظة الجيزة'
+            });
+          }
+        });
+      }
     }
 
-    list.push({
-      id: 'hero-emblem',
-      type: 'image',
-      url: data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
-      title: 'معاً نبني مستقبلاً مشرقاً لمصر',
-      caption: 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر'
-    });
-
-    return list;
+    // Fallback if empty
+    return list.length > 0 ? list : [
+      {
+        id: 'hero-default-vid',
+        type: 'video',
+        url: mainVideoUrl,
+        posterUrl: mainPosterUrl,
+        title: 'حزب الجبهة الوطنية',
+        caption: 'أمانة قسم ثالث أكتوبر'
+      }
+    ];
   }, [
-    data.settings.heroSlides,
+    data.settings.heroMediaType,
     data.settings.heroVideoUrl,
     data.settings.heroPosterUrl,
-    data.settings.entranceImageUrl,
-    data.settings.officialLogo,
-    data.media
+    data.settings.heroImages,
+    data.settings.officialLogo
   ]);
 
-  // Auto-flip effect every 4.5 seconds
+  // Keep hero video playing with sound open all the time
+  useEffect(() => {
+    const vid = heroVideoRef.current;
+    if (!vid) return;
+
+    const tryPlayWithSound = () => {
+      vid.muted = false;
+      vid.volume = 1;
+      const playPromise = vid.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // If browser blocks unmuted autoplay before first gesture, start playback and unmute immediately on any interaction
+          vid.muted = true;
+          vid.play().catch(() => {});
+          const unlockAudio = () => {
+            vid.muted = false;
+            vid.volume = 1;
+            vid.play().catch(() => {});
+            window.removeEventListener('pointerdown', unlockAudio);
+            window.removeEventListener('touchstart', unlockAudio);
+            window.removeEventListener('click', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+          };
+          window.addEventListener('pointerdown', unlockAudio, { once: true, passive: true });
+          window.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
+          window.addEventListener('click', unlockAudio, { once: true, passive: true });
+          window.addEventListener('keydown', unlockAudio, { once: true, passive: true });
+        });
+      }
+    };
+
+    tryPlayWithSound();
+  }, [heroSlideIndex, heroSlides]);
+
+  // Auto-flip effect every 5 seconds (only when more than 1 slide)
   useEffect(() => {
     if (heroSlides.length <= 1 || isHeroHovered) return;
     const interval = setInterval(() => {
       setHeroSlideIndex(prev => (prev + 1) % heroSlides.length);
-    }, 4500);
+    }, 5000);
     return () => clearInterval(interval);
   }, [heroSlides.length, isHeroHovered]);
 
@@ -459,10 +489,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   >
                     {slide.type === 'video' ? (
                       <video
+                        ref={isActive ? heroVideoRef : undefined}
                         src={slide.url}
                         autoPlay
                         loop
-                        muted
                         playsInline
                         poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                         className="w-full h-full object-cover"
@@ -475,8 +505,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           const target = e.currentTarget as HTMLImageElement;
-                          if (!target.src.includes('Screenshot_________________Chrome_9f4025ed.jpg')) {
-                            target.src = '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg';
+                          if (!target.src.includes('FB_IMG_1793904484101_850eafaf.jpg')) {
+                            target.src = '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
                           }
                         }}
                       />
@@ -648,7 +678,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="overflow-hidden rounded-3xl border-2 border-amber-500/30 shadow-xl bg-stone-950 group">
             <div className="relative aspect-[16/9] sm:aspect-[21/9] w-full overflow-hidden">
               <img
-                src={data.settings.entranceImageUrl || '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg'}
+                src={data.settings.entranceImageUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                 alt="مدخل مقر حزب الجبهة الوطنية"
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
                 referrerPolicy="no-referrer"

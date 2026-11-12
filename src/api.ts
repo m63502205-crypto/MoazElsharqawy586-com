@@ -311,6 +311,13 @@ export const api = {
   deleteAdminUser: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
 
+  // Media Upload (saves base64 to server data/uploads directory and returns URL)
+  uploadMedia: (fileData: string, fileName?: string) =>
+    apiFetch<{ success: boolean; url: string }>('/api/admin/upload', {
+      method: 'POST',
+      body: JSON.stringify({ data: fileData, filename: fileName })
+    }),
+
   // Settings
   updateSettings: (settings: Partial<SiteSettings>) =>
     apiFetch<{ success: boolean; settings: SiteSettings }>('/api/admin/settings', {

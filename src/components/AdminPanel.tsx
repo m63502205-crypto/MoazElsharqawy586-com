@@ -53,6 +53,7 @@ import {
   ArrowRight,
   ExternalLink,
   ChevronLeft,
+  ChevronRight,
   ChevronUp,
   ChevronDown,
   Film,
@@ -214,6 +215,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [newSecVideoTitle, setNewSecVideoTitle] = useState('');
   const [newSecVideoUrl, setNewSecVideoUrl] = useState('');
   const [heroSlidePickerIdx, setHeroSlidePickerIdx] = useState<number | null>(null);
+  const [showHeroVideoPicker, setShowHeroVideoPicker] = useState(false);
+  const [showHeroImagePicker, setShowHeroImagePicker] = useState(false);
+  const [isUploadingHeroMedia, setIsUploadingHeroMedia] = useState(false);
+  const [showAdvancedMapSettings, setShowAdvancedMapSettings] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [adminMediaFilter, setAdminMediaFilter] = useState<'all' | 'special' | 'photo' | 'video'>('all');
 
   // Handle new media created via picker or upload
@@ -3124,15 +3130,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <form
                   onSubmit={async e => {
                     e.preventDefault();
-                    const cleanedLinks = (settings.socialLinks || []).filter(l => l.platform !== 'youtube');
-                    const updated = {
-                      ...settings,
-                      socialLinks: cleanedLinks
-                    };
-                    await api.updateSettings(updated);
-                    loadAdminData();
-                    onRefreshPublicData();
-                    alert('تم حفظ إعدادات المنصة وصفحة فيسبوك بنجاح');
+                    setIsSavingSettings(true);
+                    try {
+                      const cleanedLinks = (settings.socialLinks || []).filter(l => l.platform !== 'youtube');
+                      const updated = {
+                        ...settings,
+                        socialLinks: cleanedLinks
+                      };
+                      await api.updateSettings(updated);
+                      await loadAdminData();
+                      onRefreshPublicData();
+                      alert('تم حفظ وتثبيت إعدادات وهوية المنصة والفيديو والصور بنجاح ✅');
+                    } catch (err: any) {
+                      console.error('Save settings error:', err);
+                      alert(`حدث خطأ أثناء حفظ الإعدادات: ${err.message || 'يرجى المحاولة مجدداً'}`);
+                    } finally {
+                      setIsSavingSettings(false);
+                    }
                   }}
                   className="space-y-6"
                 >
@@ -3225,348 +3239,366 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
 
-                  {/* Video & Media Showcase Section (Matching Video bhaalwataniya.com) */}
-                  <div className="p-5 bg-stone-900 text-white border-2 border-amber-500/40 rounded-3xl space-y-4">
-                    <div className="flex items-center gap-2.5 border-b border-stone-800 pb-3">
-                      <span className="w-8 h-8 rounded-xl bg-amber-500 text-stone-950 flex items-center justify-center font-bold">
-                        <Play className="w-4 h-4 fill-stone-950" />
-                      </span>
-                      <div>
-                        <h3 className="text-sm font-black text-white">
-                          مقطع الفيديو التعريفي وصورة مدخل المقر (Hero Video & Entrance)
-                        </h3>
-                        <p className="text-[11px] text-stone-400">
-                          التحكم في فيديو البانر المتحرك أعلى الموقع وصورة مدخل المقر بالسجادة الحمراء كما بالفيديو المرجعي.
-                        </p>
+                  {/* Video & Media Showcase Section (Matching Video & Multi-photos) */}
+                  <div className="p-5 sm:p-6 bg-stone-900 text-white border-2 border-amber-500/50 rounded-3xl space-y-6 shadow-xl">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-800 pb-4">
+                      <div className="flex items-center gap-3">
+                        <span className="w-10 h-10 rounded-2xl bg-amber-500 text-stone-950 flex items-center justify-center font-black shadow-md">
+                          <Play className="w-5 h-5 fill-stone-950" />
+                        </span>
+                        <div>
+                          <h3 className="text-base font-black text-white flex items-center gap-2">
+                            <span>إعدادات واجهة الموقع: مقطع الفيديو والصور</span>
+                            <span className="text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-md">
+                              مظهر الواجهة
+                            </span>
+                          </h3>
+                          <p className="text-xs text-stone-400 mt-0.5">
+                            التحكم الكامل في ظهور الفيديو التعريفي المستمر، أو ألبوم صور متعددة تقلب تلقائياً، أو كلاهما معاً.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Display Mode Switcher */}
+                      <div className="flex items-center bg-stone-950 p-1.5 rounded-2xl border border-stone-800 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setSettings({ ...settings, heroMediaType: 'video' })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                            (settings.heroMediaType === 'video' || !settings.heroMediaType)
+                              ? 'bg-amber-500 text-stone-950 shadow-md'
+                              : 'text-stone-400 hover:text-white'
+                          }`}
+                        >
+                          <Video className="w-3.5 h-3.5" />
+                          <span>فيديو فقط (مفتوح دائم)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSettings({ ...settings, heroMediaType: 'images' })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                            settings.heroMediaType === 'images'
+                              ? 'bg-amber-500 text-stone-950 shadow-md'
+                              : 'text-stone-400 hover:text-white'
+                          }`}
+                        >
+                          <ImageIcon className="w-3.5 h-3.5" />
+                          <span>ألبوم صور متعددة</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSettings({ ...settings, heroMediaType: 'both' })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                            settings.heroMediaType === 'both'
+                              ? 'bg-amber-500 text-stone-950 shadow-md'
+                              : 'text-stone-400 hover:text-white'
+                          }`}
+                        >
+                          <Film className="w-3.5 h-3.5" />
+                          <span>فيديو + صور معاً</span>
+                        </button>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-amber-300 mb-1">
-                          رابط فيديو البانر الرئيسي (MP4 Video URL)
-                        </label>
-                        <input
-                          type="url"
-                          placeholder="https://.../video.mp4 أو مسار ملف الفيديو"
-                          value={settings.heroVideoUrl || ''}
-                          onChange={e => setSettings({ ...settings, heroVideoUrl: e.target.value })}
-                          className="w-full border border-stone-700 bg-stone-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
-                          dir="ltr"
-                        />
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          يتم تشغيله تلقائياً مع تكرار دائم في أعلى الصفحة الرئيسية كفيديو صامت عالي الدقة.
-                        </p>
-                      </div>
+                    {/* Mode Notice */}
+                    <div className="bg-stone-950/80 border border-stone-800 rounded-2xl p-3 flex items-center justify-between text-xs">
+                      <span className="text-stone-300">
+                        وضع العرض الحالي في الواجهة: <strong className="text-amber-400 font-black">
+                          {settings.heroMediaType === 'images'
+                            ? 'ألبوم صور متعددة تقلب تلقائياً'
+                            : (settings.heroMediaType === 'both'
+                                ? 'عرض الفيديو أولاً ثم ألبوم الصور بالتتابع'
+                                : 'مقطع فيديو الواجهة فقط (مفتوح وشغال دائم بتكرار مستمر)')}
+                        </strong>
+                      </span>
+                    </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-amber-300 mb-1">
-                          صورة غلاف الفيديو (Video Poster)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="/assets/... أو رابط صورة"
-                          value={settings.heroPosterUrl || ''}
-                          onChange={e => setSettings({ ...settings, heroPosterUrl: e.target.value })}
-                          className="w-full border border-stone-700 bg-stone-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
-                          dir="ltr"
-                        />
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <ImageFieldWithPicker
-                          label="صورة مدخل المقر والسجادة الحمراء (Party Entrance Banner)"
-                          value={settings.entranceImageUrl || ''}
-                          onChange={url => setSettings({ ...settings, entranceImageUrl: url })}
-                          media={media}
-                          onMediaCreated={handleMediaCreated}
-                          shape="rounded"
-                          helpText="تظهر أسفل النص التعريفي مباشرة وتفصل بين الرؤية وقسم العضوية كما بالفيديو المرجعي"
-                          pickerTitle="اختيار صورة المقر من المعرض العام"
-                        />
-                      </div>
-
-                      {/* Multi-slide automatic flipper manager */}
-                      <div className="sm:col-span-2 border-t border-stone-800 pt-5 mt-2 space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-stone-900/90 p-4 rounded-2xl border border-stone-800">
-                          <div>
-                            <h4 className="text-sm font-black text-amber-400 flex items-center gap-2">
-                              <Film className="w-4 h-4 text-amber-400" />
-                              <span>إدارة شرائح البانر الرئيسي (صور وفيديوهات تقلب تلقائياً)</span>
+                    {/* VIDEO SECTION (Shown when video or both) */}
+                    {(settings.heroMediaType === 'video' || settings.heroMediaType === 'both' || !settings.heroMediaType) && (
+                      <div className="space-y-4 bg-stone-950/60 p-4 sm:p-5 rounded-2xl border border-stone-800">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-800 pb-3">
+                          <div className="flex items-center gap-2">
+                            <Video className="w-4 h-4 text-amber-400" />
+                            <h4 className="text-sm font-black text-amber-300">
+                              مقطع فيديو الواجهة الرئيسي (Hero Video)
                             </h4>
-                            <p className="text-[11px] text-stone-300 mt-1">
-                              يمكنك إضافة عدة صور وفيديوهات لتعرض وراء بعضها بشكل تلقائي وسلس في أعلى الموقع، مع إمكانية ترتيبها وحذفها واختيارها من المعرض أو رفعها مباشرة.
-                            </p>
                           </div>
-                          
+
                           <div className="flex items-center gap-2 flex-wrap">
-                            <label className="text-xs bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSettings({
+                                  ...settings,
+                                  heroVideoUrl: '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4',
+                                  heroPosterUrl: settings.heroPosterUrl || '',
+                                  heroMediaType: settings.heroMediaType || 'video'
+                                });
+                              }}
+                              className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-black px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>تعيين الفيديو المعتمد للأمانة</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setShowHeroVideoPicker(true)}
+                              className="bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors"
+                            >
+                              <Film className="w-3.5 h-3.5" />
+                              <span>اختيار فيديو من المعرض</span>
+                            </button>
+
+                            <label className="bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors">
                               <Upload className="w-3.5 h-3.5 text-amber-400" />
-                              <span>رفع وسيط من الجهاز</span>
+                              <span>رفع فيديو من الجهاز</span>
                               <input
                                 type="file"
-                                accept="image/*,video/*"
+                                accept="video/*"
                                 className="hidden"
                                 onChange={e => {
                                   const file = e.target.files?.[0];
                                   if (!file) return;
-                                  if (file.size > 25 * 1024 * 1024) {
-                                    alert('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 25 ميجابايت');
-                                    return;
-                                  }
-                                  const isVid = file.type.startsWith('video/');
+                                  setIsUploadingHeroMedia(true);
                                   const reader = new FileReader();
-                                  reader.onload = () => {
-                                    const newSlide = {
-                                      id: `slide-${Date.now()}`,
-                                      type: (isVid ? 'video' : 'image') as 'video' | 'image',
-                                      url: reader.result as string,
-                                      title: file.name.replace(/\.[^/.]+$/, ''),
-                                      caption: 'أمانة قسم ثالث أكتوبر'
-                                    };
-                                    setSettings({
-                                      ...settings,
-                                      heroSlides: [...(settings.heroSlides || []), newSlide]
-                                    });
+                                  reader.onload = async () => {
+                                    try {
+                                      const res = await api.uploadMedia(reader.result as string, file.name);
+                                      setSettings({
+                                        ...settings,
+                                        heroVideoUrl: res.url
+                                      });
+                                      alert('تم رفع وحفظ ملف الفيديو بنجاح على الخادم');
+                                    } catch (err: any) {
+                                      alert(`فشل رفع الفيديو: ${err.message || 'حدث خطأ'}`);
+                                    } finally {
+                                      setIsUploadingHeroMedia(false);
+                                    }
                                   };
                                   reader.readAsDataURL(file);
                                 }}
                               />
                             </label>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newSlide = {
-                                  id: `slide-${Date.now()}`,
-                                  type: 'image' as const,
-                                  url: '',
-                                  title: '',
-                                  caption: ''
-                                };
-                                const updated = [...(settings.heroSlides || []), newSlide];
-                                setSettings({
-                                  ...settings,
-                                  heroSlides: updated
-                                });
-                                // Automatically open media picker for newly added slide
-                                setHeroSlidePickerIdx(updated.length - 1);
-                              }}
-                              className="text-xs bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-stone-950 font-black px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-md active:scale-95"
-                            >
-                              <Plus className="w-4 h-4 text-stone-950" />
-                              <span>إضافة شريحة جديدة</span>
-                            </button>
                           </div>
                         </div>
 
-                        {settings.heroSlides && settings.heroSlides.length > 0 ? (
-                          <div className="space-y-3">
-                            {settings.heroSlides.map((slide, sIdx) => (
+                        {isUploadingHeroMedia && (
+                          <div className="bg-amber-500/20 text-amber-300 border border-amber-500/40 p-3 rounded-xl text-xs flex items-center gap-2 animate-pulse">
+                            <span className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                            <span>جارٍ رفع ملف الفيديو وحفظه في مساحة التخزين بالخادم... يرجى الانتظار</span>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-amber-300 mb-1">
+                              رابط مقطع الفيديو (MP4 URL أو مسار محلي)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4 أو https://..."
+                              value={settings.heroVideoUrl || ''}
+                              onChange={e => setSettings({ ...settings, heroVideoUrl: e.target.value })}
+                              className="w-full border border-stone-700 bg-stone-900 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                              dir="ltr"
+                            />
+                            <p className="text-[10px] text-stone-400 mt-1">
+                              فيديو الأمانة المعتمد: <code className="text-amber-400">/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4</code>
+                            </p>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-amber-300 mb-1">
+                              صورة غلاف الفيديو أثناء التحميل (Video Poster)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="/assets/... أو رابط صورة"
+                              value={settings.heroPosterUrl || ''}
+                              onChange={e => setSettings({ ...settings, heroPosterUrl: e.target.value })}
+                              className="w-full border border-stone-700 bg-stone-900 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          {/* Live Video Preview in Admin */}
+                          {settings.heroVideoUrl && (
+                            <div className="sm:col-span-2 space-y-2">
+                              <label className="block text-xs font-bold text-stone-300">
+                                معاينة الفيديو المباشر والتأكد من الصوت والصورة:
+                              </label>
+                              <div className="relative aspect-video max-h-72 w-full rounded-2xl overflow-hidden bg-black border border-stone-800">
+                                <video
+                                  src={settings.heroVideoUrl}
+                                  controls
+                                  playsInline
+                                  poster={settings.heroPosterUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* MULTI-IMAGES SECTION (Shown when images or both) */}
+                    {(settings.heroMediaType === 'images' || settings.heroMediaType === 'both') && (
+                      <div className="space-y-4 bg-stone-950/60 p-4 sm:p-5 rounded-2xl border border-stone-800">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-800 pb-3">
+                          <div className="flex items-center gap-2">
+                            <ImageIcon className="w-4 h-4 text-amber-400" />
+                            <h4 className="text-sm font-black text-amber-300">
+                              ألبوم صور الواجهة المتعددة (Multi-Photos Slider)
+                            </h4>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+
+                            <button
+                              type="button"
+                              onClick={() => setShowHeroImagePicker(true)}
+                              className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-black px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>إضافة صورة من المعرض</span>
+                            </button>
+
+                            <label className="bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors">
+                              <Upload className="w-3.5 h-3.5 text-amber-400" />
+                              <span>رفع صورة من الجهاز</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={e => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const reader = new FileReader();
+                                  reader.onload = async () => {
+                                    try {
+                                      const res = await api.uploadMedia(reader.result as string, file.name);
+                                      const current = settings.heroImages || [];
+                                      setSettings({
+                                        ...settings,
+                                        heroImages: [...current, res.url]
+                                      });
+                                    } catch (err: any) {
+                                      alert(`فشل رفع الصورة: ${err.message || 'حدث خطأ'}`);
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {settings.heroImages && settings.heroImages.length > 0 ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {settings.heroImages.map((imgUrl, imgIdx) => (
                               <div
-                                key={slide.id || sIdx}
-                                className="p-4 bg-stone-950 border border-stone-800 rounded-2xl space-y-3 text-xs shadow-md hover:border-amber-500/40 transition-colors"
+                                key={imgIdx}
+                                className="bg-stone-900 border border-stone-800 rounded-xl p-2.5 space-y-2 relative group"
                               >
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-800/80 pb-2.5">
-                                  <div className="flex items-center gap-2.5">
-                                    <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-300 flex items-center justify-center font-black text-xs border border-amber-500/30">
-                                      {sIdx + 1}
-                                    </span>
-                                    <span className="font-bold text-stone-200">
-                                      {slide.title || `شريحة ${sIdx + 1}`}
-                                    </span>
-                                    <select
-                                      value={slide.type}
-                                      onChange={e => {
-                                        const updated = [...(settings.heroSlides || [])];
-                                        updated[sIdx] = { ...slide, type: e.target.value as 'video' | 'image' };
-                                        setSettings({ ...settings, heroSlides: updated });
-                                      }}
-                                      className="bg-stone-900 border border-stone-700 text-amber-300 rounded-lg px-2.5 py-1 text-xs font-bold"
-                                    >
-                                      <option value="image">صورة (Image)</option>
-                                      <option value="video">فيديو (Video MP4)</option>
-                                    </select>
-                                  </div>
-
-                                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
-                                    {/* Reorder Up */}
-                                    <button
-                                      type="button"
-                                      disabled={sIdx === 0}
-                                      onClick={() => {
-                                        if (sIdx <= 0 || !settings.heroSlides) return;
-                                        const updated = [...settings.heroSlides];
-                                        const temp = updated[sIdx];
-                                        updated[sIdx] = updated[sIdx - 1];
-                                        updated[sIdx - 1] = temp;
-                                        setSettings({ ...settings, heroSlides: updated });
-                                      }}
-                                      className={`p-1.5 rounded-lg border border-stone-700 text-stone-300 hover:text-white hover:bg-stone-800 cursor-pointer ${sIdx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                                      title="تحريك لأعلى"
-                                    >
-                                      <ChevronUp className="w-4 h-4" />
-                                    </button>
-
-                                    {/* Reorder Down */}
-                                    <button
-                                      type="button"
-                                      disabled={sIdx === (settings.heroSlides?.length || 0) - 1}
-                                      onClick={() => {
-                                        if (!settings.heroSlides || sIdx >= settings.heroSlides.length - 1) return;
-                                        const updated = [...settings.heroSlides];
-                                        const temp = updated[sIdx];
-                                        updated[sIdx] = updated[sIdx + 1];
-                                        updated[sIdx + 1] = temp;
-                                        setSettings({ ...settings, heroSlides: updated });
-                                      }}
-                                      className={`p-1.5 rounded-lg border border-stone-700 text-stone-300 hover:text-white hover:bg-stone-800 cursor-pointer ${sIdx === (settings.heroSlides?.length || 0) - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                                      title="تحريك لأسفل"
-                                    >
-                                      <ChevronDown className="w-4 h-4" />
-                                    </button>
-
-                                    {/* Delete Slide */}
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (confirm(`هل أنت متأكد من حذف هذه الشريحة؟`)) {
-                                          const updated = (settings.heroSlides || []).filter((_, i) => i !== sIdx);
-                                          setSettings({ ...settings, heroSlides: updated });
-                                        }
-                                      }}
-                                      className="text-red-400 hover:text-red-300 hover:bg-red-950/40 p-1.5 rounded-lg border border-red-900/40 cursor-pointer transition-colors"
-                                      title="حذف الشريحة"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </div>
+                                <div className="aspect-video w-full rounded-lg overflow-hidden bg-black relative">
+                                  <img
+                                    src={imgUrl}
+                                    alt={`صورة ${imgIdx + 1}`}
+                                    className="w-full h-full object-cover"
+                                  />
+                                  <span className="absolute top-1.5 right-1.5 bg-black/70 text-amber-400 text-[10px] font-black px-1.5 py-0.5 rounded-md">
+                                    #{imgIdx + 1}
+                                  </span>
                                 </div>
 
-                                {/* Slide Content & Preview */}
-                                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                                  {/* Thumbnail Preview */}
-                                  <div className="sm:col-span-3">
-                                    <div className="aspect-video w-full rounded-xl bg-stone-900 border border-stone-800 overflow-hidden relative flex items-center justify-center">
-                                      {slide.url ? (
-                                        slide.type === 'video' ? (
-                                          <div className="w-full h-full bg-black flex flex-col items-center justify-center text-amber-400 gap-1 p-2 text-center">
-                                            <Video className="w-6 h-6 text-red-500" />
-                                            <span className="text-[10px] font-mono text-stone-300 line-clamp-1">مقطع فيديو</span>
-                                          </div>
-                                        ) : (
-                                          <img
-                                            src={slide.url}
-                                            alt=""
-                                            className="w-full h-full object-cover"
-                                            onError={e => {
-                                              (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/Screenshot_________________Chrome_9f4025ed.jpg';
-                                            }}
-                                          />
-                                        )
-                                      ) : (
-                                        <div className="text-stone-600 flex flex-col items-center justify-center p-2 text-center">
-                                          <ImageIcon className="w-6 h-6 mb-1 opacity-50" />
-                                          <span className="text-[10px]">لا يوجد وسيط</span>
-                                        </div>
-                                      )}
-                                    </div>
+                                <input
+                                  type="text"
+                                  value={imgUrl}
+                                  onChange={e => {
+                                    const updated = [...(settings.heroImages || [])];
+                                    updated[imgIdx] = e.target.value;
+                                    setSettings({ ...settings, heroImages: updated });
+                                  }}
+                                  className="w-full bg-stone-950 border border-stone-800 text-[11px] font-mono text-stone-200 rounded-lg px-2 py-1"
+                                  dir="ltr"
+                                />
+
+                                <div className="flex items-center justify-between pt-1">
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={imgIdx === 0}
+                                      onClick={() => {
+                                        if (imgIdx <= 0 || !settings.heroImages) return;
+                                        const updated = [...settings.heroImages];
+                                        const tmp = updated[imgIdx];
+                                        updated[imgIdx] = updated[imgIdx - 1];
+                                        updated[imgIdx - 1] = tmp;
+                                        setSettings({ ...settings, heroImages: updated });
+                                      }}
+                                      className="p-1 text-stone-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                                      title="تقديم"
+                                    >
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      disabled={imgIdx === (settings.heroImages?.length || 0) - 1}
+                                      onClick={() => {
+                                        if (!settings.heroImages || imgIdx >= settings.heroImages.length - 1) return;
+                                        const updated = [...settings.heroImages];
+                                        const tmp = updated[imgIdx];
+                                        updated[imgIdx] = updated[imgIdx + 1];
+                                        updated[imgIdx + 1] = tmp;
+                                        setSettings({ ...settings, heroImages: updated });
+                                      }}
+                                      className="p-1 text-stone-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                                      title="تأخير"
+                                    >
+                                      <ChevronLeft className="w-3.5 h-3.5" />
+                                    </button>
                                   </div>
 
-                                  {/* Inputs and actions */}
-                                  <div className="sm:col-span-9 space-y-2">
-                                    <div className="flex flex-col sm:flex-row gap-2">
-                                      <input
-                                        type="text"
-                                        placeholder="رابط الصورة أو مسار الفيديو (URL)"
-                                        value={slide.url}
-                                        onChange={e => {
-                                          const updated = [...(settings.heroSlides || [])];
-                                          updated[sIdx] = { ...slide, url: e.target.value };
-                                          setSettings({ ...settings, heroSlides: updated });
-                                        }}
-                                        className="flex-1 border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-2 font-mono text-xs focus:border-amber-500 focus:outline-none"
-                                        dir="ltr"
-                                      />
-
-                                      <div className="flex items-center gap-1.5 shrink-0">
-                                        <button
-                                          type="button"
-                                          onClick={() => setHeroSlidePickerIdx(sIdx)}
-                                          className="bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-colors"
-                                        >
-                                          <ImageIcon className="w-3.5 h-3.5" />
-                                          <span>من المعرض</span>
-                                        </button>
-
-                                        <label className="bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1 cursor-pointer transition-colors">
-                                          <Upload className="w-3.5 h-3.5" />
-                                          <span>رفع</span>
-                                          <input
-                                            type="file"
-                                            accept="image/*,video/*"
-                                            className="hidden"
-                                            onChange={e => {
-                                              const file = e.target.files?.[0];
-                                              if (!file) return;
-                                              if (file.size > 25 * 1024 * 1024) {
-                                                alert('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 25 ميجابايت');
-                                                return;
-                                              }
-                                              const isVid = file.type.startsWith('video/');
-                                              const reader = new FileReader();
-                                              reader.onload = () => {
-                                                const updated = [...(settings.heroSlides || [])];
-                                                updated[sIdx] = {
-                                                  ...slide,
-                                                  url: reader.result as string,
-                                                  type: isVid ? 'video' : 'image',
-                                                  title: slide.title || file.name.replace(/\.[^/.]+$/, '')
-                                                };
-                                                setSettings({ ...settings, heroSlides: updated });
-                                              };
-                                              reader.readAsDataURL(file);
-                                            }}
-                                          />
-                                        </label>
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                      <input
-                                        type="text"
-                                        placeholder="عنوان الشريحة الرئيسي (يظهر فوق الوسيط)"
-                                        value={slide.title || ''}
-                                        onChange={e => {
-                                          const updated = [...(settings.heroSlides || [])];
-                                          updated[sIdx] = { ...slide, title: e.target.value };
-                                          setSettings({ ...settings, heroSlides: updated });
-                                        }}
-                                        className="border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-1.5 text-xs focus:border-amber-500 focus:outline-none"
-                                      />
-                                      <input
-                                        type="text"
-                                        placeholder="وصف أو شارة الشريحة (اختياري)"
-                                        value={slide.caption || ''}
-                                        onChange={e => {
-                                          const updated = [...(settings.heroSlides || [])];
-                                          updated[sIdx] = { ...slide, caption: e.target.value };
-                                          setSettings({ ...settings, heroSlides: updated });
-                                        }}
-                                        className="border border-stone-800 bg-stone-900 text-white rounded-xl px-3 py-1.5 text-xs focus:border-amber-500 focus:outline-none"
-                                      />
-                                    </div>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = (settings.heroImages || []).filter((_, i) => i !== imgIdx);
+                                      setSettings({ ...settings, heroImages: updated });
+                                    }}
+                                    className="text-red-400 hover:text-red-300 text-xs p-1 cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>حذف</span>
+                                  </button>
                                 </div>
                               </div>
                             ))}
                           </div>
                         ) : (
                           <div className="p-6 text-center border border-dashed border-stone-800 rounded-2xl bg-stone-950/60 text-stone-400 text-xs">
-                            لا توجد شرائح مخصصة حالياً. اضغط على «إضافة شريحة جديدة» أو «رفع وسيط» لإضافة صور وفيديوهات للبانر.
+                            لا توجد صور في ألبوم الواجهة حالياً. اضغط على «إضافة صورة من المعرض» أو «رفع صورة» لإضافة أكثر من صورة للواجهة.
                           </div>
                         )}
                       </div>
+                    )}
+
+                    {/* Entrance Image */}
+                    <div className="pt-2 border-t border-stone-800">
+                      <ImageFieldWithPicker
+                        label="صورة مدخل المقر والسجادة الحمراء (Party Entrance Banner)"
+                        value={settings.entranceImageUrl || ''}
+                        onChange={url => setSettings({ ...settings, entranceImageUrl: url })}
+                        media={media}
+                        onMediaCreated={handleMediaCreated}
+                        shape="rounded"
+                        helpText="تظهر أسفل النص التعريفي مباشرة وتفصل بين الرؤية وقسم العضوية كما بالفيديو المرجعي"
+                        pickerTitle="اختيار صورة المقر من المعرض العام"
+                      />
                     </div>
                   </div>
 
@@ -4122,7 +4154,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       <div>
                         <div className="flex items-center justify-between mb-1">
                           <label className="block text-xs font-bold text-stone-700">
-                            رابط اللوكيشن على خرائط جوجل (Google Maps Link)
+                            رابط موقع المقر على خرائط جوجل (ضع الرابط فقط وسيتكفل النظام بالباقي)
                           </label>
                           {settings.locationUrl && (
                             <a
@@ -4137,61 +4169,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           )}
                         </div>
                         <input
-                          type="url"
-                          placeholder="https://maps.app.goo.gl/... أو https://maps.google.com/?q=..."
+                          type="text"
+                          placeholder="الصق رابط اللوكيشن هنا مباشرة مثل: https://maps.app.goo.gl/... أو اسم المقر"
                           value={settings.locationUrl || ''}
-                          onChange={e => setSettings({ ...settings, locationUrl: e.target.value })}
-                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
-                          dir="ltr"
-                        />
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          الرابط الذي يفتح تطبيق خرائط جوجل مباشرة عند ضغط المواطن على "فتح اللوكيشن".
-                        </p>
-                      </div>
-
-                      {/* Embed URL */}
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 mb-1">
-                          رابط تضمين الخريطة (Google Maps Embed URL)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="https://www.google.com/maps/embed?pb=..."
-                          value={settings.mapEmbedUrl || ''}
                           onChange={e => {
-                            let val = e.target.value;
+                            let raw = e.target.value;
                             // If user pasted an iframe tag, extract the src
-                            const match = val.match(/src=["'](.*?)["']/);
-                            if (match && match[1]) {
-                              val = match[1];
+                            const iframeMatch = raw.match(/src=["'](.*?)["']/);
+                            if (iframeMatch && iframeMatch[1]) {
+                              raw = iframeMatch[1];
                             }
-                            setSettings({ ...settings, mapEmbedUrl: val });
+                            let embed = raw;
+                            if (raw.includes('/maps/embed') || raw.includes('output=embed')) {
+                              embed = raw;
+                            } else if (raw.trim()) {
+                              embed = `https://maps.google.com/maps?q=${encodeURIComponent(raw.trim())}&t=&z=16&ie=UTF8&iwloc=B&output=embed`;
+                            }
+                            setSettings({
+                              ...settings,
+                              locationUrl: raw,
+                              mapEmbedUrl: embed
+                            });
                           }}
-                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
+                          className="w-full border-2 border-stone-300 focus:border-red-600 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
                           dir="ltr"
                         />
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          رابط iframe التضميني، أو يمكنك لصق كود التضمين بالكامل وسيتم استخراج الرابط تلقائياً.
+                        <p className="text-[10px] text-stone-500 mt-1">
+                          يكفي لصق الرابط المختصر أو رابط خرائط جوجل وسيقوم النظام بتجهيز الخريطة التفاعلية تلقائياً.
                         </p>
-                      </div>
-
-                      {/* Coordinates */}
-                      <div>
-                        <label className="block text-xs font-bold text-stone-700 mb-1">
-                          إحداثيات الموقع (خط العرض وخط الطول)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="29.980836, 30.840788"
-                          value={settings.coordinates || ''}
-                          onChange={e => setSettings({ ...settings, coordinates: e.target.value })}
-                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono text-left bg-white"
-                          dir="ltr"
-                        />
                       </div>
 
                       {/* Quick preset helper */}
-                      <div className="flex items-end">
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -4203,12 +4212,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               coordinates: '29.980836, 30.840788'
                             });
                           }}
-                          className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors w-full flex items-center justify-center gap-1.5 shadow-xs"
+                          className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors flex-1 flex items-center justify-center gap-1.5 shadow-xs"
                         >
                           <MapPin className="w-4 h-4 text-amber-300" />
                           <span>تثبيت لوكيشن مقر الحزب المعتمد (قسم ثالث أكتوبر)</span>
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowAdvancedMapSettings(!showAdvancedMapSettings)}
+                          className="bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold px-3 py-2.5 rounded-xl border border-stone-300 cursor-pointer transition-colors"
+                        >
+                          {showAdvancedMapSettings ? 'إخفاء الإعدادات المتقدمة' : 'خيارات متقدمة'}
+                        </button>
                       </div>
+
+                      {/* Advanced Map Settings (Collapsible) */}
+                      {showAdvancedMapSettings && (
+                        <div className="sm:col-span-2 p-3 bg-stone-50 border border-stone-200 rounded-2xl space-y-3">
+                          <div>
+                            <label className="block text-xs font-bold text-stone-700 mb-1">
+                              رابط التضمين اليدوي (Embed URL)
+                            </label>
+                            <input
+                              type="text"
+                              value={settings.mapEmbedUrl || ''}
+                              onChange={e => setSettings({ ...settings, mapEmbedUrl: e.target.value })}
+                              className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs font-mono text-left bg-white"
+                              dir="ltr"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-stone-700 mb-1">
+                              إحداثيات الموقع (Coordinates)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="29.980836, 30.840788"
+                              value={settings.coordinates || ''}
+                              onChange={e => setSettings({ ...settings, coordinates: e.target.value })}
+                              className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs font-mono text-left bg-white"
+                              dir="ltr"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Live Map Preview inside Admin Panel */}
@@ -5904,6 +5952,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
           media={media}
           onMediaCreated={handleMediaCreated}
           title="اختيار وسيط لشريحة البانر الرئيسي من المعرض"
+        />
+      )}
+
+      {/* HERO MAIN VIDEO PICKER MODAL */}
+      {showHeroVideoPicker && settings && (
+        <MediaPickerModal
+          isOpen={true}
+          onClose={() => setShowHeroVideoPicker(false)}
+          onSelect={(selectedUrls) => {
+            const url = selectedUrls[0] || '';
+            if (url) {
+              setSettings({ ...settings, heroVideoUrl: url });
+            }
+            setShowHeroVideoPicker(false);
+          }}
+          media={media.filter(m => m.type === 'video')}
+          onMediaCreated={handleMediaCreated}
+          title="اختيار فيديو الواجهة الرئيسية من المعرض العام"
+        />
+      )}
+
+      {/* HERO MULTI-IMAGES PICKER MODAL */}
+      {showHeroImagePicker && settings && (
+        <MediaPickerModal
+          isOpen={true}
+          onClose={() => setShowHeroImagePicker(false)}
+          onSelect={(selectedUrls) => {
+            const url = selectedUrls[0] || '';
+            if (url) {
+              const current = settings.heroImages || [];
+              setSettings({ ...settings, heroImages: [...current, url] });
+            }
+            setShowHeroImagePicker(false);
+          }}
+          media={media.filter(m => m.type === 'photo')}
+          onMediaCreated={handleMediaCreated}
+          title="اختيار صورة لألبوم الواجهة الرئيسية من المعرض العام"
         />
       )}
 

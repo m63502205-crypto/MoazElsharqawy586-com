@@ -10,8 +10,46 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Enable large JSON payloads for documents/images
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+
+// Static uploads directory
+const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// Helper to persist base64 data URLs to disk in data/uploads
+export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): string {
+  if (!dataUrlOrUrl || typeof dataUrlOrUrl !== 'string') return dataUrlOrUrl;
+  if (!dataUrlOrUrl.startsWith('data:')) return dataUrlOrUrl;
+
+  try {
+    const match = dataUrlOrUrl.match(/^data:([a-zA-Z0-9/+-]+);base64,(.+)$/);
+    if (!match) return dataUrlOrUrl;
+
+    const mime = match[1];
+    const base64Data = match[2];
+    let ext = 'bin';
+    if (mime.includes('jpeg') || mime.includes('jpg')) ext = 'jpg';
+    else if (mime.includes('png')) ext = 'png';
+    else if (mime.includes('webp')) ext = 'webp';
+    else if (mime.includes('gif')) ext = 'gif';
+    else if (mime.includes('mp4')) ext = 'mp4';
+    else if (mime.includes('webm')) ext = 'webm';
+    else if (mime.includes('ogg')) ext = 'ogg';
+    else if (mime.includes('quicktime')) ext = 'mov';
+
+    const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+    const filePath = path.join(uploadsDir, filename);
+    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+    return `/uploads/${filename}`;
+  } catch (err) {
+    console.error('Error persisting data URL to disk:', err);
+    return dataUrlOrUrl;
+  }
+}
 
 // In-memory session token store (token -> AdminUser)
 const sessionStore = new Map<string, { admin: AdminUser; expiresAt: number }>();
@@ -1738,13 +1776,41 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
   res.json({ success: true });
 });
 
+// Upload API
+app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) => {
+  const { data: fileData } = req.body;
+  if (!fileData) {
+    return res.status(400).json({ error: 'لم يتم إرسال أي ملف' });
+  }
+  const url = persistDataUrlIfAny(fileData, 'upload');
+  res.json({ success: true, url });
+});
+
 // --- SETTINGS MANAGEMENT ---
 app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'), (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
+  
+  const body = { ...req.body };
+  // Sanitize any large base64 media payloads to disk files
+  if (body.officialLogo) body.officialLogo = persistDataUrlIfAny(body.officialLogo, 'logo');
+  if (body.heroVideoUrl) body.heroVideoUrl = persistDataUrlIfAny(body.heroVideoUrl, 'hero_vid');
+  if (body.heroPosterUrl) body.heroPosterUrl = persistDataUrlIfAny(body.heroPosterUrl, 'hero_poster');
+  if (body.entranceImageUrl) body.entranceImageUrl = persistDataUrlIfAny(body.entranceImageUrl, 'entrance');
+  if (Array.isArray(body.heroImages)) {
+    body.heroImages = body.heroImages.map((img: string) => persistDataUrlIfAny(img, 'hero_img'));
+  }
+  if (Array.isArray(body.heroSlides)) {
+    body.heroSlides = body.heroSlides.map((slide: any) => ({
+      ...slide,
+      url: persistDataUrlIfAny(slide.url, 'slide'),
+      posterUrl: slide.posterUrl ? persistDataUrlIfAny(slide.posterUrl, 'slide_poster') : undefined
+    }));
+  }
+
   data.settings = {
     ...data.settings,
-    ...req.body
+    ...body
   };
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل للمنصة');

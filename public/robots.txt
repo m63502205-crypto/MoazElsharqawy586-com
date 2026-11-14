@@ -1,6 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /admin
 Disallow: /api/admin/
-Disallow: /#admin
 
-Sitemap: https://algabhaalwataniya-oct3.org/sitemap.xml
+Sitemap: https://nfp-october3.ai.studio/sitemap.xml

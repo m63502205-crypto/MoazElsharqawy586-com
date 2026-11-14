@@ -24,6 +24,15 @@ export interface SecretariatLeader {
   createdAt: string;
 }
 
+export interface AssistantSecretaryEntry {
+  id: string;
+  name: string;
+  title?: string;
+  photoUrl?: string;
+  bio?: string;
+  phone?: string;
+}
+
 export interface SpecializedSecretariat {
   id: string;
   name: string;
@@ -41,6 +50,7 @@ export interface SpecializedSecretariat {
   assistantSecretaryPhotoUrl?: string;
   assistantSecretaryBio?: string;
   assistantSecretaryPhone?: string;
+  assistantSecretaries?: AssistantSecretaryEntry[];
   galleryImages?: string[];
   videos?: Array<{ title: string; url: string; thumbnail?: string }>;
   isActive: boolean;
@@ -361,6 +371,7 @@ export interface SiteSettings {
   aboutSecretariat: string;
   vision: string;
   principles: string[];
+  secretariatsVersion?: number;
 }
 
 export interface PublicPortalData {

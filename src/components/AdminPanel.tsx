@@ -4,6 +4,7 @@ import {
   PartyLeader,
   SecretariatLeader,
   SpecializedSecretariat,
+  AssistantSecretaryEntry,
   SecretariatMember,
   Initiative,
   NewsItem,
@@ -1010,7 +1011,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             </td>
                             <td className="p-3 font-bold text-stone-900">{l.name}</td>
                             <td className="p-3 font-bold text-red-700">{l.title}</td>
-                            <td className="p-3 font-mono">{l.appointmentDate}</td>
+                            <td className="p-3 font-mono">{l.appointmentDate || '—'}</td>
                             <td className="p-3 font-mono">{l.sortOrder}</td>
                             <td className="p-3">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${l.isVisible ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-600'}`}>
@@ -1117,7 +1118,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
-                      setEditingSecretariat({ isActive: true, sortOrder: secretariats.length + 1, duties: [], goals: [] });
+                      setEditingSecretariat({ isActive: true, sortOrder: secretariats.length + 1, duties: [], goals: [], assistantSecretaries: [] });
                       setShowSecretariatModal(true);
                     }}
                     className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
@@ -1176,32 +1177,121 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               </div>
                             </div>
 
-                            {/* Assistant Secretary */}
-                            <div className="bg-white p-3.5 rounded-2xl border border-stone-200 flex items-center gap-3">
-                              {sec.assistantSecretaryPhotoUrl ? (
-                                <img
-                                  src={sec.assistantSecretaryPhotoUrl}
-                                  alt={sec.assistantSecretaryName || 'الأمين المساعد'}
-                                  className="w-12 h-12 rounded-full object-cover border-2 border-amber-500 bg-stone-100 shrink-0"
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center font-bold text-xs border border-amber-200 shrink-0">
-                                  مساعد
+                            {/* Assistant Secretaries (Supports Multiple) */}
+                            {(() => {
+                              const fromField: AssistantSecretaryEntry[] =
+                                sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                                  ? sec.assistantSecretaries
+                                  : sec.assistantSecretaryName
+                                  ? [{
+                                      id: 'asst-primary',
+                                      name: sec.assistantSecretaryName,
+                                      title: 'الأمين المساعد للأمانة',
+                                      photoUrl: sec.assistantSecretaryPhotoUrl || '',
+                                      bio: sec.assistantSecretaryBio || '',
+                                      phone: sec.assistantSecretaryPhone || ''
+                                    }]
+                                  : [];
+                              const fromMembers: AssistantSecretaryEntry[] = secretariatMembers
+                                .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary')
+                                .filter(m => !fromField.some(f => f.name.trim() === m.name.trim()))
+                                .map(m => ({
+                                  id: m.id,
+                                  name: m.name,
+                                  title: m.bureauTitle || m.role || 'الأمين المساعد للأمانة',
+                                  photoUrl: m.photoUrl || '',
+                                  bio: m.notes || '',
+                                  phone: m.phone || ''
+                                }));
+                              const allAssistants = [...fromField, ...fromMembers];
+
+                              return (
+                                <div className="bg-white p-3.5 rounded-2xl border border-stone-200 space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-amber-700 font-black">
+                                      الأمناء المساعدون ({allAssistants.length}):
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const initialAssistants: AssistantSecretaryEntry[] =
+                                          sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                                            ? sec.assistantSecretaries
+                                            : sec.assistantSecretaryName
+                                            ? [{
+                                                id: 'asst-1',
+                                                name: sec.assistantSecretaryName,
+                                                title: 'الأمين المساعد للأمانة',
+                                                photoUrl: sec.assistantSecretaryPhotoUrl || '',
+                                                bio: sec.assistantSecretaryBio || '',
+                                                phone: sec.assistantSecretaryPhone || ''
+                                              }]
+                                            : [];
+                                        setEditingSecretariat({
+                                          ...sec,
+                                          assistantSecretaries: [
+                                            ...initialAssistants,
+                                            {
+                                              id: 'asst-' + Date.now(),
+                                              name: '',
+                                              title: 'الأمين المساعد للأمانة',
+                                              photoUrl: '',
+                                              bio: '',
+                                              phone: ''
+                                            }
+                                          ]
+                                        });
+                                        setShowSecretariatModal(true);
+                                      }}
+                                      className="text-[10px] font-bold text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-lg cursor-pointer transition-colors"
+                                    >
+                                      + إضافة أمين مساعد
+                                    </button>
+                                  </div>
+
+                                  {allAssistants.length === 0 ? (
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="w-10 h-10 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center font-bold text-[10px] border border-amber-200 shrink-0">
+                                        مساعد
+                                      </div>
+                                      <span className="text-xs font-bold text-stone-400">غير معين</span>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2 max-h-36 overflow-y-auto pr-0.5">
+                                      {allAssistants.map((asst, idx) => (
+                                        <div key={asst.id || idx} className="flex items-center gap-2.5 bg-stone-50/80 p-1.5 rounded-xl border border-stone-100">
+                                          {asst.photoUrl ? (
+                                            <img
+                                              src={asst.photoUrl}
+                                              alt={asst.name || 'الأمين المساعد'}
+                                              className="w-9 h-9 rounded-full object-cover border-2 border-amber-500 bg-stone-100 shrink-0"
+                                              referrerPolicy="no-referrer"
+                                            />
+                                          ) : (
+                                            <div className="w-9 h-9 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center font-bold text-[10px] border border-amber-200 shrink-0">
+                                              {asst.name ? asst.name.substring(0, 1) : 'م'}
+                                            </div>
+                                          )}
+                                          <div className="min-w-0 flex-1">
+                                            <h4 className="font-bold text-stone-900 text-xs truncate">
+                                              {asst.name || 'غير معين'}
+                                            </h4>
+                                            <div className="flex items-center gap-2 text-[10px] text-stone-500">
+                                              {asst.title && asst.title !== 'الأمين المساعد للأمانة' && (
+                                                <span className="text-amber-700 font-semibold truncate">{asst.title}</span>
+                                              )}
+                                              {asst.phone && (
+                                                <span className="font-mono truncate" dir="ltr">{asst.phone}</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                              <div className="min-w-0 flex-1">
-                                <span className="text-[10px] text-amber-700 font-black block">الأمين المساعد:</span>
-                                <h4 className="font-bold text-stone-900 text-xs truncate">
-                                  {sec.assistantSecretaryName || 'غير معين'}
-                                </h4>
-                                {sec.assistantSecretaryPhone && (
-                                  <span className="text-[10px] text-stone-500 font-mono block truncate" dir="ltr">
-                                    {sec.assistantSecretaryPhone}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Bureau Members Section for this Secretariat */}
@@ -1221,7 +1311,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                     tier: 'bureau',
                                     role: 'عضو هيئة مكتب',
                                     bureauTitle: '',
-                                    assignmentDate: new Date().toISOString().substring(0, 10)
+                                    assignmentDate: ''
                                   });
                                   setShowSecMemberModal(true);
                                 }}
@@ -1304,7 +1394,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => {
-                                setEditingSecretariat(sec);
+                                const initialAssistants: AssistantSecretaryEntry[] =
+                                  sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                                    ? sec.assistantSecretaries
+                                    : sec.assistantSecretaryName
+                                    ? [{
+                                        id: 'asst-1',
+                                        name: sec.assistantSecretaryName,
+                                        title: 'الأمين المساعد للأمانة',
+                                        photoUrl: sec.assistantSecretaryPhotoUrl || '',
+                                        bio: sec.assistantSecretaryBio || '',
+                                        phone: sec.assistantSecretaryPhone || ''
+                                      }]
+                                    : [];
+                                setEditingSecretariat({
+                                  ...sec,
+                                  assistantSecretaries: initialAssistants
+                                });
                                 setShowSecretariatModal(true);
                               }}
                               className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1.5 transition-colors shadow-xs"
@@ -1412,7 +1518,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         tier: 'bureau',
                         role: 'عضو هيئة مكتب',
                         bureauTitle: 'مقرر هيئة المكتب',
-                        assignmentDate: new Date().toISOString().substring(0, 10)
+                        assignmentDate: ''
                       });
                       setShowSecMemberModal(true);
                     }}
@@ -1434,7 +1540,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           tier: 'bureau',
                           role: 'عضو هيئة مكتب',
                           bureauTitle: 'مقرر هيئة المكتب',
-                          assignmentDate: new Date().toISOString().substring(0, 10)
+                          assignmentDate: ''
                         });
                         setShowSecMemberModal(true);
                       }}
@@ -1496,7 +1602,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                 {m.bureauTitle || m.role}
                               </td>
                               <td className="p-3 font-mono text-stone-600" dir="ltr">{m.phone || '-'}</td>
-                              <td className="p-3 font-mono text-stone-500">{m.assignmentDate}</td>
+                              <td className="p-3 font-mono text-stone-500">{m.assignmentDate || '—'}</td>
                               <td className="p-3">
                                 <div className="flex items-center gap-1.5">
                                   <button
@@ -1563,7 +1669,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         setEditingSecMember({
                           secretariatId: secretariats[0]?.id || '',
                           role: 'member',
-                          assignmentDate: new Date().toISOString().split('T')[0]
+                          assignmentDate: ''
                         });
                         setShowSecMemberModal(true);
                       }}
@@ -4780,6 +4886,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   {/* Convert to Member button */}
                   <button
                     onClick={() => {
+                      const matchedSec = secretariats.find(s =>
+                        (selectedApp.interests || '').includes(s.name)
+                      );
+                      if (matchedSec) {
+                        setConvertForm(prev => ({ ...prev, secretariatId: matchedSec.id }));
+                      }
                       setConvertingAppId(selectedApp.id);
                     }}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-2.5 rounded-xl cursor-pointer flex items-center gap-1.5"
@@ -5249,7 +5361,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">تاريخ تولي المسؤولية</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-stone-700">تاريخ تولي المسؤولية <span className="text-[10px] font-medium text-stone-400">(اختياري)</span></label>
+                  {editingSecLeader.appointmentDate && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingSecLeader({ ...editingSecLeader, appointmentDate: '' })}
+                      className="text-[10px] font-bold text-red-600 hover:underline cursor-pointer"
+                    >
+                      مسح التاريخ
+                    </button>
+                  )}
+                </div>
                 <input
                   type="date"
                   value={editingSecLeader.appointmentDate || ''}
@@ -5352,7 +5475,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <input
                   type="text"
                   required
-                  placeholder="مثال: أمانة إدارة الموارد البشرية"
+                  placeholder="مثال: أمانة التنظيم أو أمانة التواصل الجماهيري"
                   value={editingSecretariat.name || ''}
                   onChange={e => setEditingSecretariat({ ...editingSecretariat, name: e.target.value })}
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-bold"
@@ -5422,58 +5545,168 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              {/* Assistant Secretary Section */}
-              <div className="p-3.5 bg-stone-50 border border-stone-200 rounded-2xl space-y-3">
-                <div className="flex items-center gap-2 border-b border-stone-200 pb-2">
-                  <UserCheck className="w-4 h-4 text-amber-600" />
-                  <span className="text-xs font-black text-stone-900">الأمين المساعد للأمانة</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم الأمين المساعد</label>
-                    <input
-                      type="text"
-                      placeholder="الاسم الثلاثي أو الرباعي..."
-                      value={editingSecretariat.assistantSecretaryName || ''}
-                      onChange={e => setEditingSecretariat({ ...editingSecretariat, assistantSecretaryName: e.target.value })}
-                      className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-700 mb-1">رقم الهاتف / واتساب</label>
-                    <input
-                      type="text"
-                      placeholder="010XXXXXXXX"
-                      dir="ltr"
-                      value={editingSecretariat.assistantSecretaryPhone || ''}
-                      onChange={e => setEditingSecretariat({ ...editingSecretariat, assistantSecretaryPhone: e.target.value })}
-                      className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white text-right"
-                    />
-                  </div>
-                </div>
+              {/* Assistant Secretaries Section (Multiple) */}
+              {(() => {
+                const currentAssistants: AssistantSecretaryEntry[] = editingSecretariat.assistantSecretaries || [];
 
-                <ImageFieldWithPicker
-                  label="الصورة الشخصية للأمين المساعد"
-                  value={editingSecretariat.assistantSecretaryPhotoUrl || ''}
-                  onChange={url => setEditingSecretariat({ ...editingSecretariat, assistantSecretaryPhotoUrl: url })}
-                  media={media}
-                  onMediaCreated={handleMediaCreated}
-                  shape="circle"
-                  helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة"
-                  pickerTitle={`اختيار صورة الأمين المساعد: ${editingSecretariat.name || ''}`}
-                />
+                const syncAssistants = (updated: AssistantSecretaryEntry[]) => {
+                  const primary = updated[0];
+                  setEditingSecretariat({
+                    ...editingSecretariat,
+                    assistantSecretaries: updated,
+                    assistantSecretaryName: primary?.name || '',
+                    assistantSecretaryPhone: primary?.phone || '',
+                    assistantSecretaryPhotoUrl: primary?.photoUrl || '',
+                    assistantSecretaryBio: primary?.bio || ''
+                  });
+                };
 
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-700 mb-1">نبذة تعريفية عن الأمين المساعد</label>
-                  <input
-                    type="text"
-                    placeholder="مؤهلات وخبرات الأمين المساعد..."
-                    value={editingSecretariat.assistantSecretaryBio || ''}
-                    onChange={e => setEditingSecretariat({ ...editingSecretariat, assistantSecretaryBio: e.target.value })}
-                    className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white"
-                  />
-                </div>
-              </div>
+                const addAssistantSlot = () => {
+                  syncAssistants([
+                    ...currentAssistants,
+                    {
+                      id: 'asst-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+                      name: '',
+                      title: 'الأمين المساعد للأمانة',
+                      phone: '',
+                      photoUrl: '',
+                      bio: ''
+                    }
+                  ]);
+                };
+
+                const updateAssistantAt = (idx: number, patch: Partial<AssistantSecretaryEntry>) => {
+                  const updated = currentAssistants.map((item, i) => (i === idx ? { ...item, ...patch } : item));
+                  syncAssistants(updated);
+                };
+
+                const removeAssistantAt = (idx: number) => {
+                  const updated = currentAssistants.filter((_, i) => i !== idx);
+                  syncAssistants(updated);
+                };
+
+                return (
+                  <div className="p-3.5 bg-stone-50 border border-stone-200 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between border-b border-stone-200 pb-2 gap-2">
+                      <div className="flex items-center gap-2">
+                        <UserCheck className="w-4 h-4 text-amber-600" />
+                        <span className="text-xs font-black text-stone-900">
+                          الأمناء المساعدون للأمانة ({currentAssistants.length})
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={addAssistantSlot}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] px-3 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>إضافة أمين مساعد</span>
+                      </button>
+                    </div>
+
+                    {currentAssistants.length === 0 ? (
+                      <div className="bg-white border border-dashed border-stone-300 rounded-xl p-4 text-center space-y-2">
+                        <p className="text-[11px] text-stone-500">
+                          لا يوجد أمناء مساعدون مضافون حالياً لهذه الأمانة. يمكنك إضافة أمين مساعد واحد أو أكثر.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={addAssistantSlot}
+                          className="inline-flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs px-3.5 py-1.5 rounded-lg cursor-pointer transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>إضافة أول أمين مساعد</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {currentAssistants.map((asst, idx) => (
+                          <div key={asst.id || idx} className="bg-white border border-stone-200 rounded-xl p-3 space-y-3 shadow-2xs">
+                            <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                              <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                                الأمين المساعد #{idx + 1}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => removeAssistantAt(idx)}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-0.5 rounded-lg cursor-pointer transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>حذف</span>
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                              <div>
+                                <label className="block text-[11px] font-bold text-stone-700 mb-1">اسم الأمين المساعد</label>
+                                <input
+                                  type="text"
+                                  placeholder="الاسم الثلاثي أو الرباعي..."
+                                  value={asst.name || ''}
+                                  onChange={e => updateAssistantAt(idx, { name: e.target.value })}
+                                  className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold text-stone-700 mb-1">المسمى / الصفة (اختياري)</label>
+                                <input
+                                  type="text"
+                                  placeholder="الأمين المساعد للأمانة"
+                                  value={asst.title || ''}
+                                  onChange={e => updateAssistantAt(idx, { title: e.target.value })}
+                                  className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold text-stone-700 mb-1">رقم الهاتف / واتساب</label>
+                                <input
+                                  type="text"
+                                  placeholder="010XXXXXXXX"
+                                  dir="ltr"
+                                  value={asst.phone || ''}
+                                  onChange={e => updateAssistantAt(idx, { phone: e.target.value })}
+                                  className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white text-right"
+                                />
+                              </div>
+                            </div>
+
+                            <ImageFieldWithPicker
+                              label={`الصورة الشخصية للأمين المساعد #${idx + 1}`}
+                              value={asst.photoUrl || ''}
+                              onChange={url => updateAssistantAt(idx, { photoUrl: url })}
+                              media={media}
+                              onMediaCreated={handleMediaCreated}
+                              shape="circle"
+                              helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة"
+                              pickerTitle={`اختيار صورة الأمين المساعد #${idx + 1}: ${editingSecretariat.name || ''}`}
+                            />
+
+                            <div>
+                              <label className="block text-[11px] font-bold text-stone-700 mb-1">نبذة تعريفية عن الأمين المساعد</label>
+                              <input
+                                type="text"
+                                placeholder="مؤهلات وخبرات الأمين المساعد..."
+                                value={asst.bio || ''}
+                                onChange={e => updateAssistantAt(idx, { bio: e.target.value })}
+                                className="w-full border border-stone-300 rounded-lg px-3 py-1.5 text-xs bg-white"
+                              />
+                            </div>
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={addAssistantSlot}
+                          className="w-full py-2 border border-dashed border-amber-400 hover:border-amber-500 bg-amber-50/60 hover:bg-amber-50 text-amber-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>إضافة أمين مساعد آخر لهذه الأمانة</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Bureau Members in Modal */}
               {editingSecretariat.id && (
@@ -5493,7 +5726,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           tier: 'bureau',
                           role: 'عضو هيئة مكتب',
                           bureauTitle: '',
-                          assignmentDate: new Date().toISOString().substring(0, 10)
+                          assignmentDate: ''
                         });
                         setShowSecMemberModal(true);
                       }}
@@ -5876,7 +6109,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">تاريخ التكليف</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-stone-700">تاريخ التكليف <span className="text-[10px] font-medium text-stone-400">(اختياري)</span></label>
+                    {editingSecMember.assignmentDate && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingSecMember({ ...editingSecMember, assignmentDate: '' })}
+                        className="text-[10px] font-bold text-red-600 hover:underline cursor-pointer"
+                      >
+                        مسح التاريخ
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="date"
                     value={editingSecMember.assignmentDate || ''}

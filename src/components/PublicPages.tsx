@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   PublicPortalData,
   SpecializedSecretariat,
+  AssistantSecretaryEntry,
   PartyLeader,
   SecretariatLeader,
   Initiative,
@@ -52,25 +53,65 @@ import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
 
+function normalizeArabicDigits(val: string): string {
+  return val
+    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+}
+
+function extractDobFromNationalId(nid: string): string | null {
+  const digits = normalizeArabicDigits(nid).replace(/\D/g, '');
+  if (digits.length < 7) return null;
+
+  const centuryCode = digits[0];
+  if (centuryCode !== '2' && centuryCode !== '3') return null;
+
+  const centuryBase = centuryCode === '2' ? 1900 : 2000;
+  const year = centuryBase + parseInt(digits.slice(1, 3), 10);
+  const month = parseInt(digits.slice(3, 5), 10);
+  const day = parseInt(digits.slice(5, 7), 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  if (dt.getTime() > Date.now()) return null;
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 interface PublicPagesProps {
   currentView: string;
   setCurrentView: (view: string) => void;
+  onNavigate?: (
+    view: string,
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+  ) => void;
   data: PublicPortalData;
   onRefreshData: () => void;
   selectedSlug?: string;
   setSelectedSlug?: (slug: string) => void;
   selectedNewsId?: string | null;
+  selectedEventId?: string | null;
   onClearSelectedNewsId?: () => void;
 }
 
 export const PublicPages: React.FC<PublicPagesProps> = ({
   currentView,
   setCurrentView,
+  onNavigate,
   data,
   onRefreshData,
   selectedSlug,
   setSelectedSlug,
   selectedNewsId,
+  selectedEventId,
   onClearSelectedNewsId
 }) => {
   const ct = data.settings.customTexts || {};
@@ -101,6 +142,28 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const heroAudioCtxRef = React.useRef<AudioContext | null>(null);
+  const heroAudioSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
+  const heroAudioBuffersRef = React.useRef<Map<string, AudioBuffer>>(new Map());
+  const heroAudioPlayingUrlRef = React.useRef<string | null>(null);
+
+  // Clean up Web Audio context on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        heroAudioSourceRef.current?.stop();
+        heroAudioSourceRef.current?.disconnect();
+      } catch {
+        // Ignore stop errors
+      }
+      heroAudioSourceRef.current = null;
+      heroAudioPlayingUrlRef.current = null;
+      if (heroAudioCtxRef.current && heroAudioCtxRef.current.state !== 'closed') {
+        heroAudioCtxRef.current.close().catch(() => {});
+      }
+      heroAudioCtxRef.current = null;
+    };
+  }, []);
 
   // Construct hero slides based on heroMediaType ('video' | 'images' | 'both')
   const heroSlides = React.useMemo(() => {
@@ -165,39 +228,168 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     data.settings.officialLogo
   ]);
 
-  // Keep hero video playing with sound open all the time
+  // Keep <video> muted so OS/Android Chrome lockscreen Media Player never appears,
+  // while playing the soundtrack cleanly via Web Audio API synced to video time.
   useEffect(() => {
-    const vid = heroVideoRef.current;
-    if (!vid) return;
+    let cancelled = false;
 
-    const tryPlayWithSound = () => {
-      vid.muted = false;
-      vid.volume = 1;
-      const playPromise = vid.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          // If browser blocks unmuted autoplay before first gesture, start playback and unmute immediately on any interaction
-          vid.muted = true;
-          vid.play().catch(() => {});
-          const unlockAudio = () => {
-            vid.muted = false;
-            vid.volume = 1;
-            vid.play().catch(() => {});
-            window.removeEventListener('pointerdown', unlockAudio);
-            window.removeEventListener('touchstart', unlockAudio);
-            window.removeEventListener('click', unlockAudio);
-            window.removeEventListener('keydown', unlockAudio);
-          };
-          window.addEventListener('pointerdown', unlockAudio, { once: true, passive: true });
-          window.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
-          window.addEventListener('click', unlockAudio, { once: true, passive: true });
-          window.addEventListener('keydown', unlockAudio, { once: true, passive: true });
-        });
+    const clearMediaSession = () => {
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = null;
+          navigator.mediaSession.playbackState = 'none';
+        } catch {
+          // Ignore browser MediaSession restrictions
+        }
       }
     };
 
-    tryPlayWithSound();
-  }, [heroSlideIndex, heroSlides]);
+    const stopHeroAudio = () => {
+      if (heroAudioSourceRef.current) {
+        try {
+          heroAudioSourceRef.current.stop();
+          heroAudioSourceRef.current.disconnect();
+        } catch {
+          // Ignore already-stopped source
+        }
+        heroAudioSourceRef.current = null;
+      }
+      heroAudioPlayingUrlRef.current = null;
+    };
+
+    clearMediaSession();
+
+    if (currentView !== 'home') {
+      stopHeroAudio();
+      if (heroAudioCtxRef.current && heroAudioCtxRef.current.state === 'running') {
+        heroAudioCtxRef.current.suspend().catch(() => {});
+      }
+      return;
+    }
+
+    const vid = heroVideoRef.current;
+    if (vid) {
+      vid.muted = true;
+      vid.defaultMuted = true;
+      vid.volume = 0;
+      vid.play().catch(() => {});
+    }
+
+    const activeSlide = heroSlides[heroSlideIndex];
+    if (!activeSlide || activeSlide.type !== 'video' || !activeSlide.url) {
+      stopHeroAudio();
+      return;
+    }
+
+    const videoUrl = activeSlide.url;
+    const AudioCtx =
+      typeof window !== 'undefined'
+        ? window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        : undefined;
+
+    if (!AudioCtx) return;
+
+    if (!heroAudioCtxRef.current || heroAudioCtxRef.current.state === 'closed') {
+      heroAudioCtxRef.current = new AudioCtx();
+    }
+    const ctx = heroAudioCtxRef.current;
+
+    const startHeroAudio = async () => {
+      if (cancelled || document.hidden) return;
+      const buffer = heroAudioBuffersRef.current.get(videoUrl);
+      if (!buffer) return;
+
+      if (ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch {
+          return;
+        }
+      }
+
+      if (cancelled || document.hidden || ctx.state !== 'running') return;
+      if (heroAudioPlayingUrlRef.current === videoUrl && heroAudioSourceRef.current) return;
+
+      stopHeroAudio();
+
+      try {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        source.connect(ctx.destination);
+
+        const currentVideoTime = heroVideoRef.current?.currentTime || 0;
+        const offset = buffer.duration > 0 ? currentVideoTime % buffer.duration : 0;
+        source.start(0, offset);
+
+        heroAudioSourceRef.current = source;
+        heroAudioPlayingUrlRef.current = videoUrl;
+        source.onended = () => {
+          if (heroAudioSourceRef.current === source) {
+            heroAudioSourceRef.current = null;
+            heroAudioPlayingUrlRef.current = null;
+          }
+        };
+      } catch {
+        // Ignore audio start errors
+      }
+    };
+
+    if (!heroAudioBuffersRef.current.has(videoUrl)) {
+      fetch(videoUrl)
+        .then((res) => {
+          if (!res.ok) throw new Error('Audio fetch failed');
+          return res.arrayBuffer();
+        })
+        .then((arr) => ctx.decodeAudioData(arr))
+        .then((decoded) => {
+          heroAudioBuffersRef.current.set(videoUrl, decoded);
+          if (!cancelled) {
+            startHeroAudio();
+          }
+        })
+        .catch(() => {
+          // Ignore audio decode/network errors gracefully
+        });
+    } else {
+      startHeroAudio();
+    }
+
+    const handleUserGesture = () => {
+      if (cancelled || document.hidden) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume()
+          .then(() => {
+            if (!cancelled) startHeroAudio();
+          })
+          .catch(() => {});
+      } else {
+        startHeroAudio();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopHeroAudio();
+        if (ctx.state === 'running') {
+          ctx.suspend().catch(() => {});
+        }
+      } else if (!cancelled) {
+        startHeroAudio();
+      }
+    };
+
+    const gestureEvents: Array<keyof DocumentEventMap> = ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown'];
+    gestureEvents.forEach((evt) => document.addEventListener(evt, handleUserGesture, { passive: true }));
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      gestureEvents.forEach((evt) => document.removeEventListener(evt, handleUserGesture));
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopHeroAudio();
+    };
+  }, [currentView, heroSlideIndex, heroSlides]);
 
   // Auto-flip effect every 5 seconds (only when more than 1 slide)
   useEffect(() => {
@@ -219,7 +411,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   }, [selectedNewsId, data?.news]);
 
   // Filter states
-  const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>('all');
+  const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>(
+    currentView === 'secretariat-leaders' ? 'قيادات أمانة قسم ثالث أكتوبر' : 'all'
+  );
+  useEffect(() => {
+    if (currentView === 'secretariat-leaders') {
+      setPartyLeaderLevelFilter('قيادات أمانة قسم ثالث أكتوبر');
+    } else if (currentView === 'party-leaders') {
+      setPartyLeaderLevelFilter('all');
+    }
+  }, [currentView]);
   const [newsSearch, setNewsSearch] = useState<string>('');
   const [eventsFilter, setEventsFilter] = useState<'all' | 'upcoming' | 'completed'>('all');
 
@@ -255,6 +456,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     nationalIdBackUrl: '',
     consentAgreed: false
   });
+  const [selectedPreferredSec, setSelectedPreferredSec] = useState('');
+  const [extraInterestsNote, setExtraInterestsNote] = useState('');
   const [appSubmitting, setAppSubmitting] = useState(false);
   const [appSuccessResult, setAppSuccessResult] = useState<{ message: string; appNumber: string } | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
@@ -440,6 +643,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         nationalIdBackUrl: '',
         consentAgreed: false
       });
+      setSelectedPreferredSec('');
+      setExtraInterestsNote('');
     } catch (err: any) {
       setAppError(err.message || 'حدث خطأ أثناء إرسال الطلب');
     } finally {
@@ -449,6 +654,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
   // Helper to open secretariat details
   const openSecretariat = (slug: string) => {
+    if (onNavigate) {
+      onNavigate('secretariat-detail', { slug });
+      return;
+    }
     if (setSelectedSlug) setSelectedSlug(slug);
     setCurrentView('secretariat-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -456,6 +665,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
   // Helper to open initiative details
   const openInitiative = (slug: string) => {
+    if (onNavigate) {
+      onNavigate('initiative-detail', { slug });
+      return;
+    }
     if (setSelectedSlug) setSelectedSlug(slug);
     setCurrentView('initiative-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -468,16 +681,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     return (
       <div className="space-y-16 lg:space-y-24 pb-16">
         
-        {/* Automated Hero Video & Media Reel ("يقعد يقلب تلقائي") */}
+        {/* Automated Hero Media Reel */}
         <section
-          className="relative overflow-hidden bg-black text-white border-b-2 border-amber-500/30"
+          className="relative overflow-hidden sm:pt-4"
           onMouseEnter={() => setIsHeroHovered(true)}
           onMouseLeave={() => setIsHeroHovered(false)}
         >
           <div className="max-w-6xl mx-auto px-0 sm:px-4 lg:px-6">
-            
-            {/* Main Video / Slide Carousel Container */}
-            <div className="relative aspect-[16/9] sm:aspect-[21/9] max-h-[560px] w-full overflow-hidden bg-black sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
+
+            {/* Main Hero Display Container (Slightly enlarged, clean full-width framing with zero black gaps) */}
+            <div className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[650px] w-full overflow-hidden bg-stone-100 sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
               {heroSlides.map((slide, idx) => {
                 const isActive = idx === heroSlideIndex;
                 return (
@@ -492,16 +705,28 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         ref={isActive ? heroVideoRef : undefined}
                         src={slide.url}
                         autoPlay
+                        muted
                         loop
                         playsInline
-                        poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                        className="w-full h-full object-cover"
+                        preload="auto"
+                        disablePictureInPicture
+                        disableRemotePlayback
+                        controlsList="nodownload noplaybackrate noremoteplayback"
+                        onContextMenu={(e) => e.preventDefault()}
+                        onVolumeChange={(e) => {
+                          if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
+                            e.currentTarget.muted = true;
+                            e.currentTarget.volume = 0;
+                          }
+                        }}
+                        poster={data.settings.heroPosterUrl || undefined}
+                        className="w-full h-full object-cover object-[center_20%] pointer-events-none select-none"
                       />
                     ) : (
                       <img
                         src={slide.url}
-                        alt={slide.title || 'فعاليات حزب الجبهة الوطنية'}
-                        className="w-full h-full object-cover"
+                        alt={slide.title || 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر'}
+                        className="w-full h-full object-cover object-[center_20%]"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           const target = e.currentTarget as HTMLImageElement;
@@ -511,30 +736,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         }}
                       />
                     )}
-                    
-                    {/* Subtle bottom gradient & unobtrusive caption strip */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent pointer-events-none" />
-                    
-                    {slide.title && (
-                      <div className="absolute bottom-5 right-5 sm:bottom-6 sm:right-8 z-20 text-right max-w-lg pointer-events-none">
-                        <span className="inline-block bg-amber-500/90 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-md mb-1 shadow-xs">
-                          {slide.type === 'video' ? 'مقطع مرئي' : 'تغطية مصورة'}
-                        </span>
-                        <h2 className="text-sm sm:text-lg font-black text-white drop-shadow-md">
-                          {slide.title}
-                        </h2>
-                        {slide.caption && (
-                          <p className="text-[11px] sm:text-xs text-amber-200/90 font-medium line-clamp-1 drop-shadow-xs">
-                            {slide.caption}
-                          </p>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}
 
-              {/* Prev / Next Controls (Subtle, sleek) */}
+              {/* Prev / Next Controls (only when multiple slides exist) */}
               {heroSlides.length > 1 && (
                 <>
                   <button
@@ -588,22 +794,31 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
+              <a
+                href={(() => {
                   const urgentItem = data.news.find(n => n.isUrgent);
-                  if (urgentItem) {
-                    setSelectedNews(urgentItem);
-                    setCurrentView('news');
-                    window.location.hash = `news?id=${urgentItem.id}`;
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  return urgentItem ? `/news/${encodeURIComponent(urgentItem.id)}` : '/news';
+                })()}
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    const urgentItem = data.news.find(n => n.isUrgent);
+                    if (urgentItem) {
+                      setSelectedNews(urgentItem);
+                      if (onNavigate) {
+                        onNavigate('news', { newsId: urgentItem.id });
+                      } else {
+                        setCurrentView('news');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }
                   }
                 }}
                 className="w-full sm:w-auto bg-black/40 hover:bg-black/60 text-white text-xs font-bold px-4 py-2 rounded-xl border border-white/20 transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
               >
                 <span>تفاصيل الخبر الكاملة</span>
                 <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
+              </a>
             </div>
           </div>
         )}
@@ -654,6 +869,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </p>
             <p className="text-stone-600 font-semibold text-xs sm:text-sm">
               دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان
+            </p>
+            <p className="text-red-700 font-extrabold text-xs sm:text-sm pt-1">
+              الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة
             </p>
           </div>
 
@@ -711,16 +929,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
             <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
               {/* Membership Application Button */}
-              <button
-                onClick={() => {
-                  setCurrentView('join');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+              <a
+                href="/join"
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    setCurrentView('join');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
                 }}
                 className="w-full sm:w-auto bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-600 hover:to-amber-500 text-stone-950 font-black px-8 py-3.5 rounded-xl shadow-md transition-all hover:scale-105 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
               >
                 <HeartHandshake className="w-5 h-5 text-stone-950" />
                 <span>استمارة العضوية</span>
-              </button>
+              </a>
 
               {/* Direct WhatsApp Contact Button (Editable from Admin Panel) */}
               <a
@@ -736,29 +958,33 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </section>
 
-        {/* Section 1: Party Leaders Preview */}
-        {data.partyLeaders.length > 0 && (
+        {/* Section 1: Unified Leaders Preview (Party Leaders + 3rd October Secretariat Leaders) */}
+        {(data.partyLeaders.length > 0 || data.secretariatLeaders.length > 0) && (
           <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
               <div>
                 <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
-                  {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
+                  {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
                 </h2>
               </div>
-              <button
-                onClick={() => {
-                  setCurrentView('party-leaders');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+              <a
+                href="/party-leaders"
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    setCurrentView('party-leaders');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
                 }}
                 className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
               >
-                <span>عرض جميع قيادات الحزب</span>
+                <span>عرض جميع القيادات</span>
                 <ChevronLeft className="w-4 h-4" />
-              </button>
+              </a>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {data.partyLeaders.slice(0, 4).map(leader => (
+              {data.partyLeaders.slice(0, data.secretariatLeaders.length > 0 ? 4 : 8).map(leader => (
                 <div
                   key={leader.id}
                   onClick={() => setSelectedPartyLeader(leader)}
@@ -790,33 +1016,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
                 </div>
               ))}
-            </div>
-          </section>
-        )}
 
-        {/* Section 2: Secretariat Leaders Preview (3rd October Giza) */}
-        {data.secretariatLeaders.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
-              <div>
-                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
-                  {ct.secLeadersTitle || 'قيادات أمانة قسم ثالث أكتوبر'}
-                </h2>
-              </div>
-              <button
-                onClick={() => {
-                  setCurrentView('secretariat-leaders');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-700 hover:text-amber-800 transition-colors cursor-pointer"
-              >
-                <span>عرض جميع قيادات الأمانة</span>
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {data.secretariatLeaders.slice(0, 4).map(leader => (
+              {data.secretariatLeaders.slice(0, data.partyLeaders.length > 0 ? 4 : 8).map(leader => (
                 <div
                   key={leader.id}
                   onClick={() => setSelectedSecLeader(leader)}
@@ -866,16 +1067,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 {ct.secretariatsSubtitle || 'لكل أمانة صفحة مستقلة بكامل مهامها وأعضائها وأنشطتها'}
               </p>
             </div>
-            <button
-              onClick={() => {
-                setCurrentView('secretariats');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+            <a
+              href="/secretariats"
+              onClick={(e) => {
+                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                  e.preventDefault();
+                  setCurrentView('secretariats');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
               }}
               className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
             >
               <span>استعراض جميع الأمانات</span>
               <ChevronLeft className="w-4 h-4" />
-            </button>
+            </a>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -904,14 +1109,40 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </p>
                 </div>
 
-                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs">
-                  <div className="text-stone-500">
-                    <span className="font-medium">أمين الأمانة: </span>
-                    <span className="font-bold text-stone-800">
-                      {sec.secretaryName || 'قيد التعيين'}
-                    </span>
+                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs gap-2">
+                  <div className="space-y-0.5 text-stone-500 min-w-0">
+                    <div className="truncate">
+                      <span className="font-medium">أمين الأمانة: </span>
+                      <span className="font-bold text-stone-800">
+                        {sec.secretaryName || 'قيد التعيين'}
+                      </span>
+                    </div>
+                    {(() => {
+                      const baseList: AssistantSecretaryEntry[] =
+                        sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                          ? sec.assistantSecretaries.filter(a => a.name?.trim())
+                          : sec.assistantSecretaryName
+                          ? [{ id: 'asst-1', name: sec.assistantSecretaryName }]
+                          : [];
+                      const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                        .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
+                        .filter(m => !baseList.some(a => a.name.trim() === m.name.trim()))
+                        .map(m => ({ id: m.id, name: m.name }));
+                      const allAssts = [...baseList, ...fromMembers];
+                      if (allAssts.length === 0) return null;
+                      return (
+                        <div className="text-[11px] text-stone-500 truncate">
+                          <span className="font-medium">
+                            {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
+                          </span>
+                          <span className="font-semibold text-stone-700">
+                            {allAssts.map(a => a.name).join('، ')}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
-                  <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1">
+                  <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
                     <span>التفاصيل</span>
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </span>
@@ -934,16 +1165,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     {ct.initiativesTitle || 'مبادرات حزب الجبهة الوطنية'}
                   </h2>
                 </div>
-                <button
-                  onClick={() => {
-                    setCurrentView('initiatives');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                <a
+                  href="/initiatives"
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      setCurrentView('initiatives');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
                   }}
                   className="inline-flex items-center gap-1.5 text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
                 >
                   <span>كافة المبادرات</span>
                   <ChevronLeft className="w-4 h-4" />
-                </button>
+                </a>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -993,15 +1228,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     {ct.newsTitle || 'آخر الأخبار والبيانات'}
                   </h2>
                 </div>
-                <button
-                  onClick={() => {
-                    setCurrentView('news');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                <a
+                  href="/news"
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      setCurrentView('news');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
                   }}
                   className="text-xs font-bold text-red-700 hover:underline cursor-pointer"
                 >
                   المزيد
-                </button>
+                </a>
               </div>
 
               <div className="space-y-4">
@@ -1010,9 +1249,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     key={item.id}
                     onClick={() => {
                       setSelectedNews(item);
-                      setCurrentView('news');
-                      window.location.hash = `news?id=${item.id}`;
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                      if (onNavigate) {
+                        onNavigate('news', { newsId: item.id });
+                      } else {
+                        setCurrentView('news');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
                     }}
                     className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col sm:flex-row gap-4"
                   >
@@ -1077,15 +1319,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     {ct.eventsTitle || 'الفعاليات والأنشطة'}
                   </h2>
                 </div>
-                <button
-                  onClick={() => {
-                    setCurrentView('events');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                <a
+                  href="/events"
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      setCurrentView('events');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
                   }}
                   className="text-xs font-bold text-amber-700 hover:underline cursor-pointer"
                 >
                   المزيد
-                </button>
+                </a>
               </div>
 
               <div className="space-y-4">
@@ -1150,15 +1396,97 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 انضم الآن وساهم في بناء المستقبل، وكن شريكاً فاعلاً في خدمة أهالي وشباب قسم ثالث أكتوبر بمحافظة الجيزة. نموذج تقديم رقمي معتمد ومحمي بالكامل.
               </p>
             </div>
-            <button
-              onClick={() => {
-                setCurrentView('join');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+            <a
+              href="/join"
+              onClick={(e) => {
+                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                  e.preventDefault();
+                  setCurrentView('join');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
               }}
               className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-black px-8 py-4 rounded-xl shadow-xl transition-transform hover:scale-105 cursor-pointer whitespace-nowrap text-base shrink-0"
             >
               انضم الآن وساهم في بناء المستقبل
-            </button>
+            </a>
+          </div>
+        </section>
+
+        {/* Section 7: Direct Contact & Headquarters Summary */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="bg-white rounded-3xl border border-stone-200 p-6 sm:p-8 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-stone-100 pb-4">
+              <div>
+                <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
+                  خدمة المواطنين والتواصل المباشر
+                </span>
+                <h2 className="text-xl sm:text-2xl font-black text-stone-900 mt-1">
+                  طرق التواصل ومقر أمانة قسم ثالث أكتوبر بمحافظة الجيزة
+                </h2>
+              </div>
+              <a
+                href="/contact"
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    setCurrentView('contact');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer shrink-0"
+              >
+                <span>صفحة التواصل والخريطة</span>
+                <ChevronLeft className="w-4 h-4" />
+              </a>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-right">
+              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-stone-900 text-sm">مقر الأمانة</h3>
+                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                    {data.settings.address || 'طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-700 flex items-center justify-center shrink-0">
+                  <Phone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-stone-900 text-sm">الهاتف الرسمي</h3>
+                  <a
+                    href={`tel:${data.settings.phone || '01003070108'}`}
+                    className="text-sm font-mono font-bold text-red-700 hover:underline mt-1 inline-block"
+                    dir="ltr"
+                  >
+                    {data.settings.phone || '01003070108'}
+                  </a>
+                </div>
+              </div>
+
+              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                  <MessageCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-stone-900 text-sm">واتساب وتواصل</h3>
+                  <a
+                    href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.whatsapp || data.settings.phone || '01003070108').replace(/\D/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-bold text-emerald-700 hover:underline mt-1 inline-flex items-center gap-1"
+                  >
+                    <span>مراسلة أمانة قسم ثالث أكتوبر</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1241,11 +1569,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   }
 
   // -------------------------------------------------------------
-  // 3. PARTY LEADERS VIEW (National & Governorates & Custom Levels)
+  // 3. UNIFIED LEADERS VIEW (Party Leaders + 3rd October Secretariat Leaders)
   // -------------------------------------------------------------
-  if (currentView === 'party-leaders') {
+  if (currentView === 'party-leaders' || currentView === 'secretariat-leaders') {
+    const isSecFilter = partyLeaderLevelFilter === 'قيادات أمانة قسم ثالث أكتوبر';
+
     const isLevelMatch = (leaderLevel: string | undefined, filter: string) => {
       if (filter === 'all') return true;
+      if (filter === 'قيادات أمانة قسم ثالث أكتوبر') return false;
       const lvl = (leaderLevel || '').trim();
       if (filter === 'الهيئة العليا' || filter === 'national') {
         return lvl === 'الهيئة العليا' || lvl === 'national' || lvl === 'عليا' || lvl === 'مركزية';
@@ -1260,17 +1591,37 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       new Set(
         data.partyLeaders
           .map(l => (l.level || '').trim())
-          .filter(lvl => lvl && lvl !== 'الهيئة العليا' && lvl !== 'national' && lvl !== 'عليا' && lvl !== 'قيادات المحافظات' && lvl !== 'governorate' && lvl !== 'محافظة')
+          .filter(
+            lvl =>
+              lvl &&
+              lvl !== 'الهيئة العليا' &&
+              lvl !== 'national' &&
+              lvl !== 'عليا' &&
+              lvl !== 'قيادات المحافظات' &&
+              lvl !== 'governorate' &&
+              lvl !== 'محافظة' &&
+              lvl !== 'قيادات أمانة قسم ثالث أكتوبر'
+          )
       )
     );
 
-    const filteredLeaders = data.partyLeaders.filter(l => isLevelMatch(l.level, partyLeaderLevelFilter));
+    const filteredPartyLeaders = isSecFilter
+      ? []
+      : data.partyLeaders.filter(l => isLevelMatch(l.level, partyLeaderLevelFilter));
+
+    const filteredSecLeaders =
+      partyLeaderLevelFilter === 'all' || isSecFilter
+        ? data.secretariatLeaders
+        : [];
+
+    const totalCombinedCount = data.partyLeaders.length + data.secretariatLeaders.length;
+    const hasAnyFiltered = filteredPartyLeaders.length > 0 || filteredSecLeaders.length > 0;
 
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
         <div className="text-center space-y-2">
           <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight">
-            {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية'}
+            {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
           </h1>
         </div>
 
@@ -1285,7 +1636,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   : 'text-stone-600 hover:text-stone-900'
               }`}
             >
-              كافة المستويات ({data.partyLeaders.length})
+              الكل ({totalCombinedCount})
             </button>
             <button
               onClick={() => setPartyLeaderLevelFilter('الهيئة العليا')}
@@ -1307,6 +1658,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             >
               قيادات المحافظات ({data.partyLeaders.filter(l => isLevelMatch(l.level, 'قيادات المحافظات')).length})
             </button>
+            <button
+              onClick={() => setPartyLeaderLevelFilter('قيادات أمانة قسم ثالث أكتوبر')}
+              className={`px-4 py-2 rounded-lg transition-colors cursor-pointer ${
+                isSecFilter
+                  ? 'bg-red-700 text-white shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              قيادات أمانة قسم ثالث أكتوبر ({data.secretariatLeaders.length})
+            </button>
             {customLevels.map(lvl => (
               <button
                 key={lvl}
@@ -1323,19 +1684,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </div>
 
-        {filteredLeaders.length === 0 ? (
+        {!hasAnyFiltered ? (
           <div className="bg-white rounded-3xl border border-stone-200/80 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
             <Award className="w-14 h-14 text-stone-300 mx-auto mb-4" />
             <h3 className="font-bold text-stone-900 text-lg mb-1.5">
               التشكيل القيادي قيد المراجعة الرسمية
             </h3>
             <p className="text-xs sm:text-sm text-stone-500 leading-relaxed">
-              يجري حالياً مراجعة واعتماد التشكيلات القيادية للحزب وفق اللوائح والقرارات التنظيمية.
+              يجري حالياً مراجعة واعتماد التشكيلات القيادية للحزب وأمانة قسم ثالث أكتوبر وفق اللوائح والقرارات التنظيمية.
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {filteredLeaders.map(leader => (
+            {filteredPartyLeaders.map(leader => (
               <div
                 key={leader.id}
                 onClick={() => setSelectedPartyLeader(leader)}
@@ -1376,80 +1737,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               </div>
             ))}
-          </div>
-        )}
 
-        {/* Leader Details Modal */}
-        {selectedPartyLeader && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => setSelectedPartyLeader(null)}
-                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
-              >
-                ✕
-              </button>
-
-              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
-                <img
-                  src={selectedPartyLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                  alt={selectedPartyLeader.name}
-                  className="w-32 h-32 sm:w-40 sm:h-40 object-cover rounded-2xl border-2 border-red-700 shadow-md shrink-0 bg-stone-100"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="space-y-1 text-center sm:text-right">
-                  <span className="bg-red-50 text-red-700 text-xs font-bold px-2.5 py-1 rounded-full">
-                    {selectedPartyLeader.governorate ? `${selectedPartyLeader.level || 'قيادات المحافظات'} – ${selectedPartyLeader.governorate}` : (selectedPartyLeader.level || 'الهيئة العليا')}
-                  </span>
-                  <h3 className="text-2xl font-black text-stone-900 mt-2">
-                    {selectedPartyLeader.name}
-                  </h3>
-                  <p className="text-sm font-bold text-amber-700">
-                    {selectedPartyLeader.position}
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-stone-100 pt-4 space-y-3">
-                <h4 className="font-bold text-stone-800 text-sm">
-                  نبذة تعريفية:
-                </h4>
-                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
-                  {selectedPartyLeader.bio || 'لا توجد نبذة مسجلة لهذه القيادة.'}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // -------------------------------------------------------------
-  // 4. SECRETARIAT LEADERS VIEW (3rd October Giza only)
-  // -------------------------------------------------------------
-  if (currentView === 'secretariat-leaders') {
-    return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight">
-            قيادات أمانة قسم ثالث أكتوبر
-          </h1>
-        </div>
-
-        {data.secretariatLeaders.length === 0 ? (
-          <div className="bg-white rounded-3xl border border-stone-200/80 p-12 text-center text-stone-500 max-w-lg mx-auto shadow-xs">
-            <Users className="w-14 h-14 text-stone-300 mx-auto mb-4" />
-            <h3 className="font-bold text-stone-900 text-lg mb-1.5">
-              التشكيل القيادي قيد الاعتماد الرسمي
-            </h3>
-            <p className="text-xs sm:text-sm text-stone-500 leading-relaxed">
-              يجري حالياً مراجعة واعتماد تشكيل قيادات أمانة قسم ثالث أكتوبر بمحافظة الجيزة وفق اللوائح والقرارات التنظيمية للحزب.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {data.secretariatLeaders.map(leader => (
+            {filteredSecLeaders.map(leader => (
               <div
                 key={leader.id}
                 onClick={() => setSelectedSecLeader(leader)}
@@ -1490,6 +1779,49 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Party Leader Details Modal */}
+        {selectedPartyLeader && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => setSelectedPartyLeader(null)}
+                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
+                <img
+                  src={selectedPartyLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                  alt={selectedPartyLeader.name}
+                  className="w-32 h-32 sm:w-40 sm:h-40 object-cover rounded-2xl border-2 border-red-700 shadow-md shrink-0 bg-stone-100"
+                  referrerPolicy="no-referrer"
+                />
+                <div className="space-y-1 text-center sm:text-right">
+                  <span className="bg-red-50 text-red-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                    {selectedPartyLeader.governorate ? `${selectedPartyLeader.level || 'قيادات المحافظات'} – ${selectedPartyLeader.governorate}` : (selectedPartyLeader.level || 'الهيئة العليا')}
+                  </span>
+                  <h3 className="text-2xl font-black text-stone-900 mt-2">
+                    {selectedPartyLeader.name}
+                  </h3>
+                  <p className="text-sm font-bold text-amber-700">
+                    {selectedPartyLeader.position}
+                  </p>
+                </div>
+              </div>
+
+              <div className="border-t border-stone-100 pt-4 space-y-3">
+                <h4 className="font-bold text-stone-800 text-sm">
+                  نبذة تعريفية:
+                </h4>
+                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
+                  {selectedPartyLeader.bio || 'لا توجد نبذة مسجلة لهذه القيادة.'}
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1614,18 +1946,36 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs">
-                  <div className="space-y-0.5">
-                    <div className="text-[11px] text-stone-600">
+                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs gap-2">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="text-[11px] text-stone-600 truncate">
                       <span className="text-stone-400 font-medium">أمين الأمانة: </span>
                       <span className="font-bold text-stone-900">{sec.secretaryName || 'قيد التكليف'}</span>
                     </div>
-                    {sec.assistantSecretaryName && (
-                      <div className="text-[11px] text-stone-600">
-                        <span className="text-stone-400 font-medium">الأمين المساعد: </span>
-                        <span className="font-semibold text-stone-800">{sec.assistantSecretaryName}</span>
-                      </div>
-                    )}
+                    {(() => {
+                      const baseList: AssistantSecretaryEntry[] =
+                        sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                          ? sec.assistantSecretaries.filter(a => a.name?.trim())
+                          : sec.assistantSecretaryName
+                          ? [{ id: 'asst-1', name: sec.assistantSecretaryName }]
+                          : [];
+                      const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                        .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
+                        .filter(m => !baseList.some(a => a.name.trim() === m.name.trim()))
+                        .map(m => ({ id: m.id, name: m.name }));
+                      const allAssts = [...baseList, ...fromMembers];
+                      if (allAssts.length === 0) return null;
+                      return (
+                        <div className="text-[11px] text-stone-600 truncate">
+                          <span className="text-stone-400 font-medium">
+                            {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
+                          </span>
+                          <span className="font-semibold text-stone-800">
+                            {allAssts.map(a => a.name).join('، ')}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
                     <span>التفاصيل</span>
@@ -1726,44 +2076,102 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               )}
             </div>
 
-            {/* Assistant Secretary */}
-            <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
-              <div className="flex items-center gap-4">
-                <img
-                  src={sec.assistantSecretaryPhotoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                  alt={sec.assistantSecretaryName || 'الأمين المساعد'}
-                  className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="space-y-1 text-right">
-                  <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-block">
-                    الأمين المساعد للأمانة
-                  </span>
-                  <h3 className="font-black text-stone-900 text-lg">
-                    {sec.assistantSecretaryName || 'قيد التكليف الرسمي'}
-                  </h3>
-                  <p className="text-xs text-stone-500">
-                    أمانة قسم ثالث أكتوبر – محافظة الجيزة
-                  </p>
-                </div>
-              </div>
+            {/* Assistant Secretaries (Supports Multiple) */}
+            {(() => {
+              const fromField: AssistantSecretaryEntry[] =
+                sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                  ? sec.assistantSecretaries.filter(a => a.name?.trim() || a.photoUrl || a.bio || a.phone)
+                  : sec.assistantSecretaryName
+                  ? [{
+                      id: 'asst-primary',
+                      name: sec.assistantSecretaryName,
+                      title: 'الأمين المساعد للأمانة',
+                      photoUrl: sec.assistantSecretaryPhotoUrl || '',
+                      bio: sec.assistantSecretaryBio || '',
+                      phone: sec.assistantSecretaryPhone || ''
+                    }]
+                  : [];
 
-              {(sec.assistantSecretaryBio || sec.assistantSecretaryPhone) && (
-                <div className="mt-4 pt-3 border-t border-stone-100 space-y-1.5 text-xs">
-                  {sec.assistantSecretaryBio && (
-                    <p className="text-stone-600 leading-relaxed font-normal">{sec.assistantSecretaryBio}</p>
-                  )}
-                  {sec.assistantSecretaryPhone && (
-                    <div className="flex items-center gap-2 text-stone-700 font-medium pt-1">
-                      <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <a href={`tel:${sec.assistantSecretaryPhone}`} className="hover:text-amber-700 font-mono" dir="ltr">
-                        {sec.assistantSecretaryPhone}
-                      </a>
+              const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                .filter(m => m.secretariatId === sec?.id && m.tier === 'assistant_secretary')
+                .filter(m => !fromField.some(f => f.name.trim() === m.name.trim()))
+                .map(m => ({
+                  id: m.id,
+                  name: m.name,
+                  title: m.bureauTitle || m.role || 'الأمين المساعد للأمانة',
+                  photoUrl: m.photoUrl || '',
+                  bio: m.notes || '',
+                  phone: m.phone || ''
+                }));
+
+              const allAssistants = [...fromField, ...fromMembers];
+
+              if (allAssistants.length === 0) {
+                return (
+                  <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center gap-4">
+                      <img
+                        src="/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg"
+                        alt="الأمين المساعد"
+                        className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="space-y-1 text-right">
+                        <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-block">
+                          الأمين المساعد للأمانة
+                        </span>
+                        <h3 className="font-black text-stone-900 text-lg">
+                          قيد التكليف الرسمي
+                        </h3>
+                        <p className="text-xs text-stone-500">
+                          أمانة قسم ثالث أكتوبر – محافظة الجيزة
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              return allAssistants.map((asst, idx) => (
+                <div key={asst.id || idx} className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
+                  <div className="flex items-center gap-4">
+                    <img
+                      src={asst.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                      alt={asst.name || 'الأمين المساعد'}
+                      className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="space-y-1 text-right">
+                      <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-block">
+                        {asst.title || 'الأمين المساعد للأمانة'}
+                      </span>
+                      <h3 className="font-black text-stone-900 text-lg">
+                        {asst.name || 'قيد التكليف الرسمي'}
+                      </h3>
+                      <p className="text-xs text-stone-500">
+                        أمانة قسم ثالث أكتوبر – محافظة الجيزة
+                      </p>
+                    </div>
+                  </div>
+
+                  {(asst.bio || asst.phone) && (
+                    <div className="mt-4 pt-3 border-t border-stone-100 space-y-1.5 text-xs">
+                      {asst.bio && (
+                        <p className="text-stone-600 leading-relaxed font-normal">{asst.bio}</p>
+                      )}
+                      {asst.phone && (
+                        <div className="flex items-center gap-2 text-stone-700 font-medium pt-1">
+                          <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <a href={`tel:${asst.phone}`} className="hover:text-amber-700 font-mono" dir="ltr">
+                            {asst.phone}
+                          </a>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
+              ));
+            })()}
           </div>
         </div>
 
@@ -2200,7 +2608,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               key={item.id}
               onClick={() => {
                 setSelectedNews(item);
-                window.location.hash = `news?id=${item.id}`;
+                if (onNavigate) {
+                  onNavigate('news', { newsId: item.id });
+                }
               }}
               className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
             >
@@ -2279,9 +2689,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 onClick={() => {
                   setSelectedNews(null);
                   if (onClearSelectedNewsId) onClearSelectedNewsId();
-                  if (window.location.hash.startsWith('#news')) {
-                    window.location.hash = 'news';
-                  }
                 }}
                 className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
               >
@@ -2478,7 +2885,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           {filteredEvents.map(event => (
             <div
               key={event.id}
-              className="bg-white rounded-2xl border border-stone-200 p-6 sm:p-8 shadow-xs hover:shadow-md transition-all text-right space-y-4"
+              className={`bg-white rounded-2xl border p-6 sm:p-8 shadow-xs hover:shadow-md transition-all text-right space-y-4 ${
+                selectedEventId === event.id
+                  ? 'border-amber-500 ring-2 ring-amber-400/30'
+                  : 'border-stone-200'
+              }`}
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-4">
                 <div>
@@ -2919,8 +3330,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       type="text"
                       required={isFieldReq('nationalId')}
                       maxLength={14}
+                      inputMode="numeric"
                       value={appForm.nationalId}
-                      onChange={e => setAppForm({ ...appForm, nationalId: e.target.value })}
+                      onChange={e => {
+                        const cleanedNid = normalizeArabicDigits(e.target.value).replace(/\D/g, '').slice(0, 14);
+                        const extractedDob = extractDobFromNationalId(cleanedNid);
+                        setAppForm(prev => ({
+                          ...prev,
+                          nationalId: cleanedNid,
+                          dateOfBirth: extractedDob ?? prev.dateOfBirth
+                        }));
+                      }}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-stone-900 focus:outline-hidden focus:border-red-700"
                       dir="ltr"
                     />
@@ -2942,6 +3362,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       onChange={e => setAppForm({ ...appForm, dateOfBirth: e.target.value })}
                       className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
                     />
+                    {extractDobFromNationalId(appForm.nationalId) && (
+                      <p className="text-[10px] font-semibold text-emerald-700 mt-1">
+                        تم تحديد تاريخ الميلاد تلقائياً من الرقم القومي
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -3192,20 +3617,49 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
-                      <span>الاهتمامات الحزبية والأمانات المفضلة</span>
+                      <span>الأمانة المفضلة والاهتمامات الحزبية</span>
                       {isFieldReq('interests') ? (
                         <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
                       ) : (
                         <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
                       )}
                     </label>
-                    <textarea
-                      rows={2}
-                      required={isFieldReq('interests')}
-                      value={appForm.interests}
-                      onChange={e => setAppForm({ ...appForm, interests: e.target.value })}
-                      className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
-                    />
+                    <div className="space-y-2">
+                      <select
+                        required={isFieldReq('interests') && !extraInterestsNote.trim()}
+                        value={selectedPreferredSec}
+                        onChange={e => {
+                          const secVal = e.target.value;
+                          setSelectedPreferredSec(secVal);
+                          const combined = secVal && extraInterestsNote.trim()
+                            ? `${secVal} — ${extraInterestsNote.trim()}`
+                            : secVal || extraInterestsNote.trim();
+                          setAppForm({ ...appForm, interests: combined });
+                        }}
+                        className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 bg-white focus:outline-hidden focus:border-red-700"
+                      >
+                        <option value="">-- اختر الأمانة التخصصية المفضلة --</option>
+                        {data.specializedSecretariats.map(sec => (
+                          <option key={sec.id} value={sec.name}>
+                            {sec.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="ملاحظات أو اهتمامات إضافية (اختياري)..."
+                        value={extraInterestsNote}
+                        onChange={e => {
+                          const note = e.target.value;
+                          setExtraInterestsNote(note);
+                          const combined = selectedPreferredSec && note.trim()
+                            ? `${selectedPreferredSec} — ${note.trim()}`
+                            : selectedPreferredSec || note.trim();
+                          setAppForm({ ...appForm, interests: combined });
+                        }}
+                        className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
+                      />
+                    </div>
                   </div>
 
                   <div>
@@ -3513,7 +3967,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 <div className="flex items-center gap-3">
                   <img
                     src={data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                    alt="شعار الحزب"
+                    alt="شعار حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
                     className="w-11 h-11 object-contain rounded-xl bg-white p-1 shadow-sm shrink-0"
                     referrerPolicy="no-referrer"
                   />

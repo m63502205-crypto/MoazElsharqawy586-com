@@ -15,11 +15,18 @@ import { Loader2 } from 'lucide-react';
 import { initGoogleAnalytics, trackPageView } from './utils/analytics';
 import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
 
+import {
+  getViewPath,
+  parseLocationToRoute,
+  getPageSeoMeta
+} from './utils/routes';
+
 function MainApp() {
-  const [currentView, setCurrentView] = useState<string>('home');
-  const [selectedSlug, setSelectedSlug] = useState<string>('about');
-  const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const initialRoute = typeof window !== 'undefined' ? parseLocationToRoute(window.location) : { view: 'home' };
+  const [currentView, setCurrentView] = useState<string>(initialRoute.view || 'home');
+  const [selectedSlug, setSelectedSlug] = useState<string>(initialRoute.slug || 'about');
+  const [selectedNewsId, setSelectedNewsId] = useState<string | null>(initialRoute.newsId || null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(initialRoute.eventId || null);
   const [data, setData] = useState<PublicPortalData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -61,169 +68,123 @@ function MainApp() {
     }
   }, [data?.settings?.googleAnalyticsId]);
 
-  // Track page views in Google Analytics on route/view changes
+  // Dynamically update Document Title, Meta Description, Canonical, Robots, OpenGraph & GA PageView on route changes
   useEffect(() => {
-    const titles: Record<string, string> = {
-      home: 'الرئيسية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
-      about: 'عن الحزب والأمانة | حزب الجبهة الوطنية',
-      'party-leaders': 'قيادات الحزب المركزية | حزب الجبهة الوطنية',
-      'secretariat-leaders': 'قيادات الأمانة | حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-      secretariats: 'الأمانات التخصصية | حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-      initiatives: 'المبادرات التنموية والمجتمعية | حزب الجبهة الوطنية',
-      news: 'الأخبار والبيانات الصحفية | حزب الجبهة الوطنية',
-      events: 'الفعاليات والمؤتمرات | حزب الجبهة الوطنية',
-      join: 'طلب الانضمام والعضوية | حزب الجبهة الوطنية',
-      contact: 'اتصل بنا ومقر الأمانة | حزب الجبهة الوطنية',
-      admin: 'لوحة التحكم المركزية | حزب الجبهة الوطنية'
+    const seo = getPageSeoMeta(currentView, data, {
+      slug: selectedSlug,
+      newsId: selectedNewsId,
+      eventId: selectedEventId
+    });
+
+    document.title = seo.title;
+
+    const setMeta = (selector: string, attr: string, attrVal: string, content: string) => {
+      let el = document.querySelector(selector) as HTMLMetaElement | null;
+      if (!el) {
+        el = document.createElement('meta');
+        el.setAttribute(attr, attrVal);
+        document.head.appendChild(el);
+      }
+      el.setAttribute('content', content);
     };
 
-    const path = currentView === 'cms-page' && selectedSlug ? `#page/${selectedSlug}` : `#${currentView}`;
-    const pageTitle = currentView === 'cms-page' && selectedSlug
-      ? `${data?.pages?.find(p => p.slug === selectedSlug)?.title || 'صفحة'} | حزب الجبهة الوطنية`
-      : (titles[currentView] || 'حزب الجبهة الوطنية');
+    setMeta('meta[name="description"]', 'name', 'description', seo.description);
+    setMeta('meta[name="robots"]', 'name', 'robots', seo.robots);
+    setMeta('meta[property="og:title"]', 'property', 'og:title', seo.title);
+    setMeta('meta[property="og:description"]', 'property', 'og:description', seo.description);
+    setMeta('meta[property="og:url"]', 'property', 'og:url', seo.canonicalUrl);
+    setMeta('meta[name="twitter:title"]', 'name', 'twitter:title', seo.title);
+    setMeta('meta[name="twitter:description"]', 'name', 'twitter:description', seo.description);
 
-    trackPageView(path, pageTitle);
-  }, [currentView, selectedSlug, data]);
+    let canonicalEl = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+    if (!canonicalEl) {
+      canonicalEl = document.createElement('link');
+      canonicalEl.setAttribute('rel', 'canonical');
+      document.head.appendChild(canonicalEl);
+    }
+    canonicalEl.setAttribute('href', seo.canonicalUrl);
 
-  // Sync view from hash on mount or when hash changes
+    const path = getViewPath(currentView, {
+      slug: selectedSlug,
+      newsId: selectedNewsId,
+      eventId: selectedEventId
+    });
+    trackPageView(path, seo.title);
+  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, data]);
+
+  // Sync view from browser history (popstate) and legacy hash links (hashchange)
   useEffect(() => {
-    const handleHash = () => {
-      // Check query parameters for direct links
-      if (typeof window !== 'undefined' && window.location.search) {
-        const searchParams = new URLSearchParams(window.location.search);
-        const searchNewsId = searchParams.get('news') || searchParams.get('id');
-        if (searchNewsId) {
-          setSelectedNewsId(searchNewsId);
-          setCurrentView('news');
-        }
-      }
-
-      const fullHash = window.location.hash.replace(/^#\/?/, '');
-      if (!fullHash) return;
-
-      // Gallery section is removed per user instruction; redirect to home
-      if (fullHash === 'gallery' || fullHash.startsWith('gallery/')) {
-        setCurrentView('home');
-        window.location.hash = 'home';
-        return;
-      }
-
-      if (fullHash.startsWith('page/')) {
-        const slug = fullHash.replace('page/', '');
-        setSelectedSlug(slug);
-        setCurrentView('cms-page');
-        return;
-      }
-
-      if (fullHash === 'admin') {
-        setCurrentView('admin');
-        return;
-      }
-
-      // News route with ID: #news?id=xxx or #news/xxx or #news
-      if (fullHash.startsWith('news')) {
-        let nId: string | null = null;
-        if (fullHash.includes('?id=')) {
-          nId = fullHash.split('?id=')[1]?.split('&')[0] || null;
-        } else if (fullHash.includes('/') && fullHash.split('/')[1]) {
-          nId = fullHash.split('/')[1] || null;
-        }
-        setCurrentView('news');
-        if (nId) {
-          setSelectedNewsId(nId);
-        }
-        return;
-      }
-
-      // Events route with ID: #events?id=xxx or #events/xxx or #events
-      if (fullHash.startsWith('events')) {
-        let eId: string | null = null;
-        if (fullHash.includes('?id=')) {
-          eId = fullHash.split('?id=')[1]?.split('&')[0] || null;
-        } else if (fullHash.includes('/') && fullHash.split('/')[1]) {
-          eId = fullHash.split('/')[1] || null;
-        }
-        setCurrentView('events');
-        if (eId) {
-          setSelectedEventId(eId);
-        }
-        return;
-      }
-
-      // Single secretariat route: #secretariat/slug
-      if (fullHash.startsWith('secretariat/')) {
-        const secSlug = fullHash.replace('secretariat/', '');
-        setSelectedSlug(secSlug);
-        setCurrentView('secretariat-detail');
-        return;
-      }
-
-      const cleanView = fullHash.split('?')[0].split('/')[0];
-      if (
-        [
-          'home',
-          'about',
-          'party-leaders',
-          'secretariat-leaders',
-          'secretariats',
-          'initiatives',
-          'news',
-          'events',
-          'join',
-          'contact'
-        ].includes(cleanView)
-      ) {
-        setCurrentView(cleanView);
-      }
+    const syncRoute = () => {
+      const parsed = parseLocationToRoute(window.location);
+      setCurrentView(parsed.view);
+      if (parsed.slug) setSelectedSlug(parsed.slug);
+      setSelectedNewsId(parsed.newsId || null);
+      setSelectedEventId(parsed.eventId || null);
     };
 
-    handleHash();
-    window.addEventListener('hashchange', handleHash);
-    return () => window.removeEventListener('hashchange', handleHash);
+    window.addEventListener('popstate', syncRoute);
+    window.addEventListener('hashchange', syncRoute);
+    return () => {
+      window.removeEventListener('popstate', syncRoute);
+      window.removeEventListener('hashchange', syncRoute);
+    };
   }, []);
 
-  // Update hash when currentView changes
-  const handleSetCurrentView = (view: string) => {
-    // Gallery is removed; redirect to home
-    if (view === 'gallery') {
-      view = 'home';
-    }
+  // Unified SPA navigation updating clean crawlable URL via pushState
+  const navigateTo = (
+    view: string,
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+  ) => {
+    if (view === 'gallery') view = 'home';
+
+    const nextSlug = options?.slug ?? selectedSlug;
+    const nextNewsId = options && 'newsId' in options ? options.newsId : null;
+    const nextEventId = options && 'eventId' in options ? options.eventId : null;
+
+    if (options?.slug) setSelectedSlug(options.slug);
+    setSelectedNewsId(nextNewsId || null);
+    setSelectedEventId(nextEventId || null);
     setCurrentView(view);
-    if (view === 'admin') {
-      window.location.hash = 'admin';
-    } else if (view === 'cms-page' && selectedSlug) {
-      window.location.hash = `page/${selectedSlug}`;
-    } else {
-      window.location.hash = view;
+
+    const targetUrl = getViewPath(view, {
+      slug: nextSlug,
+      newsId: nextNewsId,
+      eventId: nextEventId
+    });
+
+    if (typeof window !== 'undefined') {
+      const currentFull = window.location.pathname + window.location.hash;
+      if (currentFull !== targetUrl) {
+        window.history.pushState(null, '', targetUrl);
+      }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSetCurrentView = (view: string) => {
+    navigateTo(view);
   };
 
   const handleSelectSearchResult = (res: SearchResultItem) => {
     setSearchOpen(false);
     if (res.type === 'news') {
-      setSelectedNewsId(res.rawItem.id);
-      handleSetCurrentView('news');
+      navigateTo('news', { newsId: res.rawItem.id });
     } else if (res.type === 'event') {
-      setSelectedEventId(res.rawItem.id);
-      handleSetCurrentView('events');
+      navigateTo('events', { eventId: res.rawItem.id });
     } else if (res.type === 'initiative') {
-      setSelectedSlug(res.rawItem.slug || res.rawItem.id);
-      handleSetCurrentView('initiative-detail');
+      navigateTo('initiative-detail', { slug: res.rawItem.slug || res.rawItem.id });
     } else if (res.type === 'secretariat') {
-      setSelectedSlug(res.rawItem.slug || res.rawItem.id);
-      handleSetCurrentView('secretariat-detail');
+      navigateTo('secretariat-detail', { slug: res.rawItem.slug || res.rawItem.id });
     } else if (res.type === 'leader') {
       if (res.typeLabel.includes('أكتوبر') || res.rawItem.secretariatName) {
-        handleSetCurrentView('secretariat-leaders');
+        navigateTo('secretariat-leaders');
       } else {
-        handleSetCurrentView('party-leaders');
+        navigateTo('party-leaders');
       }
     } else if (res.type === 'page') {
-      setSelectedSlug(res.rawItem.slug);
-      handleSetCurrentView('cms-page');
+      navigateTo('cms-page', { slug: res.rawItem.slug });
     } else if (res.type === 'join') {
-      handleSetCurrentView('join');
+      navigateTo('join');
     }
   };
 
@@ -264,7 +225,7 @@ function MainApp() {
   if (currentView === 'admin') {
     return (
       <AdminPanel
-        onBackToSite={() => handleSetCurrentView('home')}
+        onBackToSite={() => navigateTo('home')}
         onRefreshPublicData={loadData}
       />
     );
@@ -285,12 +246,19 @@ function MainApp() {
         <PublicPages
           currentView={currentView}
           setCurrentView={handleSetCurrentView}
+          onNavigate={navigateTo}
           data={data}
           onRefreshData={loadData}
           selectedSlug={selectedSlug}
           setSelectedSlug={setSelectedSlug}
           selectedNewsId={selectedNewsId}
-          onClearSelectedNewsId={() => setSelectedNewsId(null)}
+          selectedEventId={selectedEventId}
+          onClearSelectedNewsId={() => {
+            setSelectedNewsId(null);
+            if (typeof window !== 'undefined' && window.location.pathname.startsWith('/news/')) {
+              window.history.pushState(null, '', '/news');
+            }
+          }}
         />
       </main>
 

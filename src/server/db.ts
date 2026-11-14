@@ -28,6 +28,15 @@ export interface SecretariatLeader {
   createdAt: string;
 }
 
+export interface AssistantSecretaryEntry {
+  id: string;
+  name: string;
+  title?: string;
+  photoUrl?: string;
+  bio?: string;
+  phone?: string;
+}
+
 export interface SpecializedSecretariat {
   id: string;
   name: string;
@@ -39,8 +48,15 @@ export interface SpecializedSecretariat {
   goals: string[];
   secretaryName?: string;
   secretaryPhotoUrl?: string;
+  secretaryBio?: string;
+  secretaryPhone?: string;
   assistantSecretaryName?: string;
   assistantSecretaryPhotoUrl?: string;
+  assistantSecretaryBio?: string;
+  assistantSecretaryPhone?: string;
+  assistantSecretaries?: AssistantSecretaryEntry[];
+  galleryImages?: string[];
+  videos?: Array<{ title: string; url: string; thumbnail?: string }>;
   isActive: boolean;
   sortOrder: number;
   createdAt: string;
@@ -278,6 +294,7 @@ export interface SiteSettings {
   aboutSecretariat: string;
   vision: string;
   principles: string[];
+  secretariatsVersion?: number;
 }
 
 export interface CMSPage {
@@ -321,165 +338,453 @@ export function hashPassword(password: string): string {
 
 const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
   {
-    id: 'sec-hr',
-    name: 'أمانة إدارة الموارد البشرية',
-    slug: 'human-resources',
-    description: 'المسؤولة عن استقطاب وتأهيل الكوادر الحزبية وبناء خطط التمكين والتطوير الإداري لكافة فرق العمل بالأمانة.',
+    id: 'sec-org',
+    name: 'أمانة التنظيم',
+    slug: 'organization',
+    description: 'العصب التنظيمي والميداني المسؤول عن بناء الهياكل والقواعد الحزبية وتنسيق الأنشطة بين الوحدات والأمانات في قسم ثالث أكتوبر.',
     duties: [
-      'استقبال وتقييم الكوادر المنضمة حديثاً للأمانة وتوجيهها للمسار الأنسب.',
-      'إعداد الهياكل التنظيمية والتوصيف الدقيق للمهام.',
-      'متابعة الحضور والأداء ومؤشرات الإنجاز لأعضاء هيئة المكتب واللجان.'
+      'بناء ومتابعة التشكيلات التنظيمية في القطاعات والأحياء.',
+      'تنظيم المؤتمرات واللقاءات التنظيمية والجماهيرية.',
+      'التنسيق والتكامل الإداري بين كافة الأمانات التخصصية.'
     ],
     goals: [
-      'بناء كوادر حزبية محترفة وقادرة على القيادة الميدانية.',
-      'خلق بيئة عمل تشاركية محفزة ومستدامة بأكتوبر.'
+      'ترسيخ التواجد الحزبي المنظم في كافة مناطق قسم ثالث أكتوبر.',
+      'إدارة العمل التنظيمي بكفاءة وانضباط واستمرارية.'
     ],
     isActive: true,
     sortOrder: 1,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-org',
-    name: 'أمانة التنظيم',
-    slug: 'organization',
-    description: 'العصب الميداني المسؤول عن بناء القواعد الجماهيرية وتنسيق الأنشطة والوحدات الحزبية في كافة مناطق قسم ثالث أكتوبر.',
+    id: 'sec-membership',
+    name: 'أمانة العضوية',
+    slug: 'membership',
+    description: 'المسؤولة عن استقطاب الأعضاء الجدد، وتحديث قاعدة بيانات العضوية، وتيسير إجراءات الانضمام وتوزيع الكوادر وفق المهارات.',
     duties: [
-      'تأسيس ومتابعة التشكيلات التنظيمية بالقطاعات والأحياء.',
-      'تنظيم المؤتمرات واللقاءات الجماهيرية والندوات العامة.',
-      'التنسيق والتكامل بين جميع الأمانات التخصصية بالأمانة.'
+      'استقبال ومراجعة طلبات الانضمام وتوجيه الكوادر للأمانات المناسبة.',
+      'إعداد وتحديث سجلات العضوية وبطاقات الانتماء الحزبي.',
+      'متابعة تفعيل مشاركة الأعضاء الجدد في الأنشطة الميدانية.'
     ],
     goals: [
-      'ترسيخ التواجد الحزبي في كل شبر بقسم ثالث أكتوبر.',
-      'إدارة الفعاليات الميدانية بكفاءة وانضباط تنظيمي صارم.'
+      'توسيع قاعدة العضوية الفاعلة في قسم ثالث أكتوبر.',
+      'بناء سجل عضوية دقيق ومنظم يربط الطاقات الوطنية بالعمل العام.'
     ],
     isActive: true,
     sortOrder: 2,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-training',
-    name: 'أمانة التدريب والتثقيف',
-    slug: 'training-and-education',
-    description: 'المسؤولة عن بناء الوعي الوطني والسياسي، وإعداد برامج تدريبية تخصصية لشباب وكوادر الحزب.',
+    id: 'sec-youth-sports',
+    name: 'أمانة الشباب والرياضة',
+    slug: 'youth-and-sports',
+    description: 'المسؤولة عن تمكين الشباب، واكتشاف المهارات القيادية، وتنظيم البطولات والفعاليات الرياضية والأنشطة الشبابية.',
     duties: [
-      'تنظيم ورش عمل وبرامج لإعداد القادة الشباب.',
-      'إصدار النشرات والملخصات التثقيفية حول القضايا الوطنية.',
-      'التعاون مع خبراء وأكاديميين لتقديم دورات معتمدة.'
+      'تنظيم الدورات والبطولات الرياضية والملتقيات الشبابية.',
+      'إعداد برامج تأهيل وتدريب للشباب للمشاركة في العمل العام والمحلي.',
+      'دعم المبادرات الشبابية والمواهب الرياضية والثقافية في المنطقة.'
     ],
     goals: [
-      'تثقيف الكوادر بالقضايا الوطنية والتشريعية والدولية.',
-      'رفع كفاءة أعضاء الأمانة في مهارات التواصل والخطاب العام.'
+      'استثمار طاقات الشباب في البناء المجتمعي والعمل الوطني.',
+      'تعزيز الروح الرياضية والانتماء الوطني لدى شباب قسم ثالث أكتوبر.'
     ],
     isActive: true,
     sortOrder: 3,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-tech',
-    name: 'أمانة التكنولوجيا',
-    slug: 'technology',
-    description: 'المسؤولة عن التحول الرقمي بالأمانة وإدارة المنظومة الإلكترونية وحماية البيانات وتطوير الأدوات التقنية.',
+    id: 'sec-women',
+    name: 'أمانة المرأة',
+    slug: 'women',
+    description: 'المسؤولة عن دعم وتمكين المرأة المصرية اجتماعياً واقتصادياً وسياسياً، ورعاية المبادرات الخاصة بالأسرة والطفل.',
     duties: [
-      'إدارة وصيانة المنصة الإلكترونية وقواعد البيانات المركزية.',
-      'تأمين المعاملات والبيانات الشخصية وطلبات العضوية.',
-      'تطوير الحلول الرقمية لتسهيل التواصل مع المواطنين.'
+      'إطلاق مبادرات التمكين الاقتصادي والمشروعات المنزلية للمرأة.',
+      'تنظيم الندوات التوعوية حول حقوق المرأة وصحة الأسرة والطفل.',
+      'تعزيز مشاركة المرأة في الحياة السياسية والعمل العام.'
     ],
     goals: [
-      'أمانة رقمية ذكية بالكامل خالية من التعقيدات الورقية.',
-      'توظيف التكنولوجيا الحديثة لخدمة أهالي قسم ثالث أكتوبر.'
+      'رفع كفاءة ودور المرأة في المجتمع المحلي بقسم ثالث أكتوبر.',
+      'حماية الأسرة ودعم المرأة المعيلة وتكافؤ الفرص.'
     ],
     isActive: true,
     sortOrder: 4,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-pr',
-    name: 'أمانة العلاقات العامة',
-    slug: 'public-relations',
-    description: 'حلقة الوصل بين الحزب ومختلف المؤسسات الرسمية والمجتمعية والشخصيات العامة بمحافظة الجيزة.',
+    id: 'sec-agriculture',
+    name: 'أمانة الزراعة والري وشؤون الفلاحين',
+    slug: 'agriculture-irrigation-farmers',
+    description: 'المسؤولة عن متابعة ملفات الزراعة والري والأمن الغذائي، والتواصل مع الفلاحين والمزارعين لتذليل التحديات ودعم الإنتاج الزراعي.',
     duties: [
-      'بناء شراكات مستمرة مع الجمعيات الأهلية والجهات التنفيذية.',
-      'استقبال الوفود وتنسيق الزيارات والبروتوكولات الرسمية.',
-      'إدارة العلاقات المجتمعية والمناسبات الوطنية والدينية.'
+      'رصد مشكلات المزارعين والفلاحين ونقلها للجهات المعنية.',
+      'تنظيم ندوات إرشاد زراعي وترشيد استخدام مياه الري.',
+      'دعم مبادرات التشجير والزراعة الحضرية والأمن الغذائي.'
     ],
     goals: [
-      'تعزيز الصورة الذهنية الإيجابية والمشرفة للحزب.',
-      'توسيع شبكة التواصل المجتمعي الفعال والمؤثر.'
+      'تطوير الوعي الزراعي ودعم استدامة الموارد المائية.',
+      'مساندة الفلاح والمزارع وتحسين منظومة الإنتاج الزراعي.'
     ],
     isActive: true,
     sortOrder: 5,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-media',
-    name: 'أمانة الميديا',
-    slug: 'media',
-    description: 'الذراع الإعلامي المسؤول عن توثيق كافة الأنشطة، والإنتاج المرئي، والتغطيات الإخبارية، والبث المباشر.',
+    id: 'sec-disability',
+    name: 'أمانة ذوي الهمم',
+    slug: 'people-of-determination',
+    description: 'المسؤولة عن رعاية حقوق ذوي الهمم ودمجهم الكامل في المجتمع، وتسهيل حصولهم على الخدمات الصحية والتعليمية والوظيفية.',
     duties: [
-      'تصوير وتوثيق الفعاليات والمبادرات بأحدث التقنيات.',
-      'صناعة المحتوى المرئي والموشن جرافيك والتقارير المصورة.',
-      'إدارة منصات التواصل الاجتماعي والبث المباشر للأحداث.'
+      'حصر احتياجات ذوي الهمم وتيسير إجراءات الدعم والتأهيل.',
+      'تنظيم فعاليات ومبادرات دمج مجتمعي وثقافي ورياضي لذوي الهمم.',
+      'التنسيق لتوفير فرص تدريب وتشغيل مناسبة بالتعاون مع مؤسسات المجتمع.'
     ],
     goals: [
-      'تغطية إعلامية فورية واحترافية تعكس نبض الأمانة.',
-      'إيصال رسالة الحزب ورؤيته لكل فئات المجتمع.'
+      'تحقيق الدمج المجتمعي الكامل وصون كرامة وحقوق ذوي الهمم.',
+      'بناء بيئة محلية ميسرة وداعمة في قسم ثالث أكتوبر.'
     ],
     isActive: true,
     sortOrder: 6,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-marketing',
-    name: 'أمانة التسويق',
-    slug: 'marketing',
-    description: 'المسؤولة عن الترويج للمبادرات والأنشطة، والحملات الجماهيرية، والوصول لأكبر شريحة من المواطنين.',
+    id: 'sec-education',
+    name: 'أمانة التعليم والبحث العلمي',
+    slug: 'education-and-scientific-research',
+    description: 'المسؤولة عن دعم العملية التعليمية والبحثية، ورعاية المتفوقين، ومحاربة التسرب التعليمي وتنظيم القوافل والمراجعات التعليمية.',
     duties: [
-      'تخطيط وتنفيذ الحملات الترويجية للمبادرات الخدمية.',
-      'دراسة اتجاهات واحتياجات المواطنين بمنطقة أكتوبر.',
-      'ابتكار آليات استقطاب تفاعلية للشباب والكوادر.'
+      'تنظيم قوافل تعليمية ومراجعات مجانية للطلاب في المراحل الدراسية.',
+      'دعم الأبحاث التطبيقية وربط الباحثين بقضايا التنمية المحلية.',
+      'متابعة أوضاع المدارس والمنشآت التعليمية والتنسيق لتطويرها.'
     ],
     goals: [
-      'تحقيق أعلى تفاعل ومشاركة شعبية في مبادرات الحزب.',
-      'ترسيخ شعار الحزب «مصر للجميع» في الوجدان العام.'
+      'الارتقاء بجودة التعليم وبناء جيل واعٍ ومثقف ومبتكر.',
+      'تشجيع البحث العلمي كركيزة للتنمية المستدامة.'
     ],
     isActive: true,
     sortOrder: 7,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-me',
-    name: 'أمانة المتابعة والتقييم',
-    slug: 'monitoring-and-evaluation',
-    description: 'المسؤولة عن قياس الأثر، وتدقيق معدلات إنجاز الخطط التشغيلية، ورفع تقارير الأداء الدورية للأمين العام.',
+    id: 'sec-housing',
+    name: 'أمانة الإسكان والتنمية العمرانية',
+    slug: 'housing-and-urban-development',
+    description: 'المسؤولة عن متابعة قضايا الإسكان والمرافق والتخطيط العمراني، ورصد احتياجات الأحياء الجديدة ومناطق ابني بيتك والتوسعات بأكتوبر.',
     duties: [
-      'وضع مؤشرات أداء رئيسية (KPIs) لكل أمانة ومبادرة.',
-      'إعداد تقارير دورية ومحايدة عن مسار الأنشطة.',
-      'رصد التحديات واقتراح المعالجات والتحسينات الفورية.'
+      'حصر احتياجات المرافق والطرق والإنارة والمناطق السكنية بقسم ثالث أكتوبر.',
+      'إعداد مقترحات وتصورات عمرانية لتحسين جودة الحياة في الأحياء.',
+      'التواصل مع الأجهزة التنفيذية لمتابعة مشروعات البنية التحتية.'
     ],
     goals: [
-      'ضمان أعلى معايير الجودة والشفافية والانضباط الحزبي.',
-      'تحويل الأهداف إلى نتائج ملموسة يشعر بها المواطن.'
+      'تحسين البيئة العمرانية والخدمات الأساسية لأهالي قسم ثالث أكتوبر.',
+      'دعم التخطيط العمراني المتوازن والسكني اللائق.'
     ],
     isActive: true,
     sortOrder: 8,
     createdAt: new Date().toISOString()
   },
   {
-    id: 'sec-rd',
-    name: 'أمانة البحث والتطوير',
-    slug: 'research-and-development',
-    description: 'المرصد الفكري والبحثي المسؤول عن دراسة قضايا وتحديات منطقة قسم ثالث أكتوبر وتقديم أوراق سياسات ومقترحات حلول.',
+    id: 'sec-trade',
+    name: 'أمانة التجارة والصناعة',
+    slug: 'trade-and-industry',
+    description: 'المسؤولة عن دعم القطاعات التجارية والصناعية، والتواصل مع المصانع والمستثمرين والتجار لتنشيط الأسواق المحلية وحل التحديات.',
     duties: [
-      'إجراء استطلاعات رأي ودراسات ميدانية لاحتياجات المنطقة.',
-      'إعداد أوراق عمل للمشكلات الخدمية والتنموية.',
-      'تقديم مقترحات لمبادرات نوعية مبتكرة تخدم المواطنين.'
+      'رصد تحديات المصانع والمنشآت التجارية في نطاق أكتوبر والجيزة.',
+      'دعم مبادرات المنتج المحلي ومعارض السلع بأسعار مخفضة للمواطنين.',
+      'تنظيم لقاءات مع مجتمع الأعمال لربط الصناعة باحتياجات السوق.'
     ],
     goals: [
-      'صياغة قرارات حزبية ومبادرات مبنية على دراسات علمية رصينة.',
-      'المساهمة الفعالة في تنمية مجتمع قسم ثالث أكتوبر.'
+      'تنشيط الحركة التجارية والصناعية وتوفير فرص عمل لأبناء المنطقة.',
+      'دعم استقرار الأسواق ومواجهة الممارسات الاحتكارية.'
     ],
     isActive: true,
     sortOrder: 9,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-health',
+    name: 'أمانة الصحة والسكان',
+    slug: 'health-and-population',
+    description: 'المسؤولة عن تنظيم القوافل الطبية المجانية، وحملات التوعية الصحية، ومتابعة الخدمات الصحية والمراكز الطبية بالمنطقة.',
+    duties: [
+      'إطلاق وتنظيم قوافل طبية شاملة في مختلف التخصصات لأهالي المنطقة.',
+      'تنفيذ حملات توعية صحية والوقاية من الأمراض ودعم الصحة الإنجابية.',
+      'التنسيق مع المستشفيات والوحدات الصحية لتسهيل خدمة المواطنين.'
+    ],
+    goals: [
+      'توفير رعاية صحية أولية وتوعوية قريبة من كل مواطن.',
+      'تعزيز الصحة العامة ومواجهة التحديات السكانية.'
+    ],
+    isActive: true,
+    sortOrder: 10,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-religious',
+    name: 'أمانة الشؤون الدينية',
+    slug: 'religious-affairs',
+    description: 'المسؤولة عن نشر القيم الأخلاقية والروحية السمحة، وتعزيز الخطاب الديني الوسطي، وتنظيم الندوات والاحتفالات الدينية.',
+    duties: [
+      'تنظيم الندوات التثقيفية التي ترسخ قيم التسامح والانتماء والخلق القويم.',
+      'المشاركة في إحياء المناسبات الدينية والوطنية ومبادرات التكافل.',
+      'مواجهة الأفكار المتطرفة بتعزيز الوعي المستنير.'
+    ],
+    goals: [
+      'ترسيخ القيم الدينية والوطنية الجامعة لكل المصريين.',
+      'تعزيز السلم المجتمعي والترابط الأسري والأخلاقي.'
+    ],
+    isActive: true,
+    sortOrder: 11,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-entrepreneurship',
+    name: 'أمانة ريادة الأعمال',
+    slug: 'entrepreneurship',
+    description: 'المسؤولة عن احتضان الأفكار الابتكارية للشباب، ودعم الشركات الناشئة والتدريب على نماذج الأعمال الحديثة والتحول الرقمي.',
+    duties: [
+      'تنظيم ورش عمل في ريادة الأعمال والتسويق الرقمي وإدارة المشاريع.',
+      'توجيه الشباب المبتكر لجهات التمويل وحاضنات الأعمال.',
+      'عقد ملتقيات لعرض تجارب رواد الأعمال الناجحين.'
+    ],
+    goals: [
+      'نشر ثقافة العمل الحر والابتكار بين شباب قسم ثالث أكتوبر.',
+      'بناء جيل من رواد الأعمال القادرين على خلق فرص عمل جديدة.'
+    ],
+    isActive: true,
+    sortOrder: 12,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-investment',
+    name: 'أمانة الاستثمار والشؤون الاقتصادية',
+    slug: 'investment-and-economic-affairs',
+    description: 'المسؤولة عن إعداد الرؤى الاقتصادية، وتحفيز المناخ الاستثماري، ودراسة الفرص التنموية في نطاق قسم ثالث أكتوبر ومحافظة الجيزة.',
+    duties: [
+      'إعداد أوراق عمل ودراسات حول الفرص الاستثمارية والملفات الاقتصادية.',
+      'رصد أثر السياسات الاقتصادية على المواطنين وتقديم توصيات عملية.',
+      'بناء جسور تعاون مع المستثمرين لدعم المشروعات ذات العائد المجتمعي.'
+    ],
+    goals: [
+      'تعزيز النمو الاقتصادي المستدام وجذب الاستثمارات المنتجة.',
+      'صياغة مقترحات اقتصادية تخدم التنمية المحلية والوطنية.'
+    ],
+    isActive: true,
+    sortOrder: 13,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-social-protection',
+    name: 'أمانة الحماية الاجتماعية',
+    slug: 'social-protection',
+    description: 'المسؤولة عن شبكات الأمان والتكافل الاجتماعي، ورعاية الأسر الأولى بالرعاية والأيتام وكبار السن وتنظيم القوافل الإغاثية.',
+    duties: [
+      'حصر الأسر الأولى بالرعاية وتنظيم قوافل الدعم الغذائي والاجتماعي.',
+      'تسهيل وصول المواطنين لبرامج الحماية الاجتماعية والخدمات التكافلية.',
+      'تنظيم المبادرات الموسمية لرفع الأعباء عن كاهل الأسر.'
+    ],
+    goals: [
+      'تحقيق العدالة والتكافل الاجتماعي في كافة أحياء قسم ثالث أكتوبر.',
+      'توفير مظلة دعم إنسانية مستدامة للفئات الأكثر احتياجاً.'
+    ],
+    isActive: true,
+    sortOrder: 14,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-crisis',
+    name: 'أمانة إدارة الأزمات والتدخلات العاجلة',
+    slug: 'crisis-management-and-urgent-interventions',
+    description: 'المسؤولة عن سرعة الاستجابة للطوارئ والأزمات الميدانية، وتنسيق فرق المتطوعين والتدخل السريع لخدمة أهالي المنطقة.',
+    duties: [
+      'تشكيل غرف متابعة وفرق تدخل سريع للاستجابة للبلاغات والطوارئ.',
+      'تنسيق جهود الإغاثة والدعم الفوري في حالات الأزمات المناخية أو الخدمية.',
+      'إعداد خطط استباقية للتعامل مع المخاطر والأزمات المحلية.'
+    ],
+    goals: [
+      'حماية المواطنين وتقليل آثار الأزمات عبر سرعة التدخل والتنسيق.',
+      'بناء منظومة جاهزية وتطوع ميداني سريعة وفعالة.'
+    ],
+    isActive: true,
+    sortOrder: 15,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-sme',
+    name: 'أمانة المشروعات الصغيرة والمتوسطة',
+    slug: 'small-and-medium-enterprises',
+    description: 'المسؤولة عن دعم أصحاب الورش والمشروعات الصغيرة والمتوسطة، وتقديم الإرشاد الإداري والفني وتيسير التمويل والتسويق.',
+    duties: [
+      'تقديم الدعم الاستشاري ودراسات الجدوى لأصحاب المشروعات الصغيرة.',
+      'تنظيم معارض تسويقية لمنتجات المشروعات الصغيرة والحرفية.',
+      'تذليل العقبات التمويلية والإجرائية بالتعاون مع الجهات المعنية.'
+    ],
+    goals: [
+      'تعزيز مساهمة المشروعات الصغيرة والمتوسطة في الاقتصاد المحلي.',
+      'تحويل الأفكار الإنتاجية إلى مشروعات مستقرة ومربحة.'
+    ],
+    isActive: true,
+    sortOrder: 16,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-media',
+    name: 'أمانة الإعلام',
+    slug: 'media',
+    description: 'الذراع الإعلامي الرسمي المسؤول عن إدارة الرسالة الإعلامية، والتغطية الصحفية، والإنتاج المرئي والمنصات الرقمية للأمانة.',
+    duties: [
+      'تغطية وتوثيق كافة الفعاليات والمبادرات بالصور والفيديو والبيانات الصحفية.',
+      'إدارة المنصات الرقمية والتواصل الفعال مع وسائل الإعلام.',
+      'إبراز إنجازات الحزب وأنشطة أمانة قسم ثالث أكتوبر بصورة احترافية.'
+    ],
+    goals: [
+      'إيصال صوت الحزب ورؤيته بوضوح ومصداقية لجميع المواطنين.',
+      'تقديم محتوى إعلامي مهني يعكس نبض الشارع واحتياجاته.'
+    ],
+    isActive: true,
+    sortOrder: 17,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-citizenship',
+    name: 'أمانة المواطنة',
+    slug: 'citizenship',
+    description: 'المسؤولة عن ترسيخ قيم المواطنة الكاملة والمساواة دون تمييز، وتعزيز الوحدة الوطنية والاندماج المجتمعي في كل المناسبات.',
+    duties: [
+      'تنظيم لقاءات وحوارات مجتمعية تعزز التماسك والوحدة الوطنية.',
+      'نشر ثقافة الحقوق والواجبات وسيادة القانون وتكافؤ الفرص.',
+      'المشاركة في المبادرات المشتركة بين كافة أطياف المجتمع.'
+    ],
+    goals: [
+      'ترسيخ مبدأ «مصر للجميع» والمساواة الكاملة بين كافة المواطنين.',
+      'بناء مجتمع متماسك يسوده الاحترام المتبادل والانتماء للوطن.'
+    ],
+    isActive: true,
+    sortOrder: 18,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-tourism',
+    name: 'أمانة السياحة والآثار',
+    slug: 'tourism-and-antiquities',
+    description: 'المسؤولة عن الترويج للسياحة الثقافية والأثرية والترفيهية، ودعم المبادرات المرتبطة بالمنطقة الأثرية بالجيزة وأكتوبر والمتحف المصري الكبير.',
+    duties: [
+      'تنظيم زيارات وبرامج تعريفية بالمعالم السياحية والأثرية لأهالي وشباب المنطقة.',
+      'إعداد مقترحات لتنشيط السياحة والخدمات الفندقية والإرشادية بالجيزة وأكتوبر.',
+      'نشر الوعي بأهمية الحفاظ على التراث الحضاري والآثار المصرية.'
+    ],
+    goals: [
+      'تعظيم الاستفادة المجتمعية والاقتصادية من المقومات السياحية بالجيزة.',
+      'تعزيز الوعي التاريخي والانتماء الحضاري لدى الشباب.'
+    ],
+    isActive: true,
+    sortOrder: 19,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-tribes',
+    name: 'أمانة القبائل العربية',
+    slug: 'arab-tribes',
+    description: 'المسؤولة عن مد جسور التواصل مع العائلات والقبائل العربية في نطاق أكتوبر والجيزة، وتعزيز دورهم الوطني والمجتمعي.',
+    duties: [
+      'عقد اللقاءات التشاورية مع رموز وعواقل القبائل والعائلات العربية.',
+      'تعزيز المشاركة المجتمعية وحل النزاعات ودعم السلم الأهلي.',
+      'تفعيل دور أبناء القبائل العربية في المبادرات التنموية والخدمية.'
+    ],
+    goals: [
+      'تعميق التلاحم الوطني والاجتماعي مع القبائل والعائلات العربية.',
+      'استثمار الترابط الأسري والقبلي في خدمة المجتمع المحلي.'
+    ],
+    isActive: true,
+    sortOrder: 20,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-local-councils',
+    name: 'أمانة شؤون المجالس المحلية',
+    slug: 'local-councils-affairs',
+    description: 'المسؤولة عن إعداد وتأهيل الكوادر للعمل المحلي، ومتابعة ملفات الإدارة المحلية والرقابة المجتمعية على الخدمات العامة.',
+    duties: [
+      'تأهيل الكوادر الحزبية بالقوانين المنظمة للإدارة والمجالس المحلية.',
+      'رصد أولويات الخدمات المحلية في الأحياء ورفع تقارير ومقترحات بشأنها.',
+      'بناء تواصل فعال بين المواطنين وآليات العمل المحلي والتنفيذي.'
+    ],
+    goals: [
+      'إعداد قيادات محلية واعية وقادرة على تمثيل أهالي قسم ثالث أكتوبر.',
+      'تحسين كفاءة المرافق والخدمات المحلية بمشاركة مجتمعية فاعلة.'
+    ],
+    isActive: true,
+    sortOrder: 21,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-culture',
+    name: 'أمانة الثقافة والفنون',
+    slug: 'culture-and-arts',
+    description: 'المسؤولة عن رعاية الحراك الثقافي والفني، واكتشاف المواهب الأدبية والفنية، وتنظيم الصالونات الثقافية ومعارض الكتاب والفنون.',
+    duties: [
+      'تنظيم الندوات والصالونات الثقافية والمسابقات الأدبية والفنية.',
+      'رعاية المواهب الشابة في الفنون التشكيلية والمسرح والموسيقى والكتابة.',
+      'نشر الوعي الثقافي وإتاحة الأنشطة الإبداعية لأهالي المنطقة.'
+    ],
+    goals: [
+      'إثراء الحياة الثقافية والفنية في قسم ثالث أكتوبر.',
+      'بناء الوعي الإبداعي والحفاظ على الهوية الثقافية المصرية.'
+    ],
+    isActive: true,
+    sortOrder: 22,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-environment',
+    name: 'أمانة البيئة والتنمية المستدامة',
+    slug: 'environment-and-sustainable-development',
+    description: 'المسؤولة عن حماية البيئة، وتنظيم حملات التشجير والنظافة وإعادة التدوير، ونشر ثقافة التنمية المستدامة والطاقة النظيفة.',
+    duties: [
+      'تنفيذ مبادرات التشجير وتجميل الميادين والحدائق بأحياء قسم ثالث أكتوبر.',
+      'نشر الوعي البيئي وثقافة ترشيد الموارد وإدارة المخلفات.',
+      'رصد التحديات البيئية وتقديم حلول مستدامة بالتعاون مع المجتمع المدني.'
+    ],
+    goals: [
+      'تحقيق بيئة صحية ونظيفة وخضراء لأهالي قسم ثالث أكتوبر.',
+      'دعم أهداف التنمية المستدامة والتحول الأخضر.'
+    ],
+    isActive: true,
+    sortOrder: 23,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-workers',
+    name: 'أمانة العمال',
+    slug: 'workers',
+    description: 'المسؤولة عن دعم ورعاية حقوق العمال والفنيين والحرفيين في المناطق الصناعية والخدمية، وتنظيم ملتقيات التوظيف والتدريب المهني.',
+    duties: [
+      'التواصل المباشر مع العمال في المناطق الصناعية والورش لبحث احتياجاتهم.',
+      'تنظيم دورات تدريب مهني وملتقيات توظيف بالتعاون مع الشركات والمصانع.',
+      'نشر الوعي بقوانين العمل والسلامة والصحة المهنية.'
+    ],
+    goals: [
+      'حماية حقوق العمال وتحسين ظروف العمل والإنتاج.',
+      'ربط الكوادر العمالية والحرفية بفرص التشغيل والتأهيل المهني.'
+    ],
+    isActive: true,
+    sortOrder: 24,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'sec-public-outreach',
+    name: 'أمانة التواصل الجماهيري',
+    slug: 'public-outreach',
+    description: 'المسؤولة عن مد جسور التواصل الميداني والمباشر مع المواطنين في كافة الشوارع والأحياء، واستقبال مقترحاتهم وشكاواهم وتعزيز التفاعل الجماهيري.',
+    duties: [
+      'تنظيم اللقاءات الجماهيرية المفتوحة والاستماع المباشر لمطالب المواطنين.',
+      'إدارة قنوات التواصل المجتمعي والمبادرات التشاركية في الأحياء.',
+      'متابعة شكاوى ومقترحات الأهالي وتوجيهها للأمانات والجهات المختصة.'
+    ],
+    goals: [
+      'تحقيق تواصل مستمر وفعّال يضع المواطن في قلب أولويات الأمانة.',
+      'بناء ثقة راسخة ومشاركة شعبية حقيقية في قسم ثالث أكتوبر.'
+    ],
+    isActive: true,
+    sortOrder: 25,
     createdAt: new Date().toISOString()
   }
 ];
@@ -759,7 +1064,8 @@ function getInitialDatabase(): AppDatabase {
       ],
       locationUrl: 'https://maps.app.goo.gl/iw7sGSbbb2K1g6yZ7?g_st=ac',
       mapEmbedUrl: 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed',
-      coordinates: '29.980836, 30.840788'
+      coordinates: '29.980836, 30.840788',
+      secretariatsVersion: 25
     }
   };
 }
@@ -794,10 +1100,10 @@ class DatabaseManager {
       if (raw) {
         const parsed = JSON.parse(raw);
         const initial = getInitialDatabase();
-        return {
+        const assembled: AppDatabase = {
           ...initial,
           ...parsed,
-          settings: { ...initial.settings, ...(parsed.settings || {}) },
+          settings: { ...initial.settings, ...(parsed.settings || {}), secretariatsVersion: parsed.settings?.secretariatsVersion },
           partyLeaders: Array.isArray(parsed.partyLeaders) ? parsed.partyLeaders : [],
           secretariatLeaders: Array.isArray(parsed.secretariatLeaders) ? parsed.secretariatLeaders : [],
           specializedSecretariats: Array.isArray(parsed.specializedSecretariats)
@@ -816,6 +1122,12 @@ class DatabaseManager {
           admins: Array.isArray(parsed.admins) ? parsed.admins : initial.admins,
           auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : initial.auditLogs
         };
+
+        const migrated = this.migrateSecretariatsIfNeeded(assembled);
+        if (migrated) {
+          this.save(assembled);
+        }
+        return assembled;
       }
     } catch (err) {
       console.error('Error loading database file:', err);
@@ -825,7 +1137,9 @@ class DatabaseManager {
           const bakRaw = fs.readFileSync(backupFile, 'utf-8');
           const parsed = JSON.parse(bakRaw);
           const initial = getInitialDatabase();
-          return { ...initial, ...parsed };
+          const assembled = { ...initial, ...parsed };
+          this.migrateSecretariatsIfNeeded(assembled);
+          return assembled;
         } catch {
           // ignore
         }
@@ -837,6 +1151,161 @@ class DatabaseManager {
       this.save(initial);
     }
     return initial;
+  }
+
+  private migrateSecretariatsIfNeeded(dbObj: AppDatabase): boolean {
+    const normalizeAr = (s: string) =>
+      String(s || '')
+        .trim()
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/\s+/g, ' ');
+
+    const isBannedSectionSec = (s: SpecializedSecretariat) => {
+      const n = normalizeAr(s.name || '');
+      return n === 'امانه القسم' || n === 'قسم ثالث اكتوبر' || s.slug === 'district-secretariat';
+    };
+
+    let changed = false;
+
+    // One-time upgrade from legacy 9 secretariats -> canonical 25 secretariats
+    if (dbObj.settings.secretariatsVersion !== 25) {
+      const existing = dbObj.specializedSecretariats || [];
+
+      // Map old secretariat IDs/names to the closest canonical ID so zero members/records are orphaned
+      const legacyToCanonicalId: Record<string, string> = {
+        'sec-org': 'sec-org',
+        'sec-hr': 'sec-membership',
+        'sec-training': 'sec-education',
+        'sec-tech': 'sec-entrepreneurship',
+        'sec-pr': 'sec-public-outreach',
+        'sec-media': 'sec-media',
+        'sec-marketing': 'sec-public-outreach',
+        'sec-me': 'sec-org',
+        'sec-rd': 'sec-education'
+      };
+
+      const oldById = new Map<string, SpecializedSecretariat>();
+      const oldByNormName = new Map<string, SpecializedSecretariat>();
+      for (const s of existing) {
+        if (s?.id) oldById.set(s.id, s);
+        if (s?.name) oldByNormName.set(normalizeAr(s.name), s);
+      }
+
+      const idRemap: Record<string, string> = { ...legacyToCanonicalId };
+
+      const newList: SpecializedSecretariat[] = INITIAL_SECRETARIATS.map(canonical => {
+        // Check if an old secretariat matches by normalized name or exact mapped ID (e.g. sec-org, sec-media)
+        const matchedOld =
+          oldByNormName.get(normalizeAr(canonical.name)) ||
+          (canonical.id === 'sec-org' ? oldById.get('sec-org') : undefined) ||
+          (canonical.id === 'sec-media' ? oldById.get('sec-media') : undefined);
+
+        if (matchedOld) {
+          idRemap[matchedOld.id] = canonical.id;
+          return {
+            ...canonical,
+            secretaryName: matchedOld.secretaryName || canonical.secretaryName,
+            secretaryPhotoUrl: matchedOld.secretaryPhotoUrl || canonical.secretaryPhotoUrl,
+            secretaryBio: matchedOld.secretaryBio || canonical.secretaryBio,
+            secretaryPhone: matchedOld.secretaryPhone || canonical.secretaryPhone,
+            assistantSecretaries:
+              matchedOld.assistantSecretaries && matchedOld.assistantSecretaries.length > 0
+                ? matchedOld.assistantSecretaries
+                : canonical.assistantSecretaries,
+            assistantSecretaryName: matchedOld.assistantSecretaryName || canonical.assistantSecretaryName,
+            assistantSecretaryPhotoUrl: matchedOld.assistantSecretaryPhotoUrl || canonical.assistantSecretaryPhotoUrl,
+            assistantSecretaryBio: matchedOld.assistantSecretaryBio || canonical.assistantSecretaryBio,
+            assistantSecretaryPhone: matchedOld.assistantSecretaryPhone || canonical.assistantSecretaryPhone,
+            galleryImages:
+              matchedOld.galleryImages && matchedOld.galleryImages.length > 0
+                ? matchedOld.galleryImages
+                : canonical.galleryImages,
+            videos:
+              matchedOld.videos && matchedOld.videos.length > 0
+                ? matchedOld.videos
+                : canonical.videos,
+            logoUrl: matchedOld.logoUrl || canonical.logoUrl,
+            coverUrl: matchedOld.coverUrl || canonical.coverUrl
+          };
+        }
+        return { ...canonical };
+      });
+
+      const remapSecId = (oldId?: string): string | undefined => {
+        if (!oldId) return oldId;
+        if (idRemap[oldId]) return idRemap[oldId];
+        const found = oldById.get(oldId);
+        if (found && !isBannedSectionSec(found)) {
+          const byName = newList.find(n => normalizeAr(n.name) === normalizeAr(found.name));
+          if (byName) return byName.id;
+        }
+        return oldId;
+      };
+
+      // Re-link all existing member, leader, media, event, initiative, and admin assignments safely
+      dbObj.secretariatMembers = (dbObj.secretariatMembers || []).map(sm => ({
+        ...sm,
+        secretariatId: remapSecId(sm.secretariatId) || sm.secretariatId
+      }));
+      dbObj.members = (dbObj.members || []).map(m => ({
+        ...m,
+        secretariatId: remapSecId(m.secretariatId),
+        assignmentHistory: (m.assignmentHistory || []).map(h => {
+          const nextId = remapSecId(h.secretariatId);
+          const nextSec = newList.find(s => s.id === nextId);
+          return {
+            ...h,
+            secretariatId: nextId,
+            secretariatName: nextSec ? nextSec.name : h.secretariatName
+          };
+        })
+      }));
+      dbObj.secretariatLeaders = (dbObj.secretariatLeaders || []).map(l => ({
+        ...l,
+        specializedSecretariatId: remapSecId(l.specializedSecretariatId)
+      }));
+      dbObj.media = (dbObj.media || []).map(m => ({
+        ...m,
+        linkedSecretariatId: remapSecId(m.linkedSecretariatId)
+      }));
+      dbObj.news = (dbObj.news || []).map(n => ({
+        ...n,
+        linkedSecretariatId: remapSecId(n.linkedSecretariatId)
+      }));
+      dbObj.admins = (dbObj.admins || []).map(a => ({
+        ...a,
+        managedSecretariatId: remapSecId(a.managedSecretariatId)
+      }));
+
+      dbObj.specializedSecretariats = newList;
+      dbObj.settings.secretariatsVersion = 25;
+      changed = true;
+    }
+
+    // Always strip banned "أمانة القسم" and deduplicate by normalized Arabic name
+    const seen = new Set<string>();
+    const deduped: SpecializedSecretariat[] = [];
+    for (const s of dbObj.specializedSecretariats || []) {
+      if (!s || isBannedSectionSec(s)) {
+        changed = true;
+        continue;
+      }
+      const key = normalizeAr(s.name);
+      if (seen.has(key)) {
+        changed = true;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(s);
+    }
+    if (deduped.length !== (dbObj.specializedSecretariats || []).length) {
+      dbObj.specializedSecretariats = deduped;
+      changed = true;
+    }
+
+    return changed;
   }
 
   public save(dataToSave?: AppDatabase): void {

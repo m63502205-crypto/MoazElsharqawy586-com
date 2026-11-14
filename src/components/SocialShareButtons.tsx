@@ -24,8 +24,8 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
 
   // Compute shareable URL: use direct server preview URL so social bots (WhatsApp, Facebook) unfurl the exact news/event image
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const hash = itemType === 'news' ? 'news' : 'events';
-  const shareUrl = url || (itemId ? `${baseUrl}/${itemType === 'news' ? 'news' : 'events'}/${itemId}` : `${baseUrl}/#${hash}`);
+  const routePath = itemType === 'news' ? 'news' : 'events';
+  const shareUrl = url || (itemId ? `${baseUrl}/${routePath}/${itemId}` : `${baseUrl}/${routePath}`);
 
   const cleanTitle = title.trim();
   const cleanSummary = summary ? summary.replace(/\r?\n/g, ' ').slice(0, 140).trim() + '...' : '';

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Menu, X, ShieldAlert, ArrowLeft, HeartHandshake, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { getViewPath } from '../utils/routes';
 
 interface NavbarProps {
   currentView: string;
@@ -23,8 +24,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const navLinks = [
     { id: 'home', label: 'الرئيسية' },
     { id: 'about', label: 'عن الحزب' },
-    { id: 'party-leaders', label: 'قيادات الحزب' },
-    { id: 'secretariat-leaders', label: 'قيادات أمانة أكتوبر' },
+    { id: 'party-leaders', label: 'القيادات' },
     { id: 'secretariats', label: 'الأمانات' },
     { id: 'initiatives', label: 'المبادرات' },
     { id: 'news', label: 'الأخبار' },
@@ -58,13 +58,19 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center justify-between h-20 gap-3">
           
           {/* Zone 1: Brand & Official Emblem */}
-          <button
-            onClick={() => handleNav('home')}
+          <a
+            href="/"
+            onClick={(e) => {
+              if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                handleNav('home');
+              }
+            }}
             className="flex items-center gap-3 text-right cursor-pointer group shrink-0"
           >
             <img
               src={officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-              alt="شعار حزب الجبهة الوطنية"
+              alt="شعار حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
               className="w-12 h-12 sm:w-13 sm:h-13 object-contain rounded-xl border border-amber-500/30 shadow-xs group-hover:scale-105 transition-transform bg-white p-0.5"
               referrerPolicy="no-referrer"
             />
@@ -79,17 +85,26 @@ export const Navbar: React.FC<NavbarProps> = ({
                 «{slogan || 'مصر للجميع'}»
               </span>
             </div>
-          </button>
+          </a>
 
           {/* Zone 2: Navigation Links (Desktop) */}
-          <nav className="hidden xl:flex items-center gap-4 2xl:gap-5 text-sm font-semibold text-stone-700">
+          <nav aria-label="التنقل الرئيسي" className="hidden xl:flex items-center gap-4 2xl:gap-5 text-sm font-semibold text-stone-700">
             {navLinks.map(link => {
-              const isActive = currentView === link.id;
+              const isActive =
+                currentView === link.id ||
+                (link.id === 'party-leaders' && currentView === 'secretariat-leaders');
               const isJoin = link.id === 'join';
+              const href = getViewPath(link.id);
               return (
-                <button
+                <a
                   key={link.id}
-                  onClick={() => handleNav(link.id)}
+                  href={href}
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      handleNav(link.id);
+                    }
+                  }}
                   className={`cursor-pointer whitespace-nowrap transition-colors py-1 border-b-2 font-bold flex items-center gap-1.5 ${
                     isJoin
                       ? isActive
@@ -102,7 +117,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 >
                   {isJoin && <HeartHandshake className="w-3.5 h-3.5 text-red-600" />}
                   <span>{link.label}</span>
-                </button>
+                </a>
               );
             })}
           </nav>
@@ -162,12 +177,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <div className="grid grid-cols-2 gap-2 text-sm font-semibold">
             {navLinks.map(link => {
-              const isActive = currentView === link.id;
+              const isActive =
+                currentView === link.id ||
+                (link.id === 'party-leaders' && currentView === 'secretariat-leaders');
               const isJoin = link.id === 'join';
+              const href = getViewPath(link.id);
               return (
-                <button
+                <a
                   key={link.id}
-                  onClick={() => handleNav(link.id)}
+                  href={href}
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      handleNav(link.id);
+                    }
+                  }}
                   className={`text-right px-3 py-2.5 rounded-xl transition-colors font-bold flex items-center justify-between ${
                     isJoin
                       ? isActive
@@ -180,7 +204,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 >
                   <span>{link.label}</span>
                   {isJoin && <HeartHandshake className="w-3.5 h-3.5" />}
-                </button>
+                </a>
               );
             })}
           </div>

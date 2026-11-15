@@ -373,6 +373,24 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
     createdAt: new Date().toISOString()
   },
   {
+    id: 'sec-media',
+    name: 'أمانة الإعلام',
+    slug: 'media',
+    description: 'الذراع الإعلامي الرسمي المسؤول عن إدارة الرسالة الإعلامية، والتغطية الصحفية، والإنتاج المرئي والمنصات الرقمية للأمانة.',
+    duties: [
+      'تغطية وتوثيق كافة الفعاليات والمبادرات بالصور والفيديو والبيانات الصحفية.',
+      'إدارة المنصات الرقمية والتواصل الفعال مع وسائل الإعلام.',
+      'إبراز إنجازات الحزب وأنشطة أمانة قسم ثالث أكتوبر بصورة احترافية.'
+    ],
+    goals: [
+      'إيصال صوت الحزب ورؤيته بوضوح ومصداقية لجميع المواطنين.',
+      'تقديم محتوى إعلامي مهني يعكس نبض الشارع واحتياجاته.'
+    ],
+    isActive: true,
+    sortOrder: 2,
+    createdAt: new Date().toISOString()
+  },
+  {
     id: 'sec-membership',
     name: 'أمانة العضوية',
     slug: 'membership',
@@ -387,7 +405,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'بناء سجل عضوية دقيق ومنظم يربط الطاقات الوطنية بالعمل العام.'
     ],
     isActive: true,
-    sortOrder: 2,
+    sortOrder: 3,
     createdAt: new Date().toISOString()
   },
   {
@@ -405,7 +423,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'تعزيز الروح الرياضية والانتماء الوطني لدى شباب قسم ثالث أكتوبر.'
     ],
     isActive: true,
-    sortOrder: 3,
+    sortOrder: 4,
     createdAt: new Date().toISOString()
   },
   {
@@ -423,7 +441,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'حماية الأسرة ودعم المرأة المعيلة وتكافؤ الفرص.'
     ],
     isActive: true,
-    sortOrder: 4,
+    sortOrder: 5,
     createdAt: new Date().toISOString()
   },
   {
@@ -441,7 +459,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'مساندة الفلاح والمزارع وتحسين منظومة الإنتاج الزراعي.'
     ],
     isActive: true,
-    sortOrder: 5,
+    sortOrder: 6,
     createdAt: new Date().toISOString()
   },
   {
@@ -459,7 +477,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'بناء بيئة محلية ميسرة وداعمة في قسم ثالث أكتوبر.'
     ],
     isActive: true,
-    sortOrder: 6,
+    sortOrder: 7,
     createdAt: new Date().toISOString()
   },
   {
@@ -477,7 +495,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'تشجيع البحث العلمي كركيزة للتنمية المستدامة.'
     ],
     isActive: true,
-    sortOrder: 7,
+    sortOrder: 8,
     createdAt: new Date().toISOString()
   },
   {
@@ -495,7 +513,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'دعم التخطيط العمراني المتوازن والسكني اللائق.'
     ],
     isActive: true,
-    sortOrder: 8,
+    sortOrder: 9,
     createdAt: new Date().toISOString()
   },
   {
@@ -513,7 +531,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'دعم استقرار الأسواق ومواجهة الممارسات الاحتكارية.'
     ],
     isActive: true,
-    sortOrder: 9,
+    sortOrder: 10,
     createdAt: new Date().toISOString()
   },
   {
@@ -531,7 +549,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'تعزيز الصحة العامة ومواجهة التحديات السكانية.'
     ],
     isActive: true,
-    sortOrder: 10,
+    sortOrder: 11,
     createdAt: new Date().toISOString()
   },
   {
@@ -549,7 +567,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'تعزيز السلم المجتمعي والترابط الأسري والأخلاقي.'
     ],
     isActive: true,
-    sortOrder: 11,
+    sortOrder: 12,
     createdAt: new Date().toISOString()
   },
   {
@@ -567,7 +585,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'بناء جيل من رواد الأعمال القادرين على خلق فرص عمل جديدة.'
     ],
     isActive: true,
-    sortOrder: 12,
+    sortOrder: 13,
     createdAt: new Date().toISOString()
   },
   {
@@ -585,7 +603,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'صياغة مقترحات اقتصادية تخدم التنمية المحلية والوطنية.'
     ],
     isActive: true,
-    sortOrder: 13,
+    sortOrder: 14,
     createdAt: new Date().toISOString()
   },
   {
@@ -603,7 +621,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'توفير مظلة دعم إنسانية مستدامة للفئات الأكثر احتياجاً.'
     ],
     isActive: true,
-    sortOrder: 14,
+    sortOrder: 15,
     createdAt: new Date().toISOString()
   },
   {
@@ -621,7 +639,7 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
       'بناء منظومة جاهزية وتطوع ميداني سريعة وفعالة.'
     ],
     isActive: true,
-    sortOrder: 15,
+    sortOrder: 16,
     createdAt: new Date().toISOString()
   },
   {
@@ -637,24 +655,6 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
     goals: [
       'تعزيز مساهمة المشروعات الصغيرة والمتوسطة في الاقتصاد المحلي.',
       'تحويل الأفكار الإنتاجية إلى مشروعات مستقرة ومربحة.'
-    ],
-    isActive: true,
-    sortOrder: 16,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'sec-media',
-    name: 'أمانة الإعلام',
-    slug: 'media',
-    description: 'الذراع الإعلامي الرسمي المسؤول عن إدارة الرسالة الإعلامية، والتغطية الصحفية، والإنتاج المرئي والمنصات الرقمية للأمانة.',
-    duties: [
-      'تغطية وتوثيق كافة الفعاليات والمبادرات بالصور والفيديو والبيانات الصحفية.',
-      'إدارة المنصات الرقمية والتواصل الفعال مع وسائل الإعلام.',
-      'إبراز إنجازات الحزب وأنشطة أمانة قسم ثالث أكتوبر بصورة احترافية.'
-    ],
-    goals: [
-      'إيصال صوت الحزب ورؤيته بوضوح ومصداقية لجميع المواطنين.',
-      'تقديم محتوى إعلامي مهني يعكس نبض الشارع واحتياجاته.'
     ],
     isActive: true,
     sortOrder: 17,
@@ -1282,7 +1282,7 @@ function getInitialDatabase(): AppDatabase {
       heroMediaType: 'video',
       heroDefaultMuted: false,
       secretariatsVersion: 25,
-      rosterVersion: 1
+      rosterVersion: 2
     }
   };
 }
@@ -1628,6 +1628,26 @@ class DatabaseManager {
       }
       dbObj.secretariatLeaders = currentSecLeaders.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
       dbObj.settings.rosterVersion = 1;
+      changed = true;
+    }
+
+    // Position أمانة الإعلام (sec-media) immediately 2nd after أمانة التنظيم (sec-org)
+    if ((dbObj.settings.rosterVersion || 0) < 2) {
+      const ordered = [...(dbObj.specializedSecretariats || [])].sort(
+        (a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)
+      );
+      const mediaIdx = ordered.findIndex(s => s.id === 'sec-media');
+      if (mediaIdx !== -1) {
+        const [mediaSec] = ordered.splice(mediaIdx, 1);
+        const orgIdx = ordered.findIndex(s => s.id === 'sec-org');
+        const insertIdx = orgIdx !== -1 ? orgIdx + 1 : 0;
+        ordered.splice(insertIdx, 0, mediaSec);
+      }
+      dbObj.specializedSecretariats = ordered.map((s, idx) => ({
+        ...s,
+        sortOrder: idx + 1
+      }));
+      dbObj.settings.rosterVersion = 2;
       changed = true;
     }
 

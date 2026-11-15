@@ -635,7 +635,11 @@ export async function syncAdminFullWithFirestore(
   const publicJson: any = await checkResp.json();
   const parsedPublic = parseFirestoreDocFields(publicJson.fields);
   if (parsedPublic?.data) {
-    nextDb.settings = { ...nextDb.settings, ...parsedPublic.data };
+    nextDb.settings = {
+      ...nextDb.settings,
+      ...parsedPublic.data,
+      rosterVersion: Number(parsedPublic.data.rosterVersion || 0)
+    };
     cloudHashes.set('site_config/public', hashObj({ isPublic: true, content: parsedPublic.data }));
   }
 

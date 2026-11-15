@@ -152,7 +152,10 @@ function requirePermission(perm: string) {
 // -------------------------------------------------------------
 
 // Google Site Verification File (supports built-in + custom admin verification filename)
-const DEFAULT_GOOGLE_VERIFICATION_TOKEN = 'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg';
+const DEFAULT_GOOGLE_VERIFICATION_TOKENS = [
+  'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg',
+  'Bod0xJP22hOaKj14Rq6e1ElD0LGxPQ2MuLNEiaa_bOQ'
+];
 
 app.get('/googlef3c013b384f88d85.html', (_req: Request, res: Response) => {
   res.type('text/html').send('google-site-verification: googlef3c013b384f88d85.html');
@@ -781,13 +784,21 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
   out = out.replace(/<meta\s+name="robots"\s+content="[^"]*"\s*\/?>/i, `<meta name="robots" content="${escapeHtml(seo.robots)}" />`);
   out = out.replace(/<meta\s+name="googlebot"\s+content="[^"]*"\s*\/?>/i, `<meta name="googlebot" content="${escapeHtml(seo.robots)}" />`);
 
-  const customVerification = (settings?.googleSiteVerification || '').trim();
-  const verificationMetaTags = customVerification && customVerification !== DEFAULT_GOOGLE_VERIFICATION_TOKEN
-    ? `<meta name="google-site-verification" content="${escapeHtml(DEFAULT_GOOGLE_VERIFICATION_TOKEN)}" />\n    <meta name="google-site-verification" content="${escapeHtml(customVerification)}" />`
-    : `<meta name="google-site-verification" content="${escapeHtml(customVerification || DEFAULT_GOOGLE_VERIFICATION_TOKEN)}" />`;
+  const customVerification = (settings?.googleSiteVerification || '')
+    .trim()
+    .replace(/^google-site-verification=/i, '');
+  const verificationTokens = Array.from(
+    new Set([
+      ...DEFAULT_GOOGLE_VERIFICATION_TOKENS,
+      ...(customVerification ? [customVerification] : [])
+    ])
+  );
+  const verificationMetaTags = verificationTokens
+    .map(token => `<meta name="google-site-verification" content="${escapeHtml(token)}" />`)
+    .join('\n    ');
   out = out.replace(
-    /<meta\s+name="google-site-verification"\s+content="[^"]*"\s*\/?>/i,
-    verificationMetaTags
+    /(?:\s*<meta\s+name="google-site-verification"\s+content="[^"]*"\s*\/?>)+/i,
+    `\n    ${verificationMetaTags}`
   );
 
   out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(HOME_SEO_TITLE)}" />`);

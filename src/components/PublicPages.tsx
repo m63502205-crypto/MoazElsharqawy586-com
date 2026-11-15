@@ -1035,7 +1035,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {data.specializedSecretariats.map(sec => (
+            {data.specializedSecretariats.map(sec => {
+              const baseAsstList: AssistantSecretaryEntry[] =
+                sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                  ? sec.assistantSecretaries.filter(a => a.name?.trim())
+                  : sec.assistantSecretaryName
+                  ? [{ id: 'asst-1', name: sec.assistantSecretaryName, photoUrl: sec.assistantSecretaryPhotoUrl || '' }]
+                  : [];
+              const memberAsstList: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
+                .filter(m => !baseAsstList.some(a => a.name.trim() === m.name.trim()))
+                .map(m => ({ id: m.id, name: m.name, photoUrl: m.photoUrl || '' }));
+              const allAssts = [...baseAsstList, ...memberAsstList];
+              const featuredPeople = [
+                ...(sec.secretaryPhotoUrl ? [{ name: sec.secretaryName || 'أمين الأمانة', role: 'أمين الأمانة', photoUrl: sec.secretaryPhotoUrl }] : []),
+                ...allAssts.filter(a => a.photoUrl).map(a => ({ name: a.name, role: a.title || 'الأمين المساعد', photoUrl: a.photoUrl! }))
+              ].slice(0, 3);
+
+              return (
               <div
                 key={sec.id}
                 onClick={() => openSecretariat(sec.slug)}
@@ -1060,6 +1077,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </p>
                 </div>
 
+                {featuredPeople.length > 0 && (
+                  <div className="mb-4 flex flex-wrap items-center gap-3">
+                    {featuredPeople.map((person, pIdx) => (
+                      <div key={pIdx} className="relative shrink-0">
+                        <img
+                          src={person.photoUrl}
+                          alt={person.name}
+                          className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover:scale-[1.03] transition-transform"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs gap-2">
                   <div className="space-y-0.5 text-stone-500 min-w-0">
                     <div className="truncate">
@@ -1068,30 +1100,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         {sec.secretaryName || 'قيد التعيين'}
                       </span>
                     </div>
-                    {(() => {
-                      const baseList: AssistantSecretaryEntry[] =
-                        sec.assistantSecretaries && sec.assistantSecretaries.length > 0
-                          ? sec.assistantSecretaries.filter(a => a.name?.trim())
-                          : sec.assistantSecretaryName
-                          ? [{ id: 'asst-1', name: sec.assistantSecretaryName }]
-                          : [];
-                      const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
-                        .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
-                        .filter(m => !baseList.some(a => a.name.trim() === m.name.trim()))
-                        .map(m => ({ id: m.id, name: m.name }));
-                      const allAssts = [...baseList, ...fromMembers];
-                      if (allAssts.length === 0) return null;
-                      return (
-                        <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
-                          <span className="font-medium">
-                            {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
-                          </span>
-                          <span className="font-semibold text-stone-700">
-                            {allAssts.map(a => a.name).join('، ')}
-                          </span>
-                        </div>
-                      );
-                    })()}
+                    {allAssts.length > 0 && (
+                      <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
+                        <span className="font-medium">
+                          {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
+                        </span>
+                        <span className="font-semibold text-stone-700">
+                          {allAssts.map(a => a.name).join('، ')}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
                     <span>التفاصيل</span>
@@ -1099,7 +1117,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </span>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </section>
 
@@ -1865,7 +1884,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {data.specializedSecretariats.map(sec => (
+            {data.specializedSecretariats.map(sec => {
+              const baseList: AssistantSecretaryEntry[] =
+                sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                  ? sec.assistantSecretaries.filter(a => a.name?.trim())
+                  : sec.assistantSecretaryName
+                  ? [{ id: 'asst-1', name: sec.assistantSecretaryName, photoUrl: sec.assistantSecretaryPhotoUrl || '' }]
+                  : [];
+              const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
+                .filter(m => !baseList.some(a => a.name.trim() === m.name.trim()))
+                .map(m => ({ id: m.id, name: m.name, photoUrl: m.photoUrl || '' }));
+              const allAssts = [...baseList, ...fromMembers];
+              const featuredPeople = [
+                ...(sec.secretaryPhotoUrl ? [{ name: sec.secretaryName || 'أمين الأمانة', photoUrl: sec.secretaryPhotoUrl }] : []),
+                ...allAssts.filter(a => a.photoUrl).map(a => ({ name: a.name, photoUrl: a.photoUrl! }))
+              ].slice(0, 3);
+
+              return (
               <div
                 key={sec.id}
                 onClick={() => openSecretariat(sec.slug)}
@@ -1885,9 +1921,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     {sec.name}
                   </h2>
 
-                  <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-6">
+                  <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-5">
                     {sec.description || 'أمانة تنظيمية متخصصة ضمن الهيكل الإداري والميداني لأمانة قسم ثالث أكتوبر.'}
                   </p>
+
+                  {featuredPeople.length > 0 && (
+                    <div className="mb-5 flex flex-wrap items-center gap-3">
+                      {featuredPeople.map((person, pIdx) => (
+                        <div key={pIdx} className="relative shrink-0">
+                          <img
+                            src={person.photoUrl}
+                            alt={person.name}
+                            className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover:scale-[1.03] transition-transform"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="space-y-1.5 mb-6 text-xs text-stone-500">
                     <div className="flex items-center gap-1.5">
@@ -1907,30 +1958,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <span className="text-stone-400 font-medium">أمين الأمانة: </span>
                       <span className="font-bold text-stone-900">{sec.secretaryName || 'قيد التكليف'}</span>
                     </div>
-                    {(() => {
-                      const baseList: AssistantSecretaryEntry[] =
-                        sec.assistantSecretaries && sec.assistantSecretaries.length > 0
-                          ? sec.assistantSecretaries.filter(a => a.name?.trim())
-                          : sec.assistantSecretaryName
-                          ? [{ id: 'asst-1', name: sec.assistantSecretaryName }]
-                          : [];
-                      const fromMembers: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
-                        .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
-                        .filter(m => !baseList.some(a => a.name.trim() === m.name.trim()))
-                        .map(m => ({ id: m.id, name: m.name }));
-                      const allAssts = [...baseList, ...fromMembers];
-                      if (allAssts.length === 0) return null;
-                      return (
-                        <div className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
-                          <span className="text-stone-400 font-medium">
-                            {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
-                          </span>
-                          <span className="font-semibold text-stone-800">
-                            {allAssts.map(a => a.name).join('، ')}
-                          </span>
-                        </div>
-                      );
-                    })()}
+                    {allAssts.length > 0 && (
+                      <div className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
+                        <span className="text-stone-400 font-medium">
+                          {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
+                        </span>
+                        <span className="font-semibold text-stone-800">
+                          {allAssts.map(a => a.name).join('، ')}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
                     <span>التفاصيل</span>
@@ -1938,7 +1975,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </span>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -1991,21 +2029,29 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             <h2>قيادة الأمانة</h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Secretary */}
-            <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
-              <div className="flex items-center gap-4">
-                <img
-                  src={sec.secretaryPhotoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                  alt={sec.secretaryName || 'أمين الأمانة'}
-                  className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="space-y-1 text-right">
-                  <span className="text-[11px] font-black text-red-700 bg-red-50 border border-red-200 px-2.5 py-0.5 rounded-full inline-block">
+            <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group">
+              <div>
+                <div
+                  onClick={() => sec.secretaryPhotoUrl && openLightbox([sec.secretaryPhotoUrl], 0, sec.secretaryName || 'أمين الأمانة')}
+                  className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${sec.secretaryPhotoUrl ? 'cursor-zoom-in' : ''}`}
+                >
+                  <img
+                    src={sec.secretaryPhotoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                    alt={sec.secretaryName || 'أمين الأمانة'}
+                    className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                      sec.secretaryPhotoUrl ? 'object-cover object-top' : 'object-contain p-8 bg-white'
+                    }`}
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute top-3 right-3 bg-red-700 text-white text-[11px] font-black px-3 py-1 rounded-lg shadow-xs">
                     أمين الأمانة (المسؤول الأول)
-                  </span>
-                  <h3 className="font-black text-stone-900 text-lg">
+                  </div>
+                </div>
+
+                <div className="p-5 text-right space-y-1.5">
+                  <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug">
                     {sec.secretaryName || 'قيد التكليف الرسمي'}
                   </h3>
                   <p className="text-xs text-stone-500">
@@ -2015,7 +2061,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
 
               {(sec.secretaryBio || sec.secretaryPhone) && (
-                <div className="mt-4 pt-3 border-t border-stone-100 space-y-1.5 text-xs">
+                <div className="px-5 pb-5 pt-3 border-t border-stone-100 space-y-2 text-xs text-right">
                   {sec.secretaryBio && (
                     <p className="text-stone-600 leading-relaxed font-normal">{sec.secretaryBio}</p>
                   )}
@@ -2063,18 +2109,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
               if (allAssistants.length === 0) {
                 return (
-                  <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
-                    <div className="flex items-center gap-4">
-                      <img
-                        src="/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg"
-                        alt="الأمين المساعد"
-                        className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="space-y-1 text-right">
-                        <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-block">
+                  <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs flex flex-col justify-between">
+                    <div>
+                      <div className="aspect-[4/5] bg-stone-50 overflow-hidden relative">
+                        <img
+                          src="/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg"
+                          alt="الأمين المساعد"
+                          className="w-full h-full object-contain p-8 bg-white"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute top-3 right-3 bg-stone-900/85 text-amber-300 text-[11px] font-black px-3 py-1 rounded-lg">
                           الأمين المساعد للأمانة
-                        </span>
+                        </div>
+                      </div>
+                      <div className="p-5 text-right space-y-1.5">
                         <h3 className="font-black text-stone-900 text-lg">
                           قيد التكليف الرسمي
                         </h3>
@@ -2088,19 +2136,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               }
 
               return allAssistants.map((asst, idx) => (
-                <div key={asst.id || idx} className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-center gap-4">
-                    <img
-                      src={asst.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                      alt={asst.name || 'الأمين المساعد'}
-                      className="w-20 h-20 rounded-2xl object-cover border-2 border-amber-500 shadow-xs bg-stone-100 shrink-0"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="space-y-1 text-right">
-                      <span className="text-[11px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-block">
+                <div key={asst.id || idx} className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group">
+                  <div>
+                    <div
+                      onClick={() => asst.photoUrl && openLightbox([asst.photoUrl], 0, asst.name || 'الأمين المساعد')}
+                      className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${asst.photoUrl ? 'cursor-zoom-in' : ''}`}
+                    >
+                      <img
+                        src={asst.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                        alt={asst.name || 'الأمين المساعد'}
+                        className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                          asst.photoUrl ? 'object-cover object-top' : 'object-contain p-8 bg-white'
+                        }`}
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute top-3 right-3 bg-stone-900/85 backdrop-blur-xs text-amber-300 text-[11px] font-black px-3 py-1 rounded-lg shadow-xs">
                         {asst.title || 'الأمين المساعد للأمانة'}
-                      </span>
-                      <h3 className="font-black text-stone-900 text-lg">
+                      </div>
+                    </div>
+
+                    <div className="p-5 text-right space-y-1.5">
+                      <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug">
                         {asst.name || 'قيد التكليف الرسمي'}
                       </h3>
                       <p className="text-xs text-stone-500">
@@ -2110,7 +2166,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   {(asst.bio || asst.phone) && (
-                    <div className="mt-4 pt-3 border-t border-stone-100 space-y-1.5 text-xs">
+                    <div className="px-5 pb-5 pt-3 border-t border-stone-100 space-y-2 text-xs text-right">
                       {asst.bio && (
                         <p className="text-stone-600 leading-relaxed font-normal">{asst.bio}</p>
                       )}
@@ -2159,57 +2215,69 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {bureauMembers.map(member => (
                     <div
                       key={member.id}
-                      className="bg-white rounded-2xl border border-stone-200 p-5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-3"
+                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group"
                     >
-                      <div className="flex items-start gap-3.5">
-                        {member.photoUrl ? (
-                          <img
-                            src={member.photoUrl}
-                            alt={member.name}
-                            className="w-14 h-14 rounded-full object-cover border-2 border-amber-400 bg-stone-100 shadow-xs shrink-0"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-stone-800 to-stone-900 text-amber-300 flex items-center justify-center font-black text-base border-2 border-amber-400 shadow-xs shrink-0">
-                            {member.name.substring(0, 1)}
-                          </div>
-                        )}
-                        <div className="space-y-1 text-right flex-1 min-w-0">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md inline-block bg-amber-50 text-amber-900 border border-amber-200 truncate max-w-full">
+                      <div>
+                        <div
+                          onClick={() => member.photoUrl && openLightbox([member.photoUrl], 0, member.name)}
+                          className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${member.photoUrl ? 'cursor-zoom-in' : ''}`}
+                        >
+                          {member.photoUrl ? (
+                            <img
+                              src={member.photoUrl}
+                              alt={member.name}
+                              className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-stone-800 to-stone-950 flex flex-col items-center justify-center gap-3 text-amber-300">
+                              <div className="w-24 h-24 rounded-full border-2 border-amber-400/60 bg-stone-900/80 flex items-center justify-center font-black text-4xl shadow-md">
+                                {member.name.substring(0, 1)}
+                              </div>
+                            </div>
+                          )}
+                          <div className="absolute top-3 right-3 bg-stone-900/85 backdrop-blur-xs text-amber-300 text-[11px] font-black px-3 py-1 rounded-lg max-w-[85%] truncate">
                             {member.bureauTitle || member.role || 'عضو هيئة مكتب'}
-                          </span>
-                          <h4 className="font-black text-stone-900 text-sm truncate">
+                          </div>
+                        </div>
+
+                        <div className="p-5 text-right space-y-1.5">
+                          <h4 className="font-black text-stone-900 text-lg leading-snug">
                             {member.name}
                           </h4>
                           {member.assignmentDate && (
-                            <p className="text-[10px] text-stone-400 font-mono">
+                            <p className="text-[11px] text-stone-400 font-mono">
                               تاريخ التكليف: {member.assignmentDate}
                             </p>
                           )}
                         </div>
                       </div>
 
-                      {member.notes && (
-                        <p className="text-xs text-stone-600 line-clamp-2 leading-relaxed bg-stone-50 p-2.5 rounded-xl border border-stone-100">
-                          {member.notes}
-                        </p>
-                      )}
+                      {(member.notes || member.phone) && (
+                        <div className="px-5 pb-5 space-y-2.5 text-right">
+                          {member.notes && (
+                            <p className="text-xs text-stone-600 leading-relaxed bg-stone-50 p-3 rounded-xl border border-stone-100">
+                              {member.notes}
+                            </p>
+                          )}
 
-                      {member.phone && (
-                        <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs">
-                          <span className="text-stone-400 text-[11px]">الاتصال المباشر:</span>
-                          <a
-                            href={`tel:${member.phone}`}
-                            className="font-mono font-bold text-red-700 hover:underline flex items-center gap-1"
-                            dir="ltr"
-                          >
-                            <Phone className="w-3 h-3 text-red-600" />
-                            <span>{member.phone}</span>
-                          </a>
+                          {member.phone && (
+                            <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs">
+                              <span className="text-stone-400 text-[11px]">الاتصال المباشر:</span>
+                              <a
+                                href={`tel:${member.phone}`}
+                                className="font-mono font-bold text-red-700 hover:underline flex items-center gap-1"
+                                dir="ltr"
+                              >
+                                <Phone className="w-3 h-3 text-red-600" />
+                                <span>{member.phone}</span>
+                              </a>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

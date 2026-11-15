@@ -75,7 +75,8 @@ import {
   FileSpreadsheet,
   Type,
   Play,
-  HeartHandshake
+  HeartHandshake,
+  Globe
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -158,6 +159,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [settings, setSettings] = useState<SiteSettings | null>(null);
   const [gaTestStatus, setGaTestStatus] = useState<string | null>(null);
   const [copiedSiteUrl, setCopiedSiteUrl] = useState(false);
+  const [copiedSitemapUrl, setCopiedSitemapUrl] = useState(false);
+  const [copiedRobotsUrl, setCopiedRobotsUrl] = useState(false);
+  const [seoCheckStatus, setSeoCheckStatus] = useState<string | null>(null);
 
   // Modals & sub-state
   const [selectedApp, setSelectedApp] = useState<MembershipApplication | null>(null);
@@ -4597,6 +4601,203 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         </ol>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Google Search Console (Free Indexing Without Buying a Domain) */}
+                  <div className="p-5 bg-emerald-50/40 border border-emerald-200 rounded-3xl space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-200/70 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
+                          <Globe className="w-5 h-5 text-white" />
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-sm font-black text-stone-900">
+                              الظهور والأرشفة في بحث جوجل (Google Search Console) — مجاناً بدون شراء دومين
+                            </h3>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                              جاهز للأرشفة المجانية
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-stone-600 mt-0.5">
+                            أضف الموقع في بحث جوجل مجاناً باستخدام رابط المنصة المجاني عبر خيار «بادئة عنوان URL» دون الحاجة لشراء دومين مدفوع.
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href="https://search.google.com/search-console/welcome"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-2xs self-start sm:self-auto cursor-pointer shrink-0"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        فتح Google Search Console
+                      </a>
+                    </div>
+
+                    {(() => {
+                      const activeOfficialUrl = (settings.officialSiteUrl || 'https://nfp-october3.ai.studio').trim().replace(/\/+$/, '');
+                      const sitemapFullUrl = `${activeOfficialUrl}/sitemap.xml`;
+                      const robotsFullUrl = `${activeOfficialUrl}/robots.txt`;
+                      return (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-bold text-stone-800 mb-1">
+                                رابط الموقع المجاني المعتمد في جوجل (Canonical & Sitemap URL)
+                              </label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="url"
+                                  placeholder="https://nfp-october3.ai.studio"
+                                  value={settings.officialSiteUrl ?? 'https://nfp-october3.ai.studio'}
+                                  onChange={e => setSettings({ ...settings, officialSiteUrl: e.target.value.trim() })}
+                                  className="flex-1 border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono text-left bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                                  dir="ltr"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setSettings({ ...settings, officialSiteUrl: window.location.origin })}
+                                  className="px-2.5 py-2 bg-white hover:bg-stone-100 text-stone-700 border border-stone-300 rounded-xl text-[11px] font-bold cursor-pointer shrink-0"
+                                  title="استخدام رابط المتصفح الحالي"
+                                >
+                                  استخدم الرابط الحالي
+                                </button>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-stone-800 mb-1">
+                                رمز التحقق في جوجل (Google Site Verification Meta Content)
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg"
+                                value={settings.googleSiteVerification ?? 'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg'}
+                                onChange={e => {
+                                  const raw = e.target.value.trim();
+                                  const match = raw.match(/content=["']([^"']+)["']/i);
+                                  setSettings({ ...settings, googleSiteVerification: match ? match[1].trim() : raw });
+                                }}
+                                className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono text-left bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                                dir="ltr"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-stone-800 mb-1">
+                              اسم ملف التحقق HTML الاختياري (إذا اخترت طريقة رفع ملف في جوجل)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="googlef3c013b384f88d85.html"
+                              value={settings.googleVerificationFile ?? 'googlef3c013b384f88d85.html'}
+                              onChange={e => setSettings({ ...settings, googleVerificationFile: e.target.value.trim().replace(/^\/+/, '') })}
+                              className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono text-left bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                              dir="ltr"
+                            />
+                          </div>
+
+                          {/* Quick Copy & Live Verification Buttons */}
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(`${activeOfficialUrl}/`);
+                                setCopiedSiteUrl(true);
+                                setTimeout(() => setCopiedSiteUrl(false), 2500);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-stone-300 transition cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                              {copiedSiteUrl ? 'تم نسخ رابط الموقع!' : 'نسخ رابط الموقع المجاني'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(sitemapFullUrl);
+                                setCopiedSitemapUrl(true);
+                                setTimeout(() => setCopiedSitemapUrl(false), 2500);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-stone-300 transition cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                              {copiedSitemapUrl ? 'تم نسخ Sitemap!' : 'نسخ رابط sitemap.xml'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(robotsFullUrl);
+                                setCopiedRobotsUrl(true);
+                                setTimeout(() => setCopiedRobotsUrl(false), 2500);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-stone-300 transition cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                              {copiedRobotsUrl ? 'تم نسخ robots.txt!' : 'نسخ رابط robots.txt'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const [robRes, mapRes] = await Promise.all([fetch('/robots.txt'), fetch('/sitemap.xml')]);
+                                  const mapText = await mapRes.text();
+                                  const urlCount = (mapText.match(/<url>/g) || []).length;
+                                  if (robRes.ok && mapRes.ok && urlCount > 0) {
+                                    setSeoCheckStatus(`تم الفحص بنجاح: ملف robots.txt وملف sitemap.xml يعملان الآن (${urlCount} صفحة عامة جاهزة للأرشفة في بحث جوجل).`);
+                                  } else {
+                                    setSeoCheckStatus('تعذر التحقق من ملفات الأرشفة حالياً.');
+                                  }
+                                } catch {
+                                  setSeoCheckStatus('تعذر الاتصال لفحص ملفات الأرشفة.');
+                                }
+                                setTimeout(() => setSeoCheckStatus(null), 7000);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                              فحص جاهزية الفهرسة الآن
+                            </button>
+                          </div>
+
+                          {seoCheckStatus && (
+                            <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-semibold flex items-center gap-2">
+                              <Check className="w-4 h-4 text-emerald-700 shrink-0" />
+                              <span>{seoCheckStatus}</span>
+                            </div>
+                          )}
+
+                          <div className="p-4 bg-white border border-emerald-200 rounded-2xl text-xs space-y-2 text-stone-700">
+                            <div className="font-bold text-stone-900 flex items-center gap-2">
+                              <span className="w-5 h-5 bg-emerald-100 text-emerald-800 rounded-full flex items-center justify-center text-[11px] font-black">✓</span>
+                              خطوات ظهور الموقع في بحث جوجل مجاناً بدون شراء دومين:
+                            </div>
+                            <ol className="list-decimal list-inside space-y-1.5 text-stone-600 leading-relaxed pr-2">
+                              <li>
+                                افتح <a href="https://search.google.com/search-console/welcome" target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline font-bold">Google Search Console</a> وسجّل الدخول بحساب جوجل.
+                              </li>
+                              <li>
+                                عند إضافة موقع جديد، <strong>لا تختر «النطاق / Domain»</strong> (لأنه مخصص للدومينات المدفوعة)، بل اختر الخيار الأيمن <strong>«بادئة عنوان URL / URL prefix»</strong>.
+                              </li>
+                              <li>
+                                ألصق رابط الموقع المجاني: <code className="bg-stone-100 px-1.5 py-0.5 rounded text-[11px] font-mono text-stone-900" dir="ltr">{activeOfficialUrl}/</code> ثم اضغط متابعة.
+                              </li>
+                              <li>
+                                إذا طلب إثبات الملكية اختر <strong>«علامة HTML»</strong> أو <strong>«ملف HTML»</strong> (الرمز والملف مدمجان بالموقع تلقائياً؛ وإن ظهر لك رمز مختلف ألصقه في الخانة أعلاه واضغط <strong>حفظ كافة الإعدادات</strong>).
+                              </li>
+                              <li>
+                                بعد تأكيد الملكية، افتح قسم <strong>ملفات Sitemap</strong> وأضف كلمة <code className="bg-stone-100 px-1.5 py-0.5 rounded font-mono">sitemap.xml</code> ثم افتح <strong>فحص عنوان URL</strong> بالرابط الرئيسي واضغط <strong>طلب الفهرسة (Request Indexing)</strong>.
+                              </li>
+                            </ol>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* DYNAMIC MEMBERSHIP APPLICATION FIELD SETTINGS */}

@@ -52,6 +52,7 @@ import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { syncHeroAudioState, stopHeroAudio, clearBrowserMediaSession } from '../utils/heroAudio';
 
 function normalizeArabicDigits(val: string): string {
   return val
@@ -142,26 +143,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
-  const heroAudioCtxRef = React.useRef<AudioContext | null>(null);
-  const heroAudioSourceRef = React.useRef<AudioBufferSourceNode | null>(null);
-  const heroAudioBuffersRef = React.useRef<Map<string, AudioBuffer>>(new Map());
-  const heroAudioPlayingUrlRef = React.useRef<string | null>(null);
 
-  // Clean up Web Audio context on unmount
+  // Stop hero audio when leaving PublicPages
   useEffect(() => {
     return () => {
-      try {
-        heroAudioSourceRef.current?.stop();
-        heroAudioSourceRef.current?.disconnect();
-      } catch {
-        // Ignore stop errors
-      }
-      heroAudioSourceRef.current = null;
-      heroAudioPlayingUrlRef.current = null;
-      if (heroAudioCtxRef.current && heroAudioCtxRef.current.state !== 'closed') {
-        heroAudioCtxRef.current.close().catch(() => {});
-      }
-      heroAudioCtxRef.current = null;
+      stopHeroAudio();
     };
   }, []);
 
@@ -228,166 +214,70 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     data.settings.officialLogo
   ]);
 
-  // Keep <video> muted so OS/Android Chrome lockscreen Media Player never appears,
-  // while playing the soundtrack cleanly via Web Audio API synced to video time.
+  // Keep <video> muted & always playing visually, while syncing early-boot Web Audio soundtrack
   useEffect(() => {
-    let cancelled = false;
-
-    const clearMediaSession = () => {
-      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-        try {
-          navigator.mediaSession.metadata = null;
-          navigator.mediaSession.playbackState = 'none';
-        } catch {
-          // Ignore browser MediaSession restrictions
-        }
-      }
-    };
-
-    const stopHeroAudio = () => {
-      if (heroAudioSourceRef.current) {
-        try {
-          heroAudioSourceRef.current.stop();
-          heroAudioSourceRef.current.disconnect();
-        } catch {
-          // Ignore already-stopped source
-        }
-        heroAudioSourceRef.current = null;
-      }
-      heroAudioPlayingUrlRef.current = null;
-    };
-
-    clearMediaSession();
+    clearBrowserMediaSession();
 
     if (currentView !== 'home') {
-      stopHeroAudio();
-      if (heroAudioCtxRef.current && heroAudioCtxRef.current.state === 'running') {
-        heroAudioCtxRef.current.suspend().catch(() => {});
-      }
+      syncHeroAudioState({ enabled: false });
       return;
     }
 
     const vid = heroVideoRef.current;
-    if (vid) {
+    const ensureVideoPlaying = () => {
+      if (!vid || document.hidden || currentView !== 'home') return;
+      vid.setAttribute('muted', '');
+      vid.setAttribute('playsinline', '');
+      vid.setAttribute('webkit-playsinline', '');
       vid.muted = true;
       vid.defaultMuted = true;
       vid.volume = 0;
-      vid.play().catch(() => {});
+      if (vid.paused) {
+        vid.play().catch(() => {});
+      }
+    };
+
+    if (vid) {
+      ensureVideoPlaying();
+      vid.addEventListener('loadeddata', ensureVideoPlaying);
+      vid.addEventListener('canplay', ensureVideoPlaying);
+      vid.addEventListener('pause', ensureVideoPlaying);
     }
 
     const activeSlide = heroSlides[heroSlideIndex];
-    if (!activeSlide || activeSlide.type !== 'video' || !activeSlide.url) {
-      stopHeroAudio();
-      return;
-    }
+    const isVideoSlide = Boolean(activeSlide && activeSlide.type === 'video' && activeSlide.url);
 
-    const videoUrl = activeSlide.url;
-    const AudioCtx =
-      typeof window !== 'undefined'
-        ? window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-        : undefined;
+    syncHeroAudioState({
+      enabled: isVideoSlide,
+      videoUrl: activeSlide?.url || null,
+      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
+    });
 
-    if (!AudioCtx) return;
-
-    if (!heroAudioCtxRef.current || heroAudioCtxRef.current.state === 'closed') {
-      heroAudioCtxRef.current = new AudioCtx();
-    }
-    const ctx = heroAudioCtxRef.current;
-
-    const startHeroAudio = async () => {
-      if (cancelled || document.hidden) return;
-      const buffer = heroAudioBuffersRef.current.get(videoUrl);
-      if (!buffer) return;
-
-      if (ctx.state === 'suspended') {
-        try {
-          await ctx.resume();
-        } catch {
-          return;
-        }
-      }
-
-      if (cancelled || document.hidden || ctx.state !== 'running') return;
-      if (heroAudioPlayingUrlRef.current === videoUrl && heroAudioSourceRef.current) return;
-
-      stopHeroAudio();
-
-      try {
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.loop = true;
-        source.connect(ctx.destination);
-
-        const currentVideoTime = heroVideoRef.current?.currentTime || 0;
-        const offset = buffer.duration > 0 ? currentVideoTime % buffer.duration : 0;
-        source.start(0, offset);
-
-        heroAudioSourceRef.current = source;
-        heroAudioPlayingUrlRef.current = videoUrl;
-        source.onended = () => {
-          if (heroAudioSourceRef.current === source) {
-            heroAudioSourceRef.current = null;
-            heroAudioPlayingUrlRef.current = null;
-          }
-        };
-      } catch {
-        // Ignore audio start errors
+    const handleVisibilityOrFocus = () => {
+      if (!document.hidden) {
+        ensureVideoPlaying();
       }
     };
 
-    if (!heroAudioBuffersRef.current.has(videoUrl)) {
-      fetch(videoUrl)
-        .then((res) => {
-          if (!res.ok) throw new Error('Audio fetch failed');
-          return res.arrayBuffer();
-        })
-        .then((arr) => ctx.decodeAudioData(arr))
-        .then((decoded) => {
-          heroAudioBuffersRef.current.set(videoUrl, decoded);
-          if (!cancelled) {
-            startHeroAudio();
-          }
-        })
-        .catch(() => {
-          // Ignore audio decode/network errors gracefully
-        });
-    } else {
-      startHeroAudio();
-    }
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
 
-    const handleUserGesture = () => {
-      if (cancelled || document.hidden) return;
-      if (ctx.state === 'suspended') {
-        ctx.resume()
-          .then(() => {
-            if (!cancelled) startHeroAudio();
-          })
-          .catch(() => {});
-      } else {
-        startHeroAudio();
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        stopHeroAudio();
-        if (ctx.state === 'running') {
-          ctx.suspend().catch(() => {});
-        }
-      } else if (!cancelled) {
-        startHeroAudio();
-      }
-    };
-
-    const gestureEvents: Array<keyof DocumentEventMap> = ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown'];
-    gestureEvents.forEach((evt) => document.addEventListener(evt, handleUserGesture, { passive: true }));
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const playWatchdog = window.setInterval(() => {
+      ensureVideoPlaying();
+    }, 1500);
 
     return () => {
-      cancelled = true;
-      gestureEvents.forEach((evt) => document.removeEventListener(evt, handleUserGesture));
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      stopHeroAudio();
+      window.clearInterval(playWatchdog);
+      if (vid) {
+        vid.removeEventListener('loadeddata', ensureVideoPlaying);
+        vid.removeEventListener('canplay', ensureVideoPlaying);
+        vid.removeEventListener('pause', ensureVideoPlaying);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      syncHeroAudioState({ enabled: false });
     };
   }, [currentView, heroSlideIndex, heroSlides]);
 
@@ -690,13 +580,18 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="max-w-6xl mx-auto px-0 sm:px-4 lg:px-6">
 
             {/* Main Hero Display Container (Slightly enlarged, clean full-width framing with zero black gaps) */}
-            <div className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[650px] w-full overflow-hidden bg-stone-100 sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl">
+            <div
+              className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[650px] w-full overflow-hidden bg-stone-100 sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl select-none"
+              style={{ touchAction: 'pan-y' }}
+            >
               {heroSlides.map((slide, idx) => {
                 const isActive = idx === heroSlideIndex;
                 return (
                   <div
                     key={slide.id || idx}
                     className={`absolute inset-0 w-full h-full transition-opacity duration-700 ease-in-out ${
+                      slide.type === 'video' ? 'pointer-events-none select-none' : ''
+                    } ${
                       isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                     }`}
                   >
@@ -709,17 +604,39 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         loop
                         playsInline
                         preload="auto"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        draggable={false}
                         disablePictureInPicture
                         disableRemotePlayback
                         controlsList="nodownload noplaybackrate noremoteplayback"
                         onContextMenu={(e) => e.preventDefault()}
+                        onLoadedData={(e) => {
+                          e.currentTarget.muted = true;
+                          e.currentTarget.volume = 0;
+                          if (!document.hidden && e.currentTarget.paused) {
+                            e.currentTarget.play().catch(() => {});
+                          }
+                        }}
+                        onCanPlay={(e) => {
+                          e.currentTarget.muted = true;
+                          e.currentTarget.volume = 0;
+                          if (!document.hidden && e.currentTarget.paused) {
+                            e.currentTarget.play().catch(() => {});
+                          }
+                        }}
+                        onPause={(e) => {
+                          if (!document.hidden && currentView === 'home') {
+                            e.currentTarget.play().catch(() => {});
+                          }
+                        }}
                         onVolumeChange={(e) => {
                           if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
                             e.currentTarget.muted = true;
                             e.currentTarget.volume = 0;
                           }
                         }}
-                        poster={data.settings.heroPosterUrl || undefined}
+                        poster={data.settings.heroPosterUrl || '/assets/aistudio/hero-poster.jpg'}
                         className="w-full h-full object-cover object-[center_20%] pointer-events-none select-none"
                       />
                     ) : (
@@ -891,25 +808,29 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </section>
 
-        {/* Party Headquarters / Red Carpet Entrance Photo Card (Matching video frame 00:01 - 00:02) */}
-        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="overflow-hidden rounded-3xl border-2 border-amber-500/30 shadow-xl bg-stone-950 group">
-            <div className="relative aspect-[16/9] sm:aspect-[21/9] w-full overflow-hidden">
+        {/* Party Headquarters Entrance Photo Card */}
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="overflow-hidden rounded-3xl border-2 border-amber-500/40 shadow-xl bg-stone-950 group">
+            <div className="relative aspect-[4/3] sm:aspect-[16/12] w-full overflow-hidden bg-stone-900">
               <img
-                src={data.settings.entranceImageUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                alt="مدخل مقر حزب الجبهة الوطنية"
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                src={data.settings.entranceImageUrl || '/assets/aistudio/______________________________20261114_203911_a06570e5.jpg'}
+                alt="مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
+                className="w-full h-full object-cover object-bottom group-hover:scale-[1.02] transition-transform duration-700"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
-              <div className="absolute bottom-4 right-4 sm:bottom-6 sm:right-6 text-right text-white">
-                <span className="bg-amber-500 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-md uppercase tracking-wider">
+            </div>
+            <div className="px-5 py-3.5 bg-stone-950 border-t border-amber-500/25 flex flex-wrap items-center justify-between gap-2 text-right">
+              <div className="flex items-center gap-2.5">
+                <span className="bg-amber-500 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-md shrink-0">
                   مقر الحزب
                 </span>
-                <h3 className="text-base sm:text-xl font-black mt-1 text-white">
-                  مقر حزب الجبهة الوطنية – قسم ثالث أكتوبر
+                <h3 className="text-sm sm:text-lg font-black text-white">
+                  مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر
                 </h3>
               </div>
+              <span className="text-[11px] sm:text-xs font-bold text-amber-300/90">
+                محافظة الجيزة – مصر للجميع
+              </span>
             </div>
           </div>
         </section>
@@ -958,10 +879,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </section>
 
-        {/* Section 1: Unified Leaders Preview (Party Leaders + 3rd October Secretariat Leaders) */}
+        {/* Section 1: Unified Leaders Preview (All Party Leaders + All 3rd October Secretariat Leaders & Bureau) */}
         {(data.partyLeaders.length > 0 || data.secretariatLeaders.length > 0) && (
-          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
                 <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
                   {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
@@ -983,73 +904,103 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </a>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {data.partyLeaders.slice(0, data.secretariatLeaders.length > 0 ? 4 : 8).map(leader => (
-                <div
-                  key={leader.id}
-                  onClick={() => setSelectedPartyLeader(leader)}
-                  className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
-                >
-                  <div className="aspect-square bg-stone-100 overflow-hidden relative">
-                    <img
-                      src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                      alt={leader.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute top-2 right-2 bg-stone-900/80 backdrop-blur-xs text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-md">
-                      {leader.level || (leader.governorate || 'المستوى القيادي')}
-                    </div>
-                  </div>
-                  <div className="p-4 text-right">
-                    <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
-                      {leader.name}
-                    </h3>
-                    <p className="text-xs font-semibold text-red-700 mt-0.5">
-                      {leader.position}
-                    </p>
-                    {leader.bio && (
-                      <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
-                        {leader.bio}
-                      </p>
-                    )}
-                  </div>
+            {data.partyLeaders.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-r-4 border-red-700 pr-3">
+                  <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                    قيادات الحزب (الهيئة العليا والمحافظات)
+                  </h3>
+                  <span className="text-xs font-bold text-stone-500">
+                    {data.partyLeaders.length} قيادات
+                  </span>
                 </div>
-              ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {data.partyLeaders.map(leader => (
+                    <div
+                      key={leader.id}
+                      onClick={() => setSelectedPartyLeader(leader)}
+                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
+                    >
+                      <div className="aspect-square bg-stone-50 overflow-hidden relative">
+                        <img
+                          src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                          alt={leader.name}
+                          className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                            leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                          }`}
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute top-2 right-2 bg-stone-900/80 backdrop-blur-xs text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-md">
+                          {leader.level || (leader.governorate || 'المستوى القيادي')}
+                        </div>
+                      </div>
+                      <div className="p-4 text-right">
+                        <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
+                          {leader.name}
+                        </h3>
+                        <p className="text-xs font-semibold text-red-700 mt-0.5 leading-relaxed">
+                          {leader.position}
+                        </p>
+                        {leader.bio && (
+                          <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
+                            {leader.bio}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
-              {data.secretariatLeaders.slice(0, data.partyLeaders.length > 0 ? 4 : 8).map(leader => (
-                <div
-                  key={leader.id}
-                  onClick={() => setSelectedSecLeader(leader)}
-                  className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
-                >
-                  <div className="aspect-square bg-stone-100 overflow-hidden relative">
-                    <img
-                      src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                      alt={leader.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                      أمانة قسم ثالث أكتوبر
-                    </div>
-                  </div>
-                  <div className="p-4 text-right">
-                    <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
-                      {leader.name}
-                    </h3>
-                    <p className="text-xs font-semibold text-amber-700 mt-0.5">
-                      {leader.title}
-                    </p>
-                    {leader.bio && (
-                      <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
-                        {leader.bio}
-                      </p>
-                    )}
-                  </div>
+            {data.secretariatLeaders.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-r-4 border-amber-500 pr-3">
+                  <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                    قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر
+                  </h3>
+                  <span className="text-xs font-bold text-stone-500">
+                    {data.secretariatLeaders.length} قيادات
+                  </span>
                 </div>
-              ))}
-            </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {data.secretariatLeaders.map(leader => (
+                    <div
+                      key={leader.id}
+                      onClick={() => setSelectedSecLeader(leader)}
+                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
+                    >
+                      <div className="aspect-square bg-stone-50 overflow-hidden relative">
+                        <img
+                          src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                          alt={leader.name}
+                          className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                            leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                          }`}
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                          أمانة قسم ثالث أكتوبر
+                        </div>
+                      </div>
+                      <div className="p-4 text-right">
+                        <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
+                          {leader.name}
+                        </h3>
+                        <p className="text-xs font-semibold text-amber-700 mt-0.5 leading-relaxed">
+                          {leader.title}
+                        </p>
+                        {leader.bio && (
+                          <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
+                            {leader.bio}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         )}
 
@@ -1131,7 +1082,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       const allAssts = [...baseList, ...fromMembers];
                       if (allAssts.length === 0) return null;
                       return (
-                        <div className="text-[11px] text-stone-500 truncate">
+                        <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
                           <span className="font-medium">
                             {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
                           </span>
@@ -1703,11 +1654,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:-translate-y-1 flex flex-col justify-between"
               >
                 <div>
-                  <div className="aspect-[4/5] bg-stone-100 overflow-hidden relative">
+                  <div className="aspect-[4/5] bg-stone-50 overflow-hidden relative">
                     <img
                       src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                       alt={leader.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                        leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                      }`}
                       referrerPolicy="no-referrer"
                     />
                     <div className="absolute top-2.5 right-2.5 bg-stone-900/85 backdrop-blur-xs text-amber-300 text-[11px] font-bold px-2.5 py-1 rounded-md">
@@ -1745,11 +1698,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:-translate-y-1 flex flex-col justify-between"
               >
                 <div>
-                  <div className="aspect-[4/5] bg-stone-100 overflow-hidden relative">
+                  <div className="aspect-[4/5] bg-stone-50 overflow-hidden relative">
                     <img
                       src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                       alt={leader.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                        leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                      }`}
                       referrerPolicy="no-referrer"
                     />
                     <div className="absolute top-2.5 right-2.5 bg-red-700 text-white text-[11px] font-bold px-2.5 py-1 rounded-md">
@@ -1966,7 +1921,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       const allAssts = [...baseList, ...fromMembers];
                       if (allAssts.length === 0) return null;
                       return (
-                        <div className="text-[11px] text-stone-600 truncate">
+                        <div className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
                           <span className="text-stone-400 font-medium">
                             {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
                           </span>

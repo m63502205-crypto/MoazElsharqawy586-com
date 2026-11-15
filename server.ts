@@ -3,8 +3,19 @@ import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { db, hashPassword } from './src/server/db.ts';
+import { db, hashPassword, runWithFirebaseToken, getCurrentFirebaseToken } from './src/server/db.ts';
 import type { AdminUser, MembershipApplication, MemberRecord } from './src/server/db.ts';
+import {
+  verifyFirebaseIdToken,
+  ensureAdminRegistryDoc,
+  syncAdminFullWithFirestore,
+  pullPublicFromFirestore,
+  refreshPublicIfStale,
+  syncUploadAssetToFirestore,
+  fetchUploadAssetFromFirestore,
+  isCloudConfigured,
+  isCloudInitialized
+} from './src/server/firestoreSync.ts';
 
 const app = express();
 app.set('trust proxy', true);
@@ -17,11 +28,38 @@ const PORT =
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Static uploads directory
+// Bind optional Firebase ID Token from client into AsyncLocalStorage for automatic Firestore diff sync on db.save()
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const headerToken = req.headers['x-firebase-id-token'];
+  const fbToken = typeof headerToken === 'string' && headerToken.trim() ? headerToken.trim() : undefined;
+  runWithFirebaseToken(fbToken, () => next());
+});
+
+// Static uploads directory + transparent Firestore fallback for cross-instance uploads
 const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
+app.get('/uploads/:filename', async (req: Request, res: Response, next: NextFunction) => {
+  const safeName = path.basename(req.params.filename || '');
+  if (!safeName) return next();
+  const localPath = path.join(uploadsDir, safeName);
+  if (fs.existsSync(localPath)) {
+    return next();
+  }
+  const cloudAsset = await fetchUploadAssetFromFirestore(safeName);
+  if (cloudAsset) {
+    try {
+      fs.writeFileSync(localPath, cloudAsset.buffer);
+    } catch {
+      // ignore local cache write error
+    }
+    res.setHeader('Content-Type', cloudAsset.mime);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    return res.send(cloudAsset.buffer);
+  }
+  return next();
+});
 app.use('/uploads', express.static(uploadsDir));
 
 // Helper to persist base64 data URLs to disk in data/uploads
@@ -48,6 +86,12 @@ export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): str
     const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
     const filePath = path.join(uploadsDir, filename);
     fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+    const activeToken = getCurrentFirebaseToken();
+    if (activeToken && mime.startsWith('image/')) {
+      syncUploadAssetToFirestore(filename, mime, base64Data, activeToken).catch(err => {
+        console.error('Error syncing upload asset to Firestore:', err);
+      });
+    }
     return `/uploads/${filename}`;
   } catch (err) {
     console.error('Error persisting data URL to disk:', err);
@@ -107,15 +151,35 @@ function requirePermission(perm: string) {
 // PUBLIC APIS & SEARCH ENGINE VERIFICATION
 // -------------------------------------------------------------
 
-// Google Site Verification File
+// Google Site Verification File (supports built-in + custom admin verification filename)
+const DEFAULT_GOOGLE_VERIFICATION_TOKEN = 'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg';
+
 app.get('/googlef3c013b384f88d85.html', (_req: Request, res: Response) => {
   res.type('text/html').send('google-site-verification: googlef3c013b384f88d85.html');
+});
+
+app.get(/^\/(google[a-zA-Z0-9_-]+\.html)$/, (req: Request, res: Response, next: NextFunction) => {
+  const data = db.get();
+  const configuredFile = (data.settings?.googleVerificationFile || '').trim().replace(/^\/+/, '');
+  const requestedFile = req.path.replace(/^\/+/, '');
+  if (configuredFile && configuredFile === requestedFile) {
+    return res.type('text/html').send(`google-site-verification: ${configuredFile}`);
+  }
+  return next();
 });
 
 const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
 const HOME_SEO_TITLE = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
 const HOME_SEO_DESCRIPTION =
   'الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+
+function getOfficialSiteUrl(data: ReturnType<typeof db.get>): string {
+  const configured = (data.settings?.officialSiteUrl || '').trim();
+  if (configured && (configured.startsWith('https://') || configured.startsWith('http://'))) {
+    return configured.replace(/\/+$/, '');
+  }
+  return OFFICIAL_SITE_URL;
+}
 
 // Ensure admin UI and admin APIs are never indexed by search engines
 app.use(['/admin', '/api/admin'], (_req: Request, res: Response, next: NextFunction) => {
@@ -125,12 +189,14 @@ app.use(['/admin', '/api/admin'], (_req: Request, res: Response, next: NextFunct
 
 // Robots.txt
 app.get('/robots.txt', (_req: Request, res: Response) => {
+  const data = db.get();
+  const siteUrl = getOfficialSiteUrl(data);
   const content = `User-agent: *
 Allow: /
 Disallow: /admin
 Disallow: /api/admin/
 
-Sitemap: ${OFFICIAL_SITE_URL}/sitemap.xml
+Sitemap: ${siteUrl}/sitemap.xml
 `;
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.type('text/plain').send(content);
@@ -139,6 +205,7 @@ Sitemap: ${OFFICIAL_SITE_URL}/sitemap.xml
 // Dynamic Sitemap.xml (real crawlable URLs for Google Search)
 app.get('/sitemap.xml', (_req: Request, res: Response) => {
   const data = db.get();
+  const siteUrl = getOfficialSiteUrl(data);
 
   interface SitemapEntry {
     path: string;
@@ -216,7 +283,7 @@ app.get('/sitemap.xml', (_req: Request, res: Response) => {
 
   const xmlUrls = allItems
     .map(item => `  <url>
-    <loc>${escapeHtml(`${OFFICIAL_SITE_URL}/${item.path}`)}</loc>${item.lastmod ? `\n    <lastmod>${item.lastmod}</lastmod>` : ''}
+    <loc>${escapeHtml(`${siteUrl}/${item.path}`)}</loc>${item.lastmod ? `\n    <lastmod>${item.lastmod}</lastmod>` : ''}
     <changefreq>${item.changefreq}</changefreq>
     <priority>${item.priority}</priority>
   </url>`)
@@ -227,7 +294,9 @@ app.get('/sitemap.xml', (_req: Request, res: Response) => {
 ${xmlUrls}
 </urlset>`;
 
-  res.type('application/xml').send(sitemapXml);
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.send(sitemapXml);
 });
 
 // Resolve current reachable asset origin (used for social image unfurling when previewing on staging or production)
@@ -344,10 +413,11 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
 
   const phone = settings.phone || '01003070108';
   const address = settings.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
+  const siteUrl = getOfficialSiteUrl(data);
 
   let title = HOME_SEO_TITLE;
   let description = HOME_SEO_DESCRIPTION;
-  let canonical = `${OFFICIAL_SITE_URL}/`;
+  let canonical = `${siteUrl}/`;
   let ogType = 'website';
   let ogImage = defaultOgImage;
   let robots = 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
@@ -360,7 +430,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/about') {
     title = 'عن الحزب والأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'تعرف على رؤية ورسالة ومبادئ حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورها المجتمعي والتنموي.';
-    canonical = `${OFFICIAL_SITE_URL}/about`;
+    canonical = `${siteUrl}/about`;
     mainHtml = `
       <section>
         <h1>عن حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر</h1>
@@ -373,7 +443,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/party-leaders') {
     title = 'القيادات | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'تعرف على قيادات حزب الجبهة الوطنية وقيادات وهيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورهم في العمل الوطني والمجتمعي.';
-    canonical = `${OFFICIAL_SITE_URL}/party-leaders`;
+    canonical = `${siteUrl}/party-leaders`;
     const combinedLeadersCount = visiblePartyLeaders.length + visibleSecLeaders.length;
     mainHtml = `
       <section>
@@ -390,7 +460,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/secretariat-leaders') {
     title = 'قيادات أمانة قسم ثالث أكتوبر | حزب الجبهة الوطنية';
     description = 'قيادات وهيئة مكتب أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
-    canonical = `${OFFICIAL_SITE_URL}/secretariat-leaders`;
+    canonical = `${siteUrl}/secretariat-leaders`;
     mainHtml = `
       <section>
         <h1>قيادات أمانة قسم ثالث أكتوبر – محافظة الجيزة</h1>
@@ -403,7 +473,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/secretariats') {
     title = 'الأمانات التخصصية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'استعرض الأمانات التخصصية لحزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر بمحافظة الجيزة ومهامها وأمناءها.';
-    canonical = `${OFFICIAL_SITE_URL}/secretariats`;
+    canonical = `${siteUrl}/secretariats`;
     mainHtml = `
       <section>
         <h1>الأمانات التخصصية والنوعية – أمانة قسم ثالث أكتوبر</h1>
@@ -423,7 +493,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       description = sec.description
         ? `${sec.name} بحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر: ${sec.description.slice(0, 140)}`
         : HOME_SEO_DESCRIPTION;
-      canonical = `${OFFICIAL_SITE_URL}/secretariat/${encodeURIComponent(sec.slug)}`;
+      canonical = `${siteUrl}/secretariat/${encodeURIComponent(sec.slug)}`;
       const secMembers = (data.secretariatMembers || []).filter(m => m.secretariatId === sec.id);
       mainHtml = `
         <article>
@@ -440,7 +510,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/initiatives') {
     title = 'المبادرات المجتمعية والتنموية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'تابع المبادرات الميدانية والتنموية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
-    canonical = `${OFFICIAL_SITE_URL}/initiatives`;
+    canonical = `${siteUrl}/initiatives`;
     mainHtml = `
       <section>
         <h1>المبادرات التنموية والمجتمعية – أمانة قسم ثالث أكتوبر</h1>
@@ -457,7 +527,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     if (init) {
       title = `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
-      canonical = `${OFFICIAL_SITE_URL}/initiative/${encodeURIComponent(init.slug)}`;
+      canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
       mainHtml = `
         <article>
           <h1>${escapeHtml(init.title)}</h1>
@@ -470,7 +540,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/news') {
     title = 'الأخبار والبيانات الرسمية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.';
-    canonical = `${OFFICIAL_SITE_URL}/news`;
+    canonical = `${siteUrl}/news`;
     mainHtml = `
       <section>
         <h1>أخبار وبيانات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر</h1>
@@ -488,7 +558,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     if (item) {
       title = `${item.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (item.excerpt || item.content || HOME_SEO_DESCRIPTION).slice(0, 160);
-      canonical = `${OFFICIAL_SITE_URL}/news/${encodeURIComponent(item.id)}`;
+      canonical = `${siteUrl}/news/${encodeURIComponent(item.id)}`;
       ogType = 'article';
       ogImage = resolvePublicImageUrl(item.coverImage, assetBaseUrl, 'news', item.id);
       mainHtml = `
@@ -503,7 +573,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/events') {
     title = 'الفعاليات والأنشطة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
-    canonical = `${OFFICIAL_SITE_URL}/events`;
+    canonical = `${siteUrl}/events`;
     mainHtml = `
       <section>
         <h1>الفعاليات والأنشطة الميدانية – أمانة قسم ثالث أكتوبر</h1>
@@ -521,7 +591,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     if (ev) {
       title = `${ev.title} | فعاليات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (ev.description || HOME_SEO_DESCRIPTION).slice(0, 160);
-      canonical = `${OFFICIAL_SITE_URL}/events/${encodeURIComponent(ev.id)}`;
+      canonical = `${siteUrl}/events/${encodeURIComponent(ev.id)}`;
       ogImage = resolvePublicImageUrl(ev.images?.[0] || ev.coverUrl || ev.coverImage, assetBaseUrl, 'events', ev.id);
       mainHtml = `
         <article>
@@ -534,7 +604,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/join') {
     title = 'طلب الانضمام والعضوية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'التقديم الإلكتروني لعضوية حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة والاستعلام عن حالة الطلب.';
-    canonical = `${OFFICIAL_SITE_URL}/join`;
+    canonical = `${siteUrl}/join`;
     mainHtml = `
       <section>
         <h1>استمارة طلب الانضمام والعضوية – أمانة قسم ثالث أكتوبر</h1>
@@ -545,7 +615,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   } else if (cleanPath === '/contact') {
     title = 'تواصل معنا ومقر الأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
     description = 'طرق التواصل المباشرة ومقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.';
-    canonical = `${OFFICIAL_SITE_URL}/contact`;
+    canonical = `${siteUrl}/contact`;
     mainHtml = `
       <section>
         <h1>تواصل مع أمانة قسم ثالث أكتوبر – حزب الجبهة الوطنية</h1>
@@ -560,7 +630,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     if (page) {
       title = `${page.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = page.metaDescription || page.subtitle || (page.content || HOME_SEO_DESCRIPTION).slice(0, 160);
-      canonical = `${OFFICIAL_SITE_URL}/page/${encodeURIComponent(page.slug)}`;
+      canonical = `${siteUrl}/page/${encodeURIComponent(page.slug)}`;
       mainHtml = `
         <article>
           <h1>${escapeHtml(page.title)}</h1>
@@ -574,7 +644,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   if (!mainHtml) {
     title = HOME_SEO_TITLE;
     description = HOME_SEO_DESCRIPTION;
-    canonical = `${OFFICIAL_SITE_URL}/`;
+    canonical = `${siteUrl}/`;
     mainHtml = `
       <section>
         <h1>معاً نبني مستقبلاً مشرقاً لمصر</h1>
@@ -596,8 +666,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       <section>
         <h2>قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر</h2>
         <ul>
-          ${visiblePartyLeaders.slice(0, 8).map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.position)}</li>`).join('')}
-          ${visibleSecLeaders.slice(0, 8).map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.title)} (أمانة قسم ثالث أكتوبر)</li>`).join('')}
+          ${visiblePartyLeaders.map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.position)}</li>`).join('')}
+          ${visibleSecLeaders.map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.title)} (أمانة قسم ثالث أكتوبر)</li>`).join('')}
         </ul>
         <p><a href="/party-leaders">عرض جميع القيادات</a></p>
       </section>` : ''}
@@ -658,16 +728,17 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     : '+201003070108';
   const streetAddress = settings?.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
 
+  const siteUrl = getOfficialSiteUrl(data);
   const schemaLogoUrl =
     settings?.officialLogo && (settings.officialLogo.startsWith('http://') || settings.officialLogo.startsWith('https://'))
       ? settings.officialLogo
-      : `${OFFICIAL_SITE_URL}/og-logo.jpg`;
+      : `${siteUrl}/og-logo.jpg`;
 
   const organizationSchema: Record<string, any> = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
     name: HOME_SEO_TITLE,
-    url: `${OFFICIAL_SITE_URL}/`,
+    url: `${siteUrl}/`,
     description: HOME_SEO_DESCRIPTION,
     logo: schemaLogoUrl,
     telephone: phoneIntl,
@@ -697,7 +768,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
       name: HOME_SEO_TITLE,
-      url: `${OFFICIAL_SITE_URL}/`,
+      url: `${siteUrl}/`,
       description: HOME_SEO_DESCRIPTION,
       inLanguage: 'ar'
     },
@@ -709,6 +780,16 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
   out = out.replace(/<meta\s+name="description"\s+content="[^"]*"\s*\/?>/i, `<meta name="description" content="${escapeHtml(seo.description)}" />`);
   out = out.replace(/<meta\s+name="robots"\s+content="[^"]*"\s*\/?>/i, `<meta name="robots" content="${escapeHtml(seo.robots)}" />`);
   out = out.replace(/<meta\s+name="googlebot"\s+content="[^"]*"\s*\/?>/i, `<meta name="googlebot" content="${escapeHtml(seo.robots)}" />`);
+
+  const customVerification = (settings?.googleSiteVerification || '').trim();
+  const verificationMetaTags = customVerification && customVerification !== DEFAULT_GOOGLE_VERIFICATION_TOKEN
+    ? `<meta name="google-site-verification" content="${escapeHtml(DEFAULT_GOOGLE_VERIFICATION_TOKEN)}" />\n    <meta name="google-site-verification" content="${escapeHtml(customVerification)}" />`
+    : `<meta name="google-site-verification" content="${escapeHtml(customVerification || DEFAULT_GOOGLE_VERIFICATION_TOKEN)}" />`;
+  out = out.replace(
+    /<meta\s+name="google-site-verification"\s+content="[^"]*"\s*\/?>/i,
+    verificationMetaTags
+  );
+
   out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(HOME_SEO_TITLE)}" />`);
   out = out.replace(/<meta\s+property="og:type"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:type" content="${escapeHtml(seo.ogType)}" />`);
   out = out.replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(seo.canonical)}" />`);
@@ -781,6 +862,16 @@ app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
   }
 
   return res.status(404).send('Logo not found');
+});
+
+// Refresh public portal state from Firestore when stale (keeps Preview & Live synchronized)
+app.use('/api/public', async (_req: Request, _res: Response, next: NextFunction) => {
+  try {
+    await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
+  } catch {
+    // ignore transient network errors
+  }
+  next();
 });
 
 // 1. Get all public portal data
@@ -1078,6 +1169,118 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
   });
 });
 
+// Google Firebase Admin Sign-In (verifies verified Google email & syncs cloud DB)
+app.post('/api/admin/login-google', async (req: Request, res: Response) => {
+  const { idToken } = req.body || {};
+  if (!idToken || typeof idToken !== 'string') {
+    return res.status(400).json({ error: 'لم يتم استلام رمز التحقق من جوجل' });
+  }
+
+  const verified = await verifyFirebaseIdToken(idToken);
+  if (!verified || !verified.emailVerified) {
+    return res.status(401).json({ error: 'تعذر التحقق من حساب جوجل أو البريد الإلكتروني غير موثق' });
+  }
+
+  const data = db.get();
+  const BOOTSTRAPPED_ADMIN_EMAIL = 'moazmahmoud586@gmail.com';
+  let admin = data.admins.find(
+    a => a.email.toLowerCase() === verified.email && a.isActive
+  );
+
+  // If bootstrapped owner logs in with Google, ensure they have super_admin access
+  if (!admin && verified.email === BOOTSTRAPPED_ADMIN_EMAIL) {
+    admin = data.admins.find(a => a.role === 'super_admin' && a.isActive);
+    if (admin) {
+      admin.email = BOOTSTRAPPED_ADMIN_EMAIL;
+      db.save();
+    }
+  }
+
+  if (!admin) {
+    return res.status(403).json({
+      error: `الحساب (${verified.email}) غير مدرج ضمن قائمة مسؤولي المنصة المعتمدين.`
+    });
+  }
+
+  try {
+    await ensureAdminRegistryDoc(verified, idToken);
+    const syncRes = await runWithFirebaseToken(idToken, () =>
+      syncAdminFullWithFirestore(db.get(), idToken)
+    );
+    if (syncRes.pulled) {
+      db.setFromCloud(syncRes.db);
+      // Re-resolve admin object in case cloud data updated admins list
+      const refreshedAdmin = db.get().admins.find(
+        a => a.email.toLowerCase() === verified.email && a.isActive
+      );
+      if (refreshedAdmin) admin = refreshedAdmin;
+    }
+  } catch (err) {
+    console.error('[Auth] Google cloud sync error during login:', err);
+  }
+
+  admin.lastLogin = new Date().toISOString();
+  await runWithFirebaseToken(idToken, () => {
+    db.addAuditLog(admin!.email, admin!.name, 'تسجيل دخول إداري عبر جوجل', 'Auth', 'تم تسجيل الدخول وتفعيل المزامنة السحابية الدائمة');
+  });
+
+  const token = generateToken();
+  sessionStore.set(token, {
+    admin,
+    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+  });
+
+  const { passwordHash, ...safeAdmin } = admin;
+  res.json({
+    success: true,
+    token,
+    user: safeAdmin,
+    cloudSynced: true
+  });
+});
+
+app.get('/api/admin/cloud-status', authenticateAdmin, (_req: Request, res: Response) => {
+  res.json({
+    configured: isCloudConfigured(),
+    initialized: isCloudInitialized()
+  });
+});
+
+app.post('/api/admin/cloud-sync', authenticateAdmin, async (req: Request, res: Response) => {
+  const headerTok = req.headers['x-firebase-id-token'];
+  const idToken =
+    (typeof req.body?.idToken === 'string' && req.body.idToken) ||
+    (typeof headerTok === 'string' ? headerTok : '');
+
+  if (!idToken) {
+    return res.status(400).json({ error: 'يرجى ربط حساب جوجل لتفعيل المزامنة السحابية الدائمة' });
+  }
+
+  const verified = await verifyFirebaseIdToken(idToken);
+  if (!verified || !verified.emailVerified) {
+    return res.status(401).json({ error: 'انتهت جلسة جوجل السحابية، يرجى إعادة الربط' });
+  }
+
+  try {
+    await ensureAdminRegistryDoc(verified, idToken);
+    const forcePush = Boolean(req.body?.forcePush);
+    const currentDb = db.get();
+    if (forcePush) {
+      const { pushDatabaseDiffToFirestore } = await import('./src/server/firestoreSync.ts');
+      await pushDatabaseDiffToFirestore(currentDb, idToken, true);
+      return res.json({ success: true, seeded: true, pulled: false });
+    }
+    const result = await syncAdminFullWithFirestore(currentDb, idToken);
+    if (result.pulled) {
+      db.setFromCloud(result.db);
+    }
+    return res.json({ success: true, seeded: result.seeded, pulled: result.pulled });
+  } catch (err: any) {
+    console.error('[CloudSync] Failed:', err);
+    return res.status(500).json({ error: err?.message || 'فشلت المزامنة مع السحابة' });
+  }
+});
+
 app.get('/api/admin/me', authenticateAdmin, (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const { passwordHash, ...safeAdmin } = admin;
@@ -1120,8 +1323,20 @@ app.get('/api/admin/stats', authenticateAdmin, (_req: Request, res: Response) =>
   res.json(stats);
 });
 
-// Full DB for admin
-app.get('/api/admin/full-db', authenticateAdmin, (_req: Request, res: Response) => {
+// Full DB for admin (pulls latest cloud snapshot if Firebase token is present)
+app.get('/api/admin/full-db', authenticateAdmin, async (req: Request, res: Response) => {
+  const headerTok = req.headers['x-firebase-id-token'];
+  const idToken = typeof headerTok === 'string' && headerTok.trim() ? headerTok.trim() : '';
+  if (idToken) {
+    try {
+      const result = await syncAdminFullWithFirestore(db.get(), idToken);
+      if (result.pulled) {
+        db.setFromCloud(result.db);
+      }
+    } catch (err) {
+      console.error('[FullDB] Cloud pull skipped:', err);
+    }
+  }
   const data = db.get();
   const safeAdmins = data.admins.map(({ passwordHash, ...rest }) => rest);
   const sortedSecretariats = [...(data.specializedSecretariats || [])].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -2484,6 +2699,22 @@ app.get(['/api/news/:id/image', '/api/events/:id/image'], (req: Request, res: Re
 // -------------------------------------------------------------
 
 async function startServer() {
+  // Hydrate initial public data from Firestore if already initialized (never overwrites Firestore!)
+  try {
+    const cloudPublic = await pullPublicFromFirestore(db.get());
+    if (cloudPublic) {
+      db.setFromCloud(cloudPublic);
+      console.log('[NFP Platform] Hydrated public portal state from Firestore.');
+    }
+  } catch (err) {
+    console.error('[NFP Platform] Initial Firestore pull failed (using local snapshot):', err);
+  }
+
+  // Keep Preview & Live containers in sync with public Firestore updates
+  setInterval(() => {
+    refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb)).catch(() => {});
+  }, 10000);
+
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
@@ -2515,6 +2746,7 @@ async function startServer() {
     // Serve Vite SPA with route-specific SEO tags & semantic SSR HTML inside #root
     app.get(spaPublicRoutes, async (req: Request, res: Response, next: NextFunction) => {
       try {
+        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
         const indexPath = path.resolve(process.cwd(), 'index.html');
         const rawHtml = fs.readFileSync(indexPath, 'utf-8');
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
@@ -2528,7 +2760,12 @@ async function startServer() {
   } else {
     const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath, { index: false }));
-    app.get('*', (req: Request, res: Response) => {
+    app.get('*', async (req: Request, res: Response) => {
+      try {
+        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
+      } catch {
+        // ignore
+      }
       if (req.path === '/admin' || req.path.startsWith('/admin/')) {
         res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
       }

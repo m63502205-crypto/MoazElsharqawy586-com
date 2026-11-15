@@ -1,0 +1,262 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Shared Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email.lower() == 'moazmahmoud586@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidSiteConfig(data, docId) {
+      return data.keys().hasAll(['id', 'isPublic', 'data', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'isPublic', 'data', 'updatedAt'])
+        && data.id is string
+        && data.id == docId
+        && isValidId(data.id)
+        && data.isPublic is bool
+        && data.data is map
+        && data.updatedAt is string
+        && data.updatedAt.size() >= 4
+        && data.updatedAt.size() <= 64;
+    }
+
+    function isValidPublicRecord(data, docId) {
+      return data.keys().hasAll(['id', 'isPublic', 'data', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'isPublic', 'data', 'updatedAt'])
+        && data.id is string
+        && data.id == docId
+        && isValidId(data.id)
+        && data.isPublic is bool
+        && data.data is map
+        && data.updatedAt is string
+        && data.updatedAt.size() >= 4
+        && data.updatedAt.size() <= 64;
+    }
+
+    function isValidUploadAsset(data, docId) {
+      return data.keys().hasAll(['id', 'mime', 'dataBase64', 'isPublic', 'createdAt'])
+        && data.keys().hasOnly(['id', 'mime', 'dataBase64', 'isPublic', 'createdAt'])
+        && data.id is string
+        && data.id == docId
+        && isValidId(data.id)
+        && data.mime is string
+        && data.mime.size() >= 3
+        && data.mime.size() <= 64
+        && data.dataBase64 is string
+        && data.dataBase64.size() >= 1
+        && data.dataBase64.size() <= 900000
+        && data.isPublic is bool
+        && data.createdAt is string
+        && data.createdAt.size() >= 4
+        && data.createdAt.size() <= 64;
+    }
+
+    function isValidPrivateRecord(data, docId) {
+      return data.keys().hasAll(['id', 'data', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'data', 'updatedAt'])
+        && data.id is string
+        && data.id == docId
+        && isValidId(data.id)
+        && data.data is map
+        && data.updatedAt is string
+        && data.updatedAt.size() >= 4
+        && data.updatedAt.size() <= 64;
+    }
+
+    function isValidAdminRegistry(data, docId) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'createdAt'])
+        && data.uid is string
+        && data.uid == docId
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 256
+        && data.role in ['super_admin', 'sub_admin']
+        && data.createdAt is string
+        && data.createdAt.size() >= 4
+        && data.createdAt.size() <= 64;
+    }
+
+    // Site Config (public settings & live stream)
+    match /site_config/{configId} {
+      allow get: if isValidId(configId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(configId) && isValidSiteConfig(incoming(), configId);
+      allow update: if isAdmin() && isValidId(configId) && isValidSiteConfig(incoming(), configId)
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(configId);
+    }
+
+    // Public Content Collections
+    match /party_leaders/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /secretariat_leaders/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /secretariats/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /secretariat_members/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /initiatives/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /news/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /events/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /media/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /pages/{docId} {
+      allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /uploads_public/{assetId} {
+      allow get: if isValidId(assetId) && (resource == null || resource.data.isPublic == true || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(assetId) && isValidUploadAsset(incoming(), assetId);
+      allow update: if isAdmin() && isValidId(assetId) && isValidUploadAsset(incoming(), assetId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['mime', 'dataBase64', 'isPublic', 'createdAt']);
+      allow delete: if isAdmin() && isValidId(assetId);
+    }
+
+    // Restricted PII & Administrative Vaults
+    match /applications/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /members/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /roles/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /admin_users/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /audit_logs/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isAdmin() && isValidId(adminUid);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isBootstrappedAdmin() && isValidId(adminUid) && isValidAdminRegistry(incoming(), adminUid);
+      allow update: if isBootstrappedAdmin() && isValidId(adminUid) && isValidAdminRegistry(incoming(), adminUid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'createdAt']);
+      allow delete: if isBootstrappedAdmin() && isValidId(adminUid);
+    }
+  }
+}

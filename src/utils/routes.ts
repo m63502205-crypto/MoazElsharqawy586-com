@@ -164,15 +164,16 @@ export function getPageSeoMeta(
   data: PublicPortalData | null,
   options?: { slug?: string; newsId?: string | null; eventId?: string | null }
 ): { title: string; description: string; canonicalUrl: string; robots: string } {
+  const baseSiteUrl = (data?.settings?.officialSiteUrl || OFFICIAL_SITE_URL).trim().replace(/\/+$/, '') || OFFICIAL_SITE_URL;
   const path = getViewPath(view, options);
-  const canonicalUrl = `${OFFICIAL_SITE_URL}${path === '/#admin' ? '/' : path}`;
+  const canonicalUrl = `${baseSiteUrl}${path === '/#admin' ? '/' : path}`;
   const robots =
     view === 'admin'
       ? 'noindex, nofollow'
       : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
 
   if (view === 'home') {
-    return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${OFFICIAL_SITE_URL}/`, robots };
+    return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${baseSiteUrl}/`, robots };
   }
   if (view === 'about') {
     return {
@@ -313,10 +314,10 @@ export function getPageSeoMeta(
     return {
       title: 'لوحة التحكم | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
       description: HOME_DESCRIPTION,
-      canonicalUrl: `${OFFICIAL_SITE_URL}/`,
+      canonicalUrl: `${baseSiteUrl}/`,
       robots: 'noindex, nofollow'
     };
   }
 
-  return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${OFFICIAL_SITE_URL}/`, robots };
+  return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${baseSiteUrl}/`, robots };
 }

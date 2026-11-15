@@ -346,6 +346,9 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-XXXXXXXXXX)
+  officialSiteUrl?: string; // Free published URL for Google Search Console (e.g. https://nfp-october3.ai.studio)
+  googleSiteVerification?: string; // Google Search Console HTML tag verification token
+  googleVerificationFile?: string; // Optional Google Search Console HTML filename (e.g. googleXXXX.html)
   customTexts?: SiteCustomTexts;
   heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
@@ -372,6 +375,7 @@ export interface SiteSettings {
   vision: string;
   principles: string[];
   secretariatsVersion?: number;
+  rosterVersion?: number;
 }
 
 export interface PublicPortalData {

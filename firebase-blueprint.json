@@ -1,0 +1,215 @@
+{
+  "entities": {
+    "SiteConfig": {
+      "title": "SiteConfig",
+      "description": "Global site configuration and live stream configuration stored as native map",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether config is publicly readable"
+        },
+        "data": {
+          "type": "object",
+          "description": "Configuration payload map"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "isPublic", "data", "updatedAt"]
+    },
+    "PortalPublicRecord": {
+      "title": "PortalPublicRecord",
+      "description": "Public content record for leaders, secretariats, initiatives, news, events, media, and CMS pages",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Record identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Controls public visibility"
+        },
+        "data": {
+          "type": "object",
+          "description": "Structured entity fields map"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "isPublic", "data", "updatedAt"]
+    },
+    "UploadAsset": {
+      "title": "UploadAsset",
+      "description": "Uploaded image asset stored for cross-instance media persistence",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "mime": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "dataBase64": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 900000
+        },
+        "isPublic": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "mime", "dataBase64", "isPublic", "createdAt"]
+    },
+    "PrivateVaultRecord": {
+      "title": "PrivateVaultRecord",
+      "description": "Admin-restricted PII or governance record (applications, members, roles, admin users, audit logs)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "data": {
+          "type": "object",
+          "description": "Protected record payload map"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "data", "updatedAt"]
+    },
+    "AdminRegistry": {
+      "title": "AdminRegistry",
+      "description": "Trusted Firebase UID registry for delegated administrators",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 256
+        },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "sub_admin"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/site_config/{configId}": {
+      "schema": { "$ref": "#/entities/SiteConfig" },
+      "description": "Public portal settings and live stream configuration documents"
+    },
+    "/party_leaders/{leaderId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Party national and governorate leaders"
+    },
+    "/secretariat_leaders/{leaderId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "3rd October Secretariat executive leaders"
+    },
+    "/secretariats/{secretariatId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "25 specialized party secretariats"
+    },
+    "/secretariat_members/{memberId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Secretariat members and bureau coordinators"
+    },
+    "/initiatives/{initiativeId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Party community and development initiatives"
+    },
+    "/news/{newsId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "News articles and official statements"
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Scheduled events and rallies"
+    },
+    "/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Photo and video media gallery items"
+    },
+    "/pages/{pageId}": {
+      "schema": { "$ref": "#/entities/PortalPublicRecord" },
+      "description": "Custom CMS pages"
+    },
+    "/uploads_public/{assetId}": {
+      "schema": { "$ref": "#/entities/UploadAsset" },
+      "description": "Uploaded media blobs synchronized between Live and Preview"
+    },
+    "/applications/{applicationId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Membership applications containing applicant PII (admin-protected)"
+    },
+    "/members/{memberId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Registered party members containing PII (admin-protected)"
+    },
+    "/roles/{roleId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "RBAC roles definitions (admin-protected)"
+    },
+    "/admin_users/{userId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Portal admin user accounts (admin-protected)"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Administrative audit trail (admin-protected)"
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRegistry" },
+      "description": "Verified Firebase UIDs granted admin access"
+    }
+  }
+}

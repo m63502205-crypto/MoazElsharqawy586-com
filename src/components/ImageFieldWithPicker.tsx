@@ -95,14 +95,38 @@ export const ImageFieldWithPicker: React.FC<ImageFieldWithPickerProps> = ({
                 className="hidden"
                 onChange={e => {
                   const file = e.target.files?.[0];
-                  if (file) {
-                    const reader = new FileReader();
-                    reader.onload = ev => {
-                      const dataUrl = ev.target?.result as string;
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => {
+                    const dataUrl = ev.target?.result as string;
+                    if (!dataUrl || dataUrl.length < 520000) {
                       onChange(dataUrl);
+                      return;
+                    }
+                    const img = new Image();
+                    img.onload = () => {
+                      const maxDim = 1600;
+                      let { width, height } = img;
+                      if (width > maxDim || height > maxDim) {
+                        const scale = Math.min(maxDim / width, maxDim / height);
+                        width = Math.round(width * scale);
+                        height = Math.round(height * scale);
+                      }
+                      const canvas = document.createElement('canvas');
+                      canvas.width = width;
+                      canvas.height = height;
+                      const ctx = canvas.getContext('2d');
+                      if (ctx) {
+                        ctx.drawImage(img, 0, 0, width, height);
+                        onChange(canvas.toDataURL('image/jpeg', 0.84));
+                      } else {
+                        onChange(dataUrl);
+                      }
                     };
-                    reader.readAsDataURL(file);
-                  }
+                    img.onerror = () => onChange(dataUrl);
+                    img.src = dataUrl;
+                  };
+                  reader.readAsDataURL(file);
                 }}
               />
             </label>

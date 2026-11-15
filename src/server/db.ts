@@ -1,6 +1,19 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
+import { pushDatabaseDiffToFirestore } from './firestoreSync.ts';
+
+const firebaseTokenStorage = new AsyncLocalStorage<string>();
+
+export function runWithFirebaseToken<T>(token: string | undefined, fn: () => T): T {
+  if (!token) return fn();
+  return firebaseTokenStorage.run(token, fn);
+}
+
+export function getCurrentFirebaseToken(): string | undefined {
+  return firebaseTokenStorage.getStore();
+}
 
 export interface PartyLeader {
   id: string;
@@ -269,6 +282,9 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string;
+  officialSiteUrl?: string;
+  googleSiteVerification?: string;
+  googleVerificationFile?: string;
   heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
   heroPosterUrl?: string;
@@ -295,6 +311,7 @@ export interface SiteSettings {
   vision: string;
   principles: string[];
   secretariatsVersion?: number;
+  rosterVersion?: number;
 }
 
 export interface CMSPage {
@@ -789,6 +806,201 @@ const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
   }
 ];
 
+interface RosterAssignment {
+  secretaryName: string;
+  assistants: Array<{ id: string; name: string; title: string }>;
+}
+
+const OCT3_OFFICIAL_ROSTER: Record<string, RosterAssignment> = {
+  'sec-org': {
+    secretaryName: 'أ.محمد نوار',
+    assistants: [
+      { id: 'asst-org-1', name: 'أ.علاء محمد صالح', title: 'أمين مساعد التنظيم' },
+      { id: 'asst-org-2', name: 'لبني عبد المقصود محمد أبوزيد', title: 'أمين مساعد التنظيم' }
+    ]
+  },
+  'sec-membership': {
+    secretaryName: 'حنان صبحى على عبدالسلام',
+    assistants: [
+      { id: 'asst-membership-1', name: 'مدحت مجدى عبدالحميد احمد', title: 'أمين مساعد العضوية' }
+    ]
+  },
+  'sec-youth-sports': {
+    secretaryName: 'علاء سعد مصطفى مصطفى',
+    assistants: [
+      { id: 'asst-youth-1', name: 'خالد محمد عبدالعزيز حسين', title: 'مساعد أمين الشباب والرياضة' },
+      { id: 'asst-youth-2', name: 'مصطفى عبدة محمد عبدة', title: 'مساعد أمين الشباب والرياضة' }
+    ]
+  },
+  'sec-women': {
+    secretaryName: 'رحاب محمد عبد العزيز',
+    assistants: [
+      { id: 'asst-women-1', name: 'سارة الشاذلى السيد بدرى', title: 'أمين مساعد المرأة' }
+    ]
+  },
+  'sec-agriculture': {
+    secretaryName: 'احمد جابر محى الدين جادالله',
+    assistants: [
+      { id: 'asst-agri-1', name: 'احمد جميل قرنى عبد التواب', title: 'أمين مساعد الزراعة والري' }
+    ]
+  },
+  'sec-disability': {
+    secretaryName: 'حمادة على عبد الحاكم محمود',
+    assistants: [
+      { id: 'asst-dis-1', name: 'ايمان على طه احمد الديب', title: 'مساعد أمين ذوي الهمم' }
+    ]
+  },
+  'sec-education': {
+    secretaryName: 'رضا حسن عبدالوهاب محمد',
+    assistants: [
+      { id: 'asst-edu-1', name: 'هاجر مجدى سيد', title: 'أمين مساعد التعليم والبحث العلمي' }
+    ]
+  },
+  'sec-housing': {
+    secretaryName: 'محمد حسن عبدالسميع احمد',
+    assistants: [
+      { id: 'asst-hous-1', name: 'اشرف سعيد يمانى', title: 'أمين مساعد الإسكان' }
+    ]
+  },
+  'sec-trade': {
+    secretaryName: 'حمد عبدالغفار حمد عبد الغفار',
+    assistants: [
+      { id: 'asst-trade-1', name: 'ابو العلا عبد الشافى محمد', title: 'أمين مساعد التجارة والصناعة' }
+    ]
+  },
+  'sec-health': {
+    secretaryName: 'بسام محمد عبدالتواب محمد',
+    assistants: [
+      { id: 'asst-health-1', name: 'نادين خالد فتحي أبو الغيط', title: 'أمين مساعد الصحة والسكان' }
+    ]
+  },
+  'sec-religious': {
+    secretaryName: 'حسين الشافعى على احمد',
+    assistants: [
+      { id: 'asst-rel-1', name: 'خالد فاروق محمد محمد', title: 'مساعد أمين الشؤون الدينية' }
+    ]
+  },
+  'sec-entrepreneurship': {
+    secretaryName: 'احمد محمود حسن نصار',
+    assistants: [
+      { id: 'asst-ent-1', name: 'ياسر محمد حسن حسن الغنام', title: 'أمين مساعد ريادة الأعمال' }
+    ]
+  },
+  'sec-investment': {
+    secretaryName: 'محمود يونس على يونس',
+    assistants: [
+      { id: 'asst-inv-1', name: 'سعيد يونس علي يونس', title: 'أمين مساعد الاستثمار والشؤون الاقتصادية' }
+    ]
+  },
+  'sec-social-protection': {
+    secretaryName: 'عصام محمد محمود مسعود',
+    assistants: [
+      { id: 'asst-soc-1', name: 'شعبان احمد حسن بهنساوى', title: 'أمين مساعد الحماية الاجتماعية' }
+    ]
+  },
+  'sec-crisis': {
+    secretaryName: 'محمد صلاح محمد يوسف',
+    assistants: [
+      { id: 'asst-crisis-1', name: 'سامح صلاح الدين سيد عبدالرحمن', title: 'مساعد أمين إدارة الأزمات' }
+    ]
+  },
+  'sec-sme': {
+    secretaryName: 'ولاء رفاعى السيد رفاعى',
+    assistants: [
+      { id: 'asst-sme-1', name: 'سلمى وائل فتحى احمد', title: 'مساعد أمين المشروعات الصغيرة والمتوسطة' }
+    ]
+  },
+  'sec-media': {
+    secretaryName: 'داليا محمود حسن نصار',
+    assistants: [
+      { id: 'asst-media-1', name: 'شهد أيمن محمد محمود', title: 'مساعد أمين الإعلام' }
+    ]
+  },
+  'sec-citizenship': {
+    secretaryName: 'تريزة صبرى مسعود بخيت',
+    assistants: [
+      { id: 'asst-cit-1', name: 'اسحق ابراهيم توفيق يوسف', title: 'مساعد أمين المواطنة' },
+      { id: 'asst-cit-2', name: 'مرقص ذكى مرقص سليمان', title: 'مساعد أمين المواطنة' }
+    ]
+  },
+  'sec-tourism': {
+    secretaryName: 'احمد سمير عليوة ابراهيم',
+    assistants: []
+  },
+  'sec-tribes': {
+    secretaryName: 'أحمد إبراهيم محمد عبد الرحمن',
+    assistants: []
+  },
+  'sec-local-councils': {
+    secretaryName: 'اسماعيل سيد عاشور',
+    assistants: []
+  },
+  'sec-culture': {
+    secretaryName: 'الشاذلى عبدالله السيد',
+    assistants: [
+      { id: 'asst-cul-1', name: 'ناجح محمود ابو المجد ابراهيم', title: 'مساعد أمين الثقافة والفنون' }
+    ]
+  },
+  'sec-environment': {
+    secretaryName: 'محمد السيد عطية عبد القادر',
+    assistants: [
+      { id: 'asst-env-1', name: 'نوره فراج احمد محمد', title: 'أمين مساعد البيئة والتنمية المستدامة' }
+    ]
+  },
+  'sec-workers': {
+    secretaryName: 'علاء اسماعيل عبدالحفيظ عبدالقادر',
+    assistants: [
+      { id: 'asst-work-1', name: 'احمد يس عبدالحميد محمد حماد', title: 'مساعد أمين العمال' },
+      { id: 'asst-work-2', name: 'هشام حامد محمد حامد', title: 'مساعد أمين العمال' }
+    ]
+  },
+  'sec-public-outreach': {
+    secretaryName: 'رباب حسن محى الدين نصار',
+    assistants: [
+      { id: 'asst-out-1', name: 'سحر سيد محمد عبدالفتاح', title: 'مساعد أمين التواصل الجماهيري' }
+    ]
+  }
+};
+
+const OCT3_BUREAU_LEADERS: SecretariatLeader[] = [
+  {
+    id: 'sec-lead-bureau-57',
+    name: 'سعيد عبدالحميد محمد الكلاوى',
+    title: 'عضو هيئة مكتب أمانة قسم ثالث أكتوبر',
+    specializedSecretariatId: '',
+    bio: '',
+    photoUrl: '',
+    appointmentDate: '',
+    sortOrder: 4,
+    isVisible: true,
+    createdAt: '2026-11-15T00:00:00.000Z'
+  },
+  {
+    id: 'sec-lead-bureau-58',
+    name: 'عيسى عنتر فرنسيس حنا',
+    title: 'عضو هيئة مكتب أمانة قسم ثالث أكتوبر',
+    specializedSecretariatId: '',
+    bio: '',
+    photoUrl: '',
+    appointmentDate: '',
+    sortOrder: 5,
+    isVisible: true,
+    createdAt: '2026-11-15T00:00:01.000Z'
+  },
+  {
+    id: 'sec-lead-bureau-59',
+    name: 'اشرف صالح على احمد',
+    title: 'عضو هيئة مكتب أمانة قسم ثالث أكتوبر',
+    specializedSecretariatId: '',
+    bio: '',
+    photoUrl: '',
+    appointmentDate: '',
+    sortOrder: 6,
+    isVisible: true,
+    createdAt: '2026-11-15T00:00:02.000Z'
+  }
+];
+
 const INITIAL_ROLES: AdminRole[] = [
   {
     id: 'role-super-admin',
@@ -1065,7 +1277,12 @@ function getInitialDatabase(): AppDatabase {
       locationUrl: 'https://maps.app.goo.gl/iw7sGSbbb2K1g6yZ7?g_st=ac',
       mapEmbedUrl: 'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed',
       coordinates: '29.980836, 30.840788',
-      secretariatsVersion: 25
+      entranceImageUrl: '/assets/aistudio/______________________________20261114_203911_a06570e5.jpg',
+      heroVideoUrl: '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4',
+      heroMediaType: 'video',
+      heroDefaultMuted: false,
+      secretariatsVersion: 25,
+      rosterVersion: 1
     }
   };
 }
@@ -1103,7 +1320,12 @@ class DatabaseManager {
         const assembled: AppDatabase = {
           ...initial,
           ...parsed,
-          settings: { ...initial.settings, ...(parsed.settings || {}), secretariatsVersion: parsed.settings?.secretariatsVersion },
+          settings: {
+            ...initial.settings,
+            ...(parsed.settings || {}),
+            secretariatsVersion: parsed.settings?.secretariatsVersion,
+            rosterVersion: parsed.settings?.rosterVersion
+          },
           partyLeaders: Array.isArray(parsed.partyLeaders) ? parsed.partyLeaders : [],
           secretariatLeaders: Array.isArray(parsed.secretariatLeaders) ? parsed.secretariatLeaders : [],
           specializedSecretariats: Array.isArray(parsed.specializedSecretariats)
@@ -1146,6 +1368,7 @@ class DatabaseManager {
       }
     }
     const initial = getInitialDatabase();
+    this.migrateSecretariatsIfNeeded(initial);
     // Only save initial if DB_FILE genuinely doesn't exist
     if (!fs.existsSync(DB_FILE)) {
       this.save(initial);
@@ -1305,13 +1528,122 @@ class DatabaseManager {
       changed = true;
     }
 
+    if (!dbObj.settings.entranceImageUrl || dbObj.settings.entranceImageUrl === '/uploads/entrance_init.jpg') {
+      dbObj.settings.entranceImageUrl = '/assets/aistudio/______________________________20261114_203911_a06570e5.jpg';
+      changed = true;
+    }
+
+    // One-time non-destructive seeding of official 3rd October secretariat leadership roster & bureau members
+    if ((dbObj.settings.rosterVersion || 0) < 1) {
+      dbObj.specializedSecretariats = (dbObj.specializedSecretariats || []).map(sec => {
+        const roster = OCT3_OFFICIAL_ROSTER[sec.id];
+        if (!roster) return sec;
+
+        const nextSec: SpecializedSecretariat = { ...sec };
+
+        // Upgrade empty secretary names or short manually-entered placeholders while preserving photos & bios
+        const currentSecName = normalizeAr(nextSec.secretaryName || '');
+        if (!currentSecName) {
+          nextSec.secretaryName = roster.secretaryName;
+        } else if (sec.id === 'sec-membership' && currentSecName.includes('حنان صبحي')) {
+          nextSec.secretaryName = roster.secretaryName;
+        } else if (sec.id === 'sec-media' && currentSecName.includes('داليا نصار')) {
+          nextSec.secretaryName = roster.secretaryName;
+        }
+
+        // Upgrade assistant secretaries while preserving any existing photos/bios/phones
+        const existingAssts: AssistantSecretaryEntry[] =
+          nextSec.assistantSecretaries && nextSec.assistantSecretaries.length > 0
+            ? nextSec.assistantSecretaries.map(a => ({ ...a }))
+            : nextSec.assistantSecretaryName
+            ? [
+                {
+                  id: 'asst-existing-1',
+                  name: nextSec.assistantSecretaryName,
+                  title: 'الأمين المساعد للأمانة',
+                  photoUrl: nextSec.assistantSecretaryPhotoUrl || '',
+                  bio: nextSec.assistantSecretaryBio || '',
+                  phone: nextSec.assistantSecretaryPhone || ''
+                }
+              ]
+            : [];
+
+        if (existingAssts.length === 0 && roster.assistants.length > 0) {
+          nextSec.assistantSecretaries = roster.assistants.map(a => ({
+            id: a.id,
+            name: a.name,
+            title: a.title,
+            photoUrl: '',
+            bio: '',
+            phone: ''
+          }));
+          nextSec.assistantSecretaryName = roster.assistants[0].name;
+        } else if (existingAssts.length > 0 && roster.assistants.length > 0) {
+          // Non-destructively upgrade short/typo names for existing early entries (sec-org, sec-membership, sec-media)
+          const merged = existingAssts.map((item, idx) => {
+            const norm = normalizeAr(item.name);
+            if (sec.id === 'sec-org' && norm.includes('لبني عبد المقصود')) {
+              return { ...item, name: 'لبني عبد المقصود محمد أبوزيد' };
+            }
+            if (sec.id === 'sec-membership' && idx === 0 && (norm.includes('متحت') || norm.includes('مدحت'))) {
+              return { ...item, name: 'مدحت مجدى عبدالحميد احمد' };
+            }
+            if (sec.id === 'sec-media' && idx === 0 && norm.includes('شهد ايمن')) {
+              return { ...item, name: 'شهد أيمن محمد محمود' };
+            }
+            return item;
+          });
+          for (const targetAsst of roster.assistants) {
+            const targetFirstTwo = normalizeAr(targetAsst.name).split(' ').slice(0, 2).join(' ');
+            const alreadyPresent = merged.some(m => normalizeAr(m.name).includes(targetFirstTwo));
+            if (!alreadyPresent) {
+              merged.push({
+                id: targetAsst.id,
+                name: targetAsst.name,
+                title: targetAsst.title,
+                photoUrl: '',
+                bio: '',
+                phone: ''
+              });
+            }
+          }
+          nextSec.assistantSecretaries = merged;
+          if (merged[0]?.name) {
+            nextSec.assistantSecretaryName = merged[0].name;
+          }
+        }
+
+        return nextSec;
+      });
+
+      const currentSecLeaders = [...(dbObj.secretariatLeaders || [])];
+      for (const bureauLeader of OCT3_BUREAU_LEADERS) {
+        const normName = normalizeAr(bureauLeader.name);
+        const exists = currentSecLeaders.some(
+          l => l.id === bureauLeader.id || normalizeAr(l.name) === normName
+        );
+        if (!exists) {
+          currentSecLeaders.push({ ...bureauLeader });
+        }
+      }
+      dbObj.secretariatLeaders = currentSecLeaders.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      dbObj.settings.rosterVersion = 1;
+      changed = true;
+    }
+
     return changed;
   }
 
-  public save(dataToSave?: AppDatabase): void {
-    if (dataToSave) {
-      this.data = dataToSave;
-    }
+  private pendingCloudPushTimer: ReturnType<typeof setTimeout> | null = null;
+  private latestCloudToken: string | null = null;
+
+  public setFromCloud(cloudData: AppDatabase): void {
+    this.migrateSecretariatsIfNeeded(cloudData);
+    this.data = cloudData;
+    this.writeLocalFileOnly();
+  }
+
+  private writeLocalFileOnly(): void {
     try {
       const backupFile = `${DB_FILE}.bak`;
       const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
@@ -1327,6 +1659,30 @@ class DatabaseManager {
       fs.renameSync(tempPath, DB_FILE);
     } catch (err) {
       console.error('Error saving database atomically:', err);
+    }
+  }
+
+  public save(dataToSave?: AppDatabase): void {
+    if (dataToSave) {
+      this.data = dataToSave;
+    }
+    this.writeLocalFileOnly();
+
+    const activeToken = getCurrentFirebaseToken();
+    if (activeToken) {
+      this.latestCloudToken = activeToken;
+      if (this.pendingCloudPushTimer) {
+        clearTimeout(this.pendingCloudPushTimer);
+      }
+      this.pendingCloudPushTimer = setTimeout(() => {
+        this.pendingCloudPushTimer = null;
+        const tok = this.latestCloudToken;
+        if (tok) {
+          pushDatabaseDiffToFirestore(this.data, tok).catch(err => {
+            console.error('[DB] Background Firestore sync error:', err);
+          });
+        }
+      }, 25);
     }
   }
 

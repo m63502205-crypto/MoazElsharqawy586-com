@@ -18,6 +18,7 @@ import {
   AdminRole,
   ApplicationInquiryResult
 } from './types';
+import { getFirebaseIdToken } from './firebase';
 
 const TOKEN_KEY = 'nfp_admin_token';
 
@@ -42,6 +43,13 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  if (endpoint.startsWith('/api/admin')) {
+    const fbToken = await getFirebaseIdToken();
+    if (fbToken) {
+      headers['X-Firebase-Id-Token'] = fbToken;
+    }
   }
 
   const res = await fetch(endpoint, {
@@ -94,6 +102,20 @@ export const api = {
     apiFetch<{ success: boolean; token: string; user: AdminUser }>('/api/admin/login', {
       method: 'POST',
       body: JSON.stringify(credentials)
+    }),
+
+  adminLoginGoogle: (idToken: string) =>
+    apiFetch<{ success: boolean; token: string; user: AdminUser; cloudSynced?: boolean }>('/api/admin/login-google', {
+      method: 'POST',
+      body: JSON.stringify({ idToken })
+    }),
+
+  getCloudStatus: () => apiFetch<{ configured: boolean; initialized: boolean }>('/api/admin/cloud-status'),
+
+  adminCloudSync: (options?: { idToken?: string; forcePush?: boolean }) =>
+    apiFetch<{ success: boolean; seeded?: boolean; pulled?: boolean }>('/api/admin/cloud-sync', {
+      method: 'POST',
+      body: JSON.stringify(options || {})
     }),
 
   adminGetMe: () => apiFetch<{ user: AdminUser }>('/api/admin/me'),

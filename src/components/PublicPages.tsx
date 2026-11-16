@@ -48,7 +48,6 @@ import {
   Maximize2,
   X,
   Radio,
-  LayoutGrid,
   ShieldCheck,
   Volume2,
   VolumeX
@@ -67,7 +66,8 @@ import {
 import {
   resolvePersonInSecretariats,
   getAllPeopleInSecretariat,
-  normalizeArabicPersonName
+  normalizeArabicPersonName,
+  getPersonContributions
 } from '../utils/personSecretariat';
 
 function normalizeArabicDigits(val: string): string {
@@ -141,6 +141,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
+  const [selectedPersonFallback, setSelectedPersonFallback] = useState<{
+    name: string;
+    position?: string;
+    secretariatId?: string;
+  } | null>(null);
   const [focusedPersonKey, setFocusedPersonKey] = useState<string | null>(selectedPerson || null);
 
   // Lightbox Modal for high-resolution interactive viewing of images
@@ -595,8 +600,18 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     }
   };
 
+  // Helper to close all open overlay modals before navigating directly to a person or secretariat
+  const closeAllOverlayModals = () => {
+    setSelectedNews(null);
+    setSelectedPartyLeader(null);
+    setSelectedSecLeader(null);
+    setSelectedPersonFallback(null);
+    if (onClearSelectedNewsId) onClearSelectedNewsId();
+  };
+
   // Helper to open secretariat details (optionally focusing a specific person)
   const openSecretariat = (slug: string, personKey?: string | null) => {
+    closeAllOverlayModals();
     setFocusedPersonKey(personKey || null);
     if (onNavigate) {
       onNavigate('secretariat-detail', personKey ? { slug, person: personKey } : { slug });
@@ -607,19 +622,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Resolve clicked person across secretariats; falls back to leader bio modal if not in a specialized secretariat
+  // Resolve clicked person across secretariats; closes any open news/detail modal immediately and jumps directly to the person
   const handlePersonClick = (
     name?: string | null,
     options?: {
       explicitSecretariatId?: string | null;
       personKey?: string | null;
+      position?: string | null;
       fallbackPartyLeader?: PartyLeader | null;
       fallbackSecLeader?: SecretariatLeader | null;
     }
   ) => {
+    closeAllOverlayModals();
+
     const matched = resolvePersonInSecretariats({
       name,
       personKey: options?.personKey,
+      position: options?.position,
       explicitSecretariatId: options?.explicitSecretariatId,
       specializedSecretariats: data.specializedSecretariats || [],
       secretariatMembers: data.secretariatMembers || [],
@@ -628,9 +647,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     });
 
     if (matched) {
-      setSelectedNews(null);
-      setSelectedPartyLeader(null);
-      setSelectedSecLeader(null);
       openSecretariat(matched.secretariat.slug, matched.personKey);
       return;
     }
@@ -661,6 +677,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       : undefined;
     if (byPartyLeader) {
       setSelectedPartyLeader(byPartyLeader);
+      return;
+    }
+
+    if (name && name.trim()) {
+      setSelectedPersonFallback({
+        name: name.trim(),
+        position: options?.position || undefined,
+        secretariatId: options?.explicitSecretariatId || undefined
+      });
     }
   };
 
@@ -677,6 +702,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     if (!name && !position) return null;
     const resolvedSec = resolvePersonInSecretariats({
       name,
+      position,
       explicitSecretariatId: secretariatId || fallbackSecretariatId,
       specializedSecretariats: data.specializedSecretariats || [],
       secretariatMembers: data.secretariatMembers || [],
@@ -685,31 +711,38 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     });
     const wrapperClass = dark
       ? tone === 'publisher'
-        ? 'bg-red-500/15 border-red-400/30 text-red-100'
-        : 'bg-amber-500/15 border-amber-400/30 text-amber-100'
+        ? 'bg-red-500/15 border-red-400/30 text-red-100 hover:bg-red-500/25'
+        : 'bg-amber-500/15 border-amber-400/30 text-amber-100 hover:bg-amber-500/25'
       : tone === 'publisher'
-      ? 'bg-red-50/70 border-red-200 text-red-950'
-      : 'bg-amber-50/80 border-amber-200 text-amber-950';
+      ? 'bg-red-50/70 border-red-200 text-red-950 hover:bg-red-100/70'
+      : 'bg-amber-50/80 border-amber-200 text-amber-950 hover:bg-amber-100/70';
+
+    const handleDirectPersonJump = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      handlePersonClick(name, {
+        explicitSecretariatId: secretariatId || fallbackSecretariatId,
+        position
+      });
+    };
 
     return (
-      <div className={`flex flex-wrap items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] ${wrapperClass}`}>
+      <div
+        onClick={handleDirectPersonJump}
+        className={`flex flex-wrap items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer ${wrapperClass}`}
+      >
         <div className="flex flex-wrap items-center gap-1 min-w-0">
           <span className="font-bold opacity-80">{label}:</span>
           {name ? (
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handlePersonClick(name, {
-                  explicitSecretariatId: secretariatId || fallbackSecretariatId
-                });
-              }}
-              className={`font-black hover:underline cursor-pointer text-right ${
+              onClick={handleDirectPersonJump}
+              className={`font-black hover:underline cursor-pointer text-right inline-flex items-center gap-1 ${
                 dark ? 'text-white hover:text-amber-300' : 'text-stone-900 hover:text-red-700'
               }`}
-              title={resolvedSec ? `الانتقال إلى ${resolvedSec.secretariat.name} وعرض بيانات ${name}` : `عرض بيانات ${name}`}
+              title={resolvedSec ? `الانتقال المباشر إلى ${resolvedSec.secretariat.name} وعرض بيانات ${name}` : `عرض بيانات ${name}`}
             >
-              {name}
+              <span>{name}</span>
+              <ChevronLeft className="w-3 h-3 shrink-0 opacity-75" />
             </button>
           ) : (
             <span className="font-bold">{tone === 'publisher' ? 'أمانة الإعلام' : 'أمانة قسم ثالث أكتوبر'}</span>
@@ -759,19 +792,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // -------------------------------------------------------------
   if (currentView === 'home') {
     return (
-      <div className="space-y-16 lg:space-y-24 pb-16">
-        
-        {/* Automated Hero Media Reel */}
+      <div className="flex flex-col">
+
+        {/* Band 1: Automated Hero Media Reel */}
         <section
-          className="relative overflow-hidden sm:pt-4"
+          className="relative overflow-hidden bg-stone-50 border-b border-stone-200/80 pt-0 sm:pt-5 pb-8 sm:pb-10"
           onMouseEnter={() => setIsHeroHovered(true)}
           onMouseLeave={() => setIsHeroHovered(false)}
         >
-          <div className="max-w-6xl mx-auto px-0 sm:px-4 lg:px-6">
+          <div className="max-w-6xl mx-auto px-0 sm:px-6 lg:px-8">
 
-            {/* Main Hero Display Container (Slightly enlarged, clean full-width framing with zero black gaps) */}
+            {/* Main Hero Display Container */}
             <div
-              className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[650px] w-full overflow-hidden bg-stone-100 sm:rounded-2xl border-y sm:border border-amber-500/30 shadow-2xl select-none"
+              className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[640px] w-full overflow-hidden bg-stone-900 sm:rounded-2xl border-y sm:border border-amber-500/35 shadow-xl select-none"
               style={{ touchAction: 'pan-y' }}
             >
               {heroSlides.map((slide, idx) => {
@@ -863,20 +896,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <button
                     onClick={() => setHeroSlideIndex(prev => (prev - 1 + heroSlides.length) % heroSlides.length)}
                     aria-label="السابق"
-                    className="absolute left-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-70 hover:opacity-100"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-75 hover:opacity-100"
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
                   <button
                     onClick={() => setHeroSlideIndex(prev => (prev + 1) % heroSlides.length)}
                     aria-label="التالي"
-                    className="absolute right-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-70 hover:opacity-100"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 z-30 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 backdrop-blur-xs flex items-center justify-center transition-all cursor-pointer opacity-75 hover:opacity-100"
                   >
                     <ChevronRight className="w-5 h-5" />
                   </button>
 
-                  {/* Slide Indicators / Navigation Dots */}
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/40 backdrop-blur-xs px-3 py-1 rounded-full border border-white/10">
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/45 backdrop-blur-xs px-3 py-1 rounded-full border border-white/10">
                     {heroSlides.map((_, dotIdx) => (
                       <button
                         key={dotIdx}
@@ -939,544 +971,440 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </button>
                 )
               )}
-
             </div>
 
           </div>
         </section>
 
-        {/* Official Typography Section Directly Below Video (Exactly matching reference video) */}
-        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 pt-4">
-          {/* Main Headline */}
-          <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
-            معاً نبني مستقبلاً مشرقاً لمصر
-          </h1>
-
-          {/* Subtitle Paragraph */}
-          <div className="text-sm sm:text-base lg:text-lg font-bold text-stone-800 leading-relaxed max-w-3xl mx-auto space-y-1">
-            <p>
-              حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يحق لأي مصري الانتماء إلى عضويته
-            </p>
-            <p className="text-stone-600 font-semibold text-xs sm:text-sm">
-              دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية وإحترام حقوق الإنسان
-            </p>
-            <p className="text-red-700 font-extrabold text-xs sm:text-sm pt-1">
-              الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة
-            </p>
-          </div>
-
-          <div className="w-16 h-1 bg-amber-500 mx-auto rounded-full my-4" />
-
-          {/* Three Foundational Manifesto Paragraphs (Matching video frame 00:01) */}
-          <div className="text-right space-y-4 text-xs sm:text-sm lg:text-base text-stone-700 leading-relaxed font-normal bg-stone-50/80 p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
-            <p className="font-semibold text-stone-900 leading-relaxed">
-              حزب الجبهة الوطنية هو كيان سياسي مصري يهدف إلى إحداث تغيير حقيقي في المشهد السياسي من خلال تعزيز المشاركة الشعبية الفاعلة والصادقة.
-            </p>
-            <p className="leading-relaxed">
-              يعمل الحزب على بناء نموذج ديمقراطي يعزز ثقافة الحوار والتعاون بين جميع أطياف المجتمع، مع التركيز على تحقيق العدالة الاجتماعية والتنمية المستدامة، يسعى الحزب إلى أن يكون بيت خبرة وطني يخدم مصلحة الوطن العليا بعيداً عن أي توجهات ضيقة أو شخصية، مستنداً إلى رؤية شاملة تستند إلى قيم الحرية، العدالة، وسيادة القانون.
-            </p>
-            <p className="leading-relaxed">
-              يجمع الحزب بين طاقات الشباب وخبرات الأجيال لإيجاد حلول حقيقية للتحديات التي تواجه الوطن، إيماناً بأن العمل الجماعي هو السبيل لتحقيق تطلعات الشعب المصري نحو مستقبل أفضل.
-            </p>
-          </div>
-        </section>
-
-        {/* Party Headquarters Entrance Photo Card */}
-        <section className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="overflow-hidden rounded-3xl border-2 border-amber-500/40 shadow-xl bg-stone-950 group">
-            <div className="relative aspect-[4/3] sm:aspect-[16/12] w-full overflow-hidden bg-stone-900">
-              <img
-                src={data.settings.entranceImageUrl || '/assets/aistudio/______________________________20261114_203911_a06570e5.jpg'}
-                alt="مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
-                className="w-full h-full object-cover object-bottom group-hover:scale-[1.02] transition-transform duration-700"
-                referrerPolicy="no-referrer"
-              />
+        {/* Band 2: Identity, Foundational Manifesto & Headquarters Showcase */}
+        <section className="bg-white border-b border-stone-200/80 py-14 sm:py-16">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+            <div className="max-w-4xl mx-auto text-center space-y-4">
+              <p className="text-xs font-extrabold text-red-700 tracking-wide">
+                الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة
+              </p>
+              <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
+                معاً نبني مستقبلاً مشرقاً لمصر
+              </h1>
+              <p className="text-sm sm:text-base lg:text-lg font-semibold text-stone-700 leading-relaxed max-w-3xl mx-auto">
+                حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يحق لأي مصري الانتماء إلى عضويته دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية واحترام حقوق الإنسان.
+              </p>
+              <div className="w-16 h-1 bg-amber-500 mx-auto rounded-full" />
             </div>
-            <div className="px-5 py-3.5 bg-stone-950 border-t border-amber-500/25 flex flex-wrap items-center justify-between gap-2 text-right">
-              <div className="flex items-center gap-2.5">
-                <span className="bg-amber-500 text-stone-950 text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-md shrink-0">
-                  مقر الحزب
-                </span>
-                <h3 className="text-sm sm:text-lg font-black text-white">
-                  مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر
-                </h3>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+              {/* Foundational Manifesto */}
+              <div className="lg:col-span-7 bg-stone-50/90 border border-stone-200 rounded-2xl p-6 sm:p-8 flex flex-col justify-between text-right space-y-4">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b border-stone-200 pb-3">
+                    <h2 className="text-base sm:text-lg font-black text-stone-900">
+                      الرؤية التأسيسية ورسالة الحزب
+                    </h2>
+                    <span className="text-xs font-bold text-amber-800">
+                      {data.settings.slogan || 'مصر للجميع'}
+                    </span>
+                  </div>
+                  <p className="font-semibold text-stone-900 text-sm sm:text-base leading-relaxed">
+                    حزب الجبهة الوطنية هو كيان سياسي مصري يهدف إلى إحداث تغيير حقيقي في المشهد السياسي من خلال تعزيز المشاركة الشعبية الفاعلة والصادقة.
+                  </p>
+                  <p className="text-xs sm:text-sm lg:text-base text-stone-700 leading-relaxed">
+                    يعمل الحزب على بناء نموذج ديمقراطي يعزز ثقافة الحوار والتعاون بين جميع أطياف المجتمع، مع التركيز على تحقيق العدالة الاجتماعية والتنمية المستدامة، ويسعى إلى أن يكون بيت خبرة وطني يخدم مصلحة الوطن العليا بعيداً عن أي توجهات ضيقة أو شخصية، مستنداً إلى رؤية شاملة ترتكز على قيم الحرية والعدالة وسيادة القانون.
+                  </p>
+                  <p className="text-xs sm:text-sm lg:text-base text-stone-700 leading-relaxed">
+                    يجمع الحزب بين طاقات الشباب وخبرات الأجيال لإيجاد حلول حقيقية للتحديات التي تواجه الوطن، إيماناً بأن العمل الجماعي هو السبيل لتحقيق تطلعات الشعب المصري نحو مستقبل أفضل.
+                  </p>
+                </div>
+
+                <div className="pt-4 border-t border-stone-200/80 flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onNavigate) onNavigate('about');
+                      else {
+                        setCurrentView('about');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-black text-red-700 hover:text-red-800 cursor-pointer"
+                  >
+                    <span>المزيد عن الحزب ورؤيتنا ومبادئنا</span>
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <a
+                    href="/join"
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        setCurrentView('join');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs px-5 py-2.5 rounded-xl transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <HeartHandshake className="w-4 h-4" />
+                    <span>تقديم طلب العضوية</span>
+                  </a>
+                </div>
               </div>
-              <span className="text-[11px] sm:text-xs font-bold text-amber-300/90">
-                محافظة الجيزة – مصر للجميع
-              </span>
+
+              {/* Headquarters Entrance Photo Card */}
+              <div className="lg:col-span-5 overflow-hidden rounded-2xl border border-amber-500/40 shadow-lg bg-stone-950 group flex flex-col justify-between">
+                <div className="relative flex-1 min-h-[260px] w-full overflow-hidden bg-stone-900">
+                  <img
+                    src={data.settings.entranceImageUrl || '/assets/aistudio/______________________________20261114_203911_a06570e5.jpg'}
+                    alt="مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
+                    className="w-full h-full object-cover object-bottom group-hover:scale-[1.02] transition-transform duration-700"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+                <div className="px-5 py-4 bg-stone-950 border-t border-amber-500/25 flex flex-wrap items-center justify-between gap-2 text-right">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-white">
+                      مقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر
+                    </h3>
+                    <p className="text-[11px] font-bold text-amber-300/90 mt-0.5">
+                      محافظة الجيزة · {data.settings.slogan || 'مصر للجميع'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onNavigate) onNavigate('contact');
+                      else {
+                        setCurrentView('contact');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-[11px] font-black px-3 py-1.5 rounded-lg cursor-pointer shrink-0"
+                  >
+                    الموقع والخريطة
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
-        {/* Independent Membership Call-To-Action Section (Matching video frame 00:02) */}
-        <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="bg-gradient-to-b from-[#fbf8f2] via-[#f7f1e4] to-[#f2e8d5] border-2 border-amber-400/60 rounded-3xl p-8 sm:p-12 text-center shadow-lg space-y-5">
-            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-stone-950">
-              {data.settings.membershipTitle || 'كن جزءاً من التغيير!'}
-            </h2>
-            <p className="text-sm sm:text-base text-stone-700 max-w-xl mx-auto leading-relaxed">
-              {data.settings.membershipSubtitle || 'ندعوكم للانضمام إلى مسيرة الحزب والعمل معنا لتحقيق تطلعات الوطن.'}
-            </p>
-            <p className="text-xs sm:text-sm font-bold text-amber-800">
-              {data.settings.membershipCtaText || 'انضم الآن وساهم في بناء المستقبل'}
-            </p>
-
-            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
-              {/* Membership Application Button */}
-              <a
-                href="/join"
-                onClick={(e) => {
-                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                    e.preventDefault();
-                    setCurrentView('join');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }
-                }}
-                className="w-full sm:w-auto bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-600 hover:to-amber-500 text-stone-950 font-black px-8 py-3.5 rounded-xl shadow-md transition-all hover:scale-105 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
-              >
-                <HeartHandshake className="w-5 h-5 text-stone-950" />
-                <span>استمارة العضوية</span>
-              </a>
-
-              {/* Direct WhatsApp Contact Button (Editable from Admin Panel) */}
-              <a
-                href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.membershipWhatsapp || data.settings.whatsapp || '01003070108').replace(/\D/g, '')}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-3.5 rounded-xl shadow-md transition-all hover:scale-105 cursor-pointer text-sm sm:text-base flex items-center justify-center gap-2"
-              >
-                <MessageCircle className="w-5 h-5" />
-                <span>تواصل واستفسار عبر واتساب</span>
-              </a>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 1: Unified Leaders Preview (All Party Leaders + All 3rd October Secretariat Leaders & Bureau) */}
+        {/* Band 3: Unified Leaders Preview (Party Leaders + 3rd October Secretariat Leaders & Bureau) */}
         {(data.partyLeaders.length > 0 || data.secretariatLeaders.length > 0) && (
-          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <section className="bg-stone-50 border-b border-stone-200/80 py-14 sm:py-16">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-stone-200 pb-5">
+                <div>
+                  <span className="text-xs font-extrabold text-red-700">
+                    الهيكل القيادي والتنظيمي
+                  </span>
+                  <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight mt-1">
+                    {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
+                  </h2>
+                </div>
+                <a
+                  href="/party-leaders"
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      setCurrentView('party-leaders');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
+                >
+                  <span>عرض جميع القيادات</span>
+                  <ChevronLeft className="w-4 h-4" />
+                </a>
+              </div>
+
+              {data.partyLeaders.length > 0 && (
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                      قيادات الحزب (الهيئة العليا والمحافظات)
+                    </h3>
+                    <span className="text-xs font-bold text-stone-500">
+                      {data.partyLeaders.length} قيادات
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {data.partyLeaders.map(leader => (
+                      <div
+                        key={leader.id}
+                        onClick={() =>
+                          handlePersonClick(leader.name, {
+                            explicitSecretariatId: leader.specializedSecretariatId,
+                            personKey: leader.id || leader.name,
+                            fallbackPartyLeader: leader
+                          })
+                        }
+                        className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
+                      >
+                        <div className="aspect-square bg-stone-50 overflow-hidden relative">
+                          <img
+                            src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                            alt={leader.name}
+                            className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                              leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                            }`}
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 right-2 bg-stone-900/85 backdrop-blur-xs text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-md">
+                            {leader.level || (leader.governorate || 'المستوى القيادي')}
+                          </div>
+                        </div>
+                        <div className="p-4 text-right">
+                          <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
+                            {leader.name}
+                          </h3>
+                          <p className="text-xs font-semibold text-red-700 mt-0.5 leading-relaxed">
+                            {leader.position}
+                          </p>
+                          {leader.bio && (
+                            <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
+                              {leader.bio}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {data.secretariatLeaders.length > 0 && (
+                <div className="space-y-5 pt-10 border-t border-stone-200">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                      قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر
+                    </h3>
+                    <span className="text-xs font-bold text-stone-500">
+                      {data.secretariatLeaders.length} قيادات
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    {data.secretariatLeaders.map(leader => {
+                      const linkedSec = resolvePersonInSecretariats({
+                        name: leader.name,
+                        personKey: leader.id || leader.name,
+                        explicitSecretariatId: leader.specializedSecretariatId,
+                        specializedSecretariats: data.specializedSecretariats || [],
+                        secretariatMembers: data.secretariatMembers || [],
+                        secretariatLeaders: data.secretariatLeaders || [],
+                        partyLeaders: data.partyLeaders || []
+                      });
+                      return (
+                      <div
+                        key={leader.id}
+                        onClick={() =>
+                          handlePersonClick(leader.name, {
+                            explicitSecretariatId: leader.specializedSecretariatId,
+                            personKey: leader.id || leader.name,
+                            fallbackSecLeader: leader
+                          })
+                        }
+                        className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
+                      >
+                        <div className="aspect-square bg-stone-50 overflow-hidden relative">
+                          <img
+                            src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                            alt={leader.name}
+                            className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                              leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
+                            }`}
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded max-w-[85%] truncate">
+                            {linkedSec ? linkedSec.secretariat.name : 'أمانة قسم ثالث أكتوبر'}
+                          </div>
+                        </div>
+                        <div className="p-4 text-right">
+                          <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
+                            {leader.name}
+                          </h3>
+                          <p className="text-xs font-semibold text-amber-700 mt-0.5 leading-relaxed">
+                            {leader.title}
+                          </p>
+                          {linkedSec && (
+                            <p className="text-[11px] font-bold text-red-700 mt-1 flex items-center gap-1">
+                              <Building2 className="w-3 h-3 shrink-0" />
+                              <span>عرض ملف الأمانة والتفاصيل</span>
+                            </p>
+                          )}
+                          {leader.bio && (
+                            <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
+                              {leader.bio}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Band 4: Specialized Secretariats Grid */}
+        <section className="bg-white border-b border-stone-200/80 py-14 sm:py-16">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8 border-b border-stone-200 pb-5">
               <div>
-                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight">
-                  {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
+                <span className="text-xs font-extrabold text-red-700">
+                  {ct.secretariatsBadge || 'قطاعات العمل الحزبي'}
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
+                  {ct.secretariatsTitle || 'أمانات حزب الجبهة الوطنية'}
                 </h2>
+                <p className="text-xs sm:text-sm text-stone-500 mt-1">
+                  {ct.secretariatsSubtitle || 'لكل أمانة صفحة مستقلة بكامل مهامها وأعضائها وأنشطتها'}
+                </p>
               </div>
               <a
-                href="/party-leaders"
+                href="/secretariats"
                 onClick={(e) => {
                   if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
                     e.preventDefault();
-                    setCurrentView('party-leaders');
+                    setCurrentView('secretariats');
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                   }
                 }}
-                className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer shrink-0"
               >
-                <span>عرض جميع القيادات</span>
+                <span>استعراض جميع الأمانات ({data.specializedSecretariats.length})</span>
                 <ChevronLeft className="w-4 h-4" />
               </a>
             </div>
 
-            {data.partyLeaders.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-r-4 border-red-700 pr-3">
-                  <h3 className="text-lg sm:text-xl font-black text-stone-900">
-                    قيادات الحزب (الهيئة العليا والمحافظات)
-                  </h3>
-                  <span className="text-xs font-bold text-stone-500">
-                    {data.partyLeaders.length} قيادات
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {data.partyLeaders.map(leader => (
-                    <div
-                      key={leader.id}
-                      onClick={() =>
-                        handlePersonClick(leader.name, {
-                          explicitSecretariatId: leader.specializedSecretariatId,
-                          personKey: leader.id || leader.name,
-                          fallbackPartyLeader: leader
-                        })
-                      }
-                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
-                    >
-                      <div className="aspect-square bg-stone-50 overflow-hidden relative">
-                        <img
-                          src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                          alt={leader.name}
-                          className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
-                            leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
-                          }`}
-                          referrerPolicy="no-referrer"
-                        />
-                        <div className="absolute top-2 right-2 bg-stone-900/80 backdrop-blur-xs text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-md">
-                          {leader.level || (leader.governorate || 'المستوى القيادي')}
-                        </div>
-                      </div>
-                      <div className="p-4 text-right">
-                        <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
-                          {leader.name}
-                        </h3>
-                        <p className="text-xs font-semibold text-red-700 mt-0.5 leading-relaxed">
-                          {leader.position}
-                        </p>
-                        {leader.bio && (
-                          <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
-                            {leader.bio}
-                          </p>
-                        )}
-                      </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {data.specializedSecretariats.map(sec => {
+                const baseAsstList: AssistantSecretaryEntry[] =
+                  sec.assistantSecretaries && sec.assistantSecretaries.length > 0
+                    ? sec.assistantSecretaries.filter(a => a.name?.trim())
+                    : sec.assistantSecretaryName
+                    ? [{ id: 'asst-1', name: sec.assistantSecretaryName, photoUrl: sec.assistantSecretaryPhotoUrl || '' }]
+                    : [];
+                const memberAsstList: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
+                  .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
+                  .filter(m => !baseAsstList.some(a => a.name.trim() === m.name.trim()))
+                  .map(m => ({ id: m.id, name: m.name, photoUrl: m.photoUrl || '' }));
+                const allAssts = [...baseAsstList, ...memberAsstList];
+                const featuredPeople = [
+                  ...(sec.secretaryPhotoUrl ? [{ name: sec.secretaryName || 'أمين الأمانة', role: 'أمين الأمانة', photoUrl: sec.secretaryPhotoUrl }] : []),
+                  ...allAssts.filter(a => a.photoUrl).map(a => ({ name: a.name, role: a.title || 'الأمين المساعد', photoUrl: a.photoUrl! }))
+                ].slice(0, 3);
+
+                return (
+                <div
+                  key={sec.id}
+                  onClick={() => openSecretariat(sec.slug)}
+                  className="bg-stone-50/50 rounded-2xl border border-stone-200 p-6 shadow-xs hover:bg-white hover:shadow-md transition-all cursor-pointer group hover:border-red-600/40 flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="w-10 h-10 rounded-xl bg-red-50 text-red-700 flex items-center justify-center font-bold text-sm group-hover:bg-red-700 group-hover:text-white transition-colors">
+                        <Building2 className="w-5 h-5" />
+                      </span>
+                      <span className="text-xs text-stone-400 font-medium">
+                        أمانة قسم ثالث أكتوبر
+                      </span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
-            {data.secretariatLeaders.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-r-4 border-amber-500 pr-3">
-                  <h3 className="text-lg sm:text-xl font-black text-stone-900">
-                    قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر
-                  </h3>
-                  <span className="text-xs font-bold text-stone-500">
-                    {data.secretariatLeaders.length} قيادات
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {data.secretariatLeaders.map(leader => {
-                    const linkedSec = resolvePersonInSecretariats({
-                      name: leader.name,
-                      personKey: leader.id || leader.name,
-                      explicitSecretariatId: leader.specializedSecretariatId,
-                      specializedSecretariats: data.specializedSecretariats || [],
-                      secretariatMembers: data.secretariatMembers || [],
-                      secretariatLeaders: data.secretariatLeaders || [],
-                      partyLeaders: data.partyLeaders || []
-                    });
-                    return (
-                    <div
-                      key={leader.id}
-                      onClick={() =>
-                        handlePersonClick(leader.name, {
-                          explicitSecretariatId: leader.specializedSecretariatId,
-                          personKey: leader.id || leader.name,
-                          fallbackSecLeader: leader
-                        })
-                      }
-                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
-                    >
-                      <div className="aspect-square bg-stone-50 overflow-hidden relative">
-                        <img
-                          src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                          alt={leader.name}
-                          className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
-                            leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
-                          }`}
-                          referrerPolicy="no-referrer"
-                        />
-                        <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded max-w-[85%] truncate">
-                          {linkedSec ? linkedSec.secretariat.name : 'أمانة قسم ثالث أكتوبر'}
-                        </div>
-                      </div>
-                      <div className="p-4 text-right">
-                        <h3 className="font-bold text-stone-900 text-base group-hover:text-red-700 transition-colors">
-                          {leader.name}
-                        </h3>
-                        <p className="text-xs font-semibold text-amber-700 mt-0.5 leading-relaxed">
-                          {leader.title}
-                        </p>
-                        {linkedSec && (
-                          <p className="text-[11px] font-bold text-red-700 mt-1 flex items-center gap-1">
-                            <Building2 className="w-3 h-3 shrink-0" />
-                            <span>عرض ملف الأمانة والتفاصيل</span>
-                          </p>
-                        )}
-                        {leader.bio && (
-                          <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
-                            {leader.bio}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </section>
-        )}
+                    <h3 className="font-extrabold text-stone-900 text-lg group-hover:text-red-700 transition-colors mb-2">
+                      {sec.name}
+                    </h3>
 
-        {/* Section 3: Specialized Secretariats Grid */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
-            <div>
-              <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
-                {ct.secretariatsBadge || 'قطاعات العمل الحزبي'}
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
-                {ct.secretariatsTitle || 'أمانات حزب الجبهة الوطنية'}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-500 mt-1">
-                {ct.secretariatsSubtitle || 'لكل أمانة صفحة مستقلة بكامل مهامها وأعضائها وأنشطتها'}
-              </p>
-            </div>
-            <a
-              href="/secretariats"
-              onClick={(e) => {
-                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                  e.preventDefault();
-                  setCurrentView('secretariats');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }
-              }}
-              className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer"
-            >
-              <span>استعراض جميع الأمانات</span>
-              <ChevronLeft className="w-4 h-4" />
-            </a>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {data.specializedSecretariats.map(sec => {
-              const baseAsstList: AssistantSecretaryEntry[] =
-                sec.assistantSecretaries && sec.assistantSecretaries.length > 0
-                  ? sec.assistantSecretaries.filter(a => a.name?.trim())
-                  : sec.assistantSecretaryName
-                  ? [{ id: 'asst-1', name: sec.assistantSecretaryName, photoUrl: sec.assistantSecretaryPhotoUrl || '' }]
-                  : [];
-              const memberAsstList: AssistantSecretaryEntry[] = (data.secretariatMembers || [])
-                .filter(m => m.secretariatId === sec.id && m.tier === 'assistant_secretary' && m.name?.trim())
-                .filter(m => !baseAsstList.some(a => a.name.trim() === m.name.trim()))
-                .map(m => ({ id: m.id, name: m.name, photoUrl: m.photoUrl || '' }));
-              const allAssts = [...baseAsstList, ...memberAsstList];
-              const featuredPeople = [
-                ...(sec.secretaryPhotoUrl ? [{ name: sec.secretaryName || 'أمين الأمانة', role: 'أمين الأمانة', photoUrl: sec.secretaryPhotoUrl }] : []),
-                ...allAssts.filter(a => a.photoUrl).map(a => ({ name: a.name, role: a.title || 'الأمين المساعد', photoUrl: a.photoUrl! }))
-              ].slice(0, 3);
-
-              return (
-              <div
-                key={sec.id}
-                onClick={() => openSecretariat(sec.slug)}
-                className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs hover:shadow-md transition-all cursor-pointer group hover:border-red-600/40 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="w-10 h-10 rounded-xl bg-red-50 text-red-700 flex items-center justify-center font-bold text-sm group-hover:bg-red-700 group-hover:text-white transition-colors">
-                      <Building2 className="w-5 h-5" />
-                    </span>
-                    <span className="text-xs text-stone-400 font-medium">
-                      أمانة قسم ثالث أكتوبر
-                    </span>
+                    <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-4">
+                      {sec.description}
+                    </p>
                   </div>
 
-                  <h3 className="font-extrabold text-stone-900 text-lg group-hover:text-red-700 transition-colors mb-2">
-                    {sec.name}
-                  </h3>
-
-                  <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-4">
-                    {sec.description}
-                  </p>
-                </div>
-
-                {featuredPeople.length > 0 && (
-                  <div className="mb-4 flex flex-wrap items-center gap-3">
-                    {featuredPeople.map((person, pIdx) => (
-                      <button
-                        type="button"
-                        key={pIdx}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openSecretariat(sec.slug, person.name);
-                        }}
-                        title={`عرض بيانات ${person.name} في ${sec.name}`}
-                        className="relative shrink-0 cursor-pointer text-right group/person"
-                      >
-                        <img
-                          src={person.photoUrl}
-                          alt={person.name}
-                          className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover/person:scale-[1.04] group-hover/person:border-red-600 transition-all"
-                          referrerPolicy="no-referrer"
-                        />
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                <div className="pt-4 border-t border-stone-100 flex items-center justify-between text-xs gap-2">
-                  <div className="space-y-0.5 text-stone-500 min-w-0">
-                    <div className="truncate">
-                      <span className="font-medium">أمين الأمانة: </span>
-                      {sec.secretaryName ? (
+                  {featuredPeople.length > 0 && (
+                    <div className="mb-4 flex flex-wrap items-center gap-3">
+                      {featuredPeople.map((person, pIdx) => (
                         <button
                           type="button"
+                          key={pIdx}
                           onClick={(e) => {
                             e.stopPropagation();
-                            openSecretariat(sec.slug, sec.secretaryName);
+                            openSecretariat(sec.slug, person.name);
                           }}
-                          className="font-bold text-stone-800 hover:text-red-700 hover:underline cursor-pointer"
+                          title={`عرض بيانات ${person.name} في ${sec.name}`}
+                          className="relative shrink-0 cursor-pointer text-right group/person"
                         >
-                          {sec.secretaryName}
+                          <img
+                            src={person.photoUrl}
+                            alt={person.name}
+                            className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover/person:scale-[1.04] group-hover/person:border-red-600 transition-all"
+                            referrerPolicy="no-referrer"
+                          />
                         </button>
-                      ) : (
-                        <span className="font-bold text-stone-800">قيد التعيين</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t border-stone-200/70 flex items-center justify-between text-xs gap-2">
+                    <div className="space-y-0.5 text-stone-500 min-w-0">
+                      <div className="truncate">
+                        <span className="font-medium">أمين الأمانة: </span>
+                        {sec.secretaryName ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openSecretariat(sec.slug, sec.secretaryName);
+                            }}
+                            className="font-bold text-stone-800 hover:text-red-700 hover:underline cursor-pointer"
+                          >
+                            {sec.secretaryName}
+                          </button>
+                        ) : (
+                          <span className="font-bold text-stone-800">قيد التعيين</span>
+                        )}
+                      </div>
+                      {allAssts.length > 0 && (
+                        <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
+                          <span className="font-medium">
+                            {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
+                          </span>
+                          <span className="font-semibold text-stone-700">
+                            {allAssts.map((a, aIdx) => (
+                              <React.Fragment key={a.id || aIdx}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openSecretariat(sec.slug, a.id || a.name);
+                                  }}
+                                  className="hover:text-red-700 hover:underline cursor-pointer"
+                                >
+                                  {a.name}
+                                </button>
+                                {aIdx < allAssts.length - 1 ? '، ' : ''}
+                              </React.Fragment>
+                            ))}
+                          </span>
+                        </div>
                       )}
                     </div>
-                    {allAssts.length > 0 && (
-                      <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
-                        <span className="font-medium">
-                          {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
-                        </span>
-                        <span className="font-semibold text-stone-700">
-                          {allAssts.map((a, aIdx) => (
-                            <React.Fragment key={a.id || aIdx}>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openSecretariat(sec.slug, a.id || a.name);
-                                }}
-                                className="hover:text-red-700 hover:underline cursor-pointer"
-                              >
-                                {a.name}
-                              </button>
-                              {aIdx < allAssts.length - 1 ? '، ' : ''}
-                            </React.Fragment>
-                          ))}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
-                    <span>التفاصيل</span>
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                  </span>
-                </div>
-              </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Section 3.5: الأقسام ومنصة البث المباشر (Relocated into Sections per user request) */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
-            <div>
-              <span className="text-xs font-bold text-red-700 uppercase tracking-widest flex items-center gap-1.5">
-                <LayoutGrid className="w-3.5 h-3.5" />
-                <span>أقسام البوابة الرسمية</span>
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
-                الأقسام والخدمات التفاعلية
-              </h2>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {/* قسم البث المباشر */}
-            <div
-              onClick={() => {
-                if (onNavigate) onNavigate('live');
-                else setCurrentView('live');
-              }}
-              className={`rounded-2xl p-6 border-2 transition-all cursor-pointer group flex flex-col justify-between shadow-sm hover:shadow-lg ${
-                data.liveStream?.isActive
-                  ? 'bg-gradient-to-br from-red-800 via-red-700 to-stone-900 text-white border-red-500'
-                  : 'bg-white text-stone-900 border-stone-200 hover:border-red-600'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${
-                    data.liveStream?.isActive ? 'bg-white/20 text-white' : 'bg-red-50 text-red-700'
-                  }`}>
-                    <Radio className="w-5 h-5" />
-                  </span>
-                  {data.liveStream?.isActive ? (
-                    <span className="inline-flex items-center gap-1.5 bg-white text-red-700 text-[11px] font-black px-2.5 py-1 rounded-lg">
-                      <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
-                      <span>بث حي نشط الآن</span>
+                    <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
+                      <span>التفاصيل</span>
+                      <ChevronLeft className="w-3.5 h-3.5" />
                     </span>
-                  ) : (
-                    <span className="text-[11px] font-bold text-stone-400">قسم البث المباشر</span>
-                  )}
+                  </div>
                 </div>
-                <h3 className={`font-black text-lg mb-1.5 ${data.liveStream?.isActive ? 'text-white' : 'text-stone-900 group-hover:text-red-700'}`}>
-                  {data.liveStream?.isActive && data.liveStream?.title
-                    ? data.liveStream.title
-                    : 'قسم البث المباشر'}
-                </h3>
-                <p className={`text-xs leading-relaxed line-clamp-2 ${data.liveStream?.isActive ? 'text-red-100' : 'text-stone-500'}`}>
-                  {data.liveStream?.description || 'متابعة البث المباشر لفعاليات ومؤتمرات أمانة قسم ثالث أكتوبر بمحافظة الجيزة.'}
-                </p>
-              </div>
-              <div className={`mt-4 pt-3 border-t flex items-center justify-between text-xs font-bold ${
-                data.liveStream?.isActive ? 'border-white/15 text-amber-300' : 'border-stone-100 text-red-700'
-              }`}>
-                <span>دخول قسم البث المباشر</span>
-                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
-              </div>
-            </div>
-
-            {/* قسم الأمانات التخصصية */}
-            <div
-              onClick={() => (onNavigate ? onNavigate('secretariats') : setCurrentView('secretariats'))}
-              className="bg-white rounded-2xl p-6 border border-stone-200 hover:border-amber-500 transition-all cursor-pointer group flex flex-col justify-between shadow-xs hover:shadow-md"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="w-11 h-11 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-stone-950 transition-colors">
-                    <Building2 className="w-5 h-5" />
-                  </span>
-                  <span className="text-[11px] font-bold text-stone-400">{data.specializedSecretariats.length} أمانة</span>
-                </div>
-                <h3 className="font-black text-lg text-stone-900 group-hover:text-red-700 mb-1.5">
-                  قسم الأمانات التخصصية
-                </h3>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  استعرض كافة الأمانات والقيادات والأمناء المساعدين وأعضاء هيئة المكتب المقيدين بكل أمانة.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-amber-700">
-                <span>استعراض الأمانات</span>
-                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
-              </div>
-            </div>
-
-            {/* قسم الأخبار والفعاليات */}
-            <div
-              onClick={() => (onNavigate ? onNavigate('news') : setCurrentView('news'))}
-              className="bg-white rounded-2xl p-6 border border-stone-200 hover:border-red-600 transition-all cursor-pointer group flex flex-col justify-between shadow-xs hover:shadow-md"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="w-11 h-11 rounded-xl bg-stone-100 text-stone-800 flex items-center justify-center group-hover:bg-red-700 group-hover:text-white transition-colors">
-                    <Newspaper className="w-5 h-5" />
-                  </span>
-                  <span className="text-[11px] font-bold text-stone-400">{data.news.length} خبر وبيان</span>
-                </div>
-                <h3 className="font-black text-lg text-stone-900 group-hover:text-red-700 mb-1.5">
-                  المركز الإعلامي والأخبار
-                </h3>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  أحدث البيانات الرسمية والتغطيات الميدانية والفعاليات المشتركة لأمانة قسم ثالث أكتوبر.
-                </p>
-              </div>
-              <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-red-700">
-                <span>تصفح الأخبار والبيانات</span>
-                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
-              </div>
+                );
+              })}
             </div>
           </div>
         </section>
 
-        {/* Section 4: Initiatives Showcase */}
+        {/* Band 5: Initiatives Showcase */}
         {data.initiatives.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="bg-gradient-to-br from-stone-900 to-stone-950 rounded-3xl p-8 sm:p-12 text-white border-2 border-amber-500/30">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <section className="bg-stone-950 text-white py-14 sm:py-16 border-b border-amber-500/20">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8 border-b border-white/10 pb-5">
                 <div>
-                  <span className="text-xs font-bold text-amber-400 uppercase tracking-widest">
+                  <span className="text-xs font-extrabold text-amber-400">
                     {ct.initiativesBadge || 'العمل الميداني والمجتمعي'}
                   </span>
                   <h2 className="text-2xl sm:text-3xl font-black text-white mt-1">
@@ -1499,53 +1427,55 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </a>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {data.initiatives.map(init => (
                   <div
                     key={init.id}
                     onClick={() => openInitiative(init.slug)}
-                    className="bg-white/5 border border-white/10 rounded-2xl p-6 hover:bg-white/10 transition-all cursor-pointer group"
+                    className="bg-stone-900/90 border border-white/10 rounded-2xl p-6 hover:border-amber-500/40 transition-all cursor-pointer group flex flex-col justify-between"
                   >
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-xs px-2.5 py-1 rounded-full font-bold bg-amber-500/20 text-amber-300">
-                        {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة')}
-                      </span>
-                      <span className="text-xs text-stone-400">
-                        بدأت: {init.startDate}
-                      </span>
+                    <div>
+                      <div className="flex items-center justify-between text-xs text-stone-400 mb-3">
+                        <span className="font-bold text-amber-300">
+                          {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة')}
+                        </span>
+                        <span>بدأت: {init.startDate}</span>
+                      </div>
+
+                      <h3 className="text-xl font-bold text-white group-hover:text-amber-300 transition-colors mb-2">
+                        {init.title}
+                      </h3>
+                      <p className="text-xs sm:text-sm text-stone-300 leading-relaxed line-clamp-3 mb-4">
+                        {init.description}
+                      </p>
                     </div>
 
-                    <h3 className="text-xl font-bold text-white group-hover:text-amber-300 transition-colors mb-2">
-                      {init.title}
-                    </h3>
-                    <p className="text-xs text-stone-300 leading-relaxed line-clamp-3 mb-4">
-                      {init.description}
-                    </p>
+                    <div>
+                      {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                        <div className="mb-3 pt-2.5 border-t border-white/10 space-y-1.5">
+                          {renderPersonBadge({
+                            label: 'إعداد وتنفيذ',
+                            name: init.authorName,
+                            position: init.authorPosition,
+                            secretariatId: init.authorSecretariatId,
+                            dark: true,
+                            tone: 'author'
+                          })}
+                          {renderPersonBadge({
+                            label: 'نشر ورفع (أمانة الإعلام)',
+                            name: init.publisherName,
+                            position: init.publisherPosition,
+                            secretariatId: init.publisherSecretariatId,
+                            dark: true,
+                            tone: 'publisher'
+                          })}
+                        </div>
+                      )}
 
-                    {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
-                      <div className="mb-3 pt-2.5 border-t border-white/10 space-y-1.5">
-                        {renderPersonBadge({
-                          label: 'إعداد وتنفيذ',
-                          name: init.authorName,
-                          position: init.authorPosition,
-                          secretariatId: init.authorSecretariatId,
-                          dark: true,
-                          tone: 'author'
-                        })}
-                        {renderPersonBadge({
-                          label: 'نشر ورفع (أمانة الإعلام)',
-                          name: init.publisherName,
-                          position: init.publisherPosition,
-                          secretariatId: init.publisherSecretariatId,
-                          dark: true,
-                          tone: 'publisher'
-                        })}
+                      <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
+                        <span>استعراض أنشطة وفعاليات المبادرة</span>
+                        <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
                       </div>
-                    )}
-
-                    <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
-                      <span>استعراض أنشطة وفعاليات المبادرة</span>
-                      <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
                     </div>
                   </div>
                 ))}
@@ -1554,308 +1484,337 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </section>
         )}
 
-        {/* Section 5: News & Events split */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-            
-            {/* News Column */}
-            <div>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                  <Newspaper className="w-5 h-5 text-red-700" />
-                  <h2 className="text-xl sm:text-2xl font-black text-stone-900">
-                    {ct.newsTitle || 'آخر الأخبار والبيانات'}
-                  </h2>
-                </div>
-                <a
-                  href="/news"
-                  onClick={(e) => {
-                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                      e.preventDefault();
-                      setCurrentView('news');
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }
-                  }}
-                  className="text-xs font-bold text-red-700 hover:underline cursor-pointer"
-                >
-                  المزيد
-                </a>
+        {/* Band 6: Media Center — News & Events Split */}
+        <section className="bg-stone-50 border-b border-stone-200/80 py-14 sm:py-16">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 border-b border-stone-200 pb-5">
+              <div>
+                <span className="text-xs font-extrabold text-red-700">
+                  التغطية الإعلامية والأنشطة
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
+                  المركز الإعلامي: الأخبار والفعاليات
+                </h2>
               </div>
+            </div>
 
-              <div className="space-y-4">
-                {data.news.slice(0, 3).map(item => (
-                  <div
-                    key={item.id}
-                    onClick={() => {
-                      setSelectedNews(item);
-                      if (onNavigate) {
-                        onNavigate('news', { newsId: item.id });
-                      } else {
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+
+              {/* News Column */}
+              <div className="bg-white rounded-2xl border border-stone-200 p-5 sm:p-6 space-y-5 shadow-xs">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-3.5">
+                  <div className="flex items-center gap-2">
+                    <Newspaper className="w-5 h-5 text-red-700" />
+                    <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                      {ct.newsTitle || 'آخر الأخبار والبيانات'}
+                    </h3>
+                  </div>
+                  <a
+                    href="/news"
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
                         setCurrentView('news');
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }
                     }}
-                    className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs hover:shadow-md transition-all cursor-pointer group flex flex-col sm:flex-row gap-4"
+                    className="text-xs font-bold text-red-700 hover:underline cursor-pointer inline-flex items-center gap-1"
                   >
-                    <img
-                      src={item.coverImage || data.settings.officialLogo}
-                      alt={item.title}
-                      className="w-full sm:w-24 h-32 sm:h-24 object-cover rounded-lg shrink-0 bg-stone-100"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="flex-1 flex flex-col justify-between">
+                    <span>كافة الأخبار</span>
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+
+                <div className="space-y-4">
+                  {data.news.length === 0 ? (
+                    <p className="text-xs text-stone-500 text-center py-8">
+                      لا توجد أخبار منشورة حالياً.
+                    </p>
+                  ) : data.news.slice(0, 3).map(item => (
+                    <div
+                      key={item.id}
+                      onClick={() => {
+                        setSelectedNews(item);
+                        if (onNavigate) {
+                          onNavigate('news', { newsId: item.id });
+                        } else {
+                          setCurrentView('news');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                      }}
+                      className="bg-stone-50/70 rounded-xl border border-stone-200/90 p-4 hover:bg-white hover:shadow-md transition-all cursor-pointer group flex flex-col sm:flex-row gap-4"
+                    >
+                      <img
+                        src={item.coverImage || data.settings.officialLogo}
+                        alt={item.title}
+                        className="w-full sm:w-24 h-32 sm:h-24 object-cover rounded-lg shrink-0 bg-stone-100"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="flex-1 flex flex-col justify-between min-w-0">
+                        <div>
+                          <div className="flex items-center gap-2 text-[11px] text-stone-500 mb-1">
+                            {item.isUrgent && (
+                              <span className="text-red-700 font-black">عاجل ·</span>
+                            )}
+                            {item.isFeatured && !item.isUrgent && (
+                              <span className="text-amber-700 font-bold">مميز ·</span>
+                            )}
+                            <span className="font-medium">{item.publishDate}</span>
+                          </div>
+                          <h4 className="font-bold text-stone-900 text-sm group-hover:text-red-700 transition-colors line-clamp-2">
+                            {item.title}
+                          </h4>
+                          <p className="text-xs text-stone-500 line-clamp-2 mt-1">
+                            {item.excerpt}
+                          </p>
+                        </div>
+
+                        <div className="space-y-2 mt-2">
+                          {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
+                            <div className="pt-2 border-t border-stone-200/70 space-y-1.5">
+                              {renderPersonBadge({
+                                label: 'كتابة / إعداد',
+                                name: item.authorName,
+                                position: item.authorPosition,
+                                secretariatId: item.authorSecretariatId,
+                                fallbackSecretariatId: item.linkedSecretariatId,
+                                tone: 'author'
+                              })}
+                              {renderPersonBadge({
+                                label: 'نشر (أمانة الإعلام)',
+                                name: item.publisherName,
+                                position: item.publisherPosition,
+                                secretariatId: item.publisherSecretariatId,
+                                tone: 'publisher'
+                              })}
+                            </div>
+                          )}
+
+                          <SocialShareButtons
+                            title={item.title}
+                            summary={item.excerpt}
+                            itemType="news"
+                            itemId={item.id}
+                            compact
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Events Column */}
+              <div className="bg-white rounded-2xl border border-stone-200 p-5 sm:p-6 space-y-5 shadow-xs">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-3.5">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-amber-600" />
+                    <h3 className="text-lg sm:text-xl font-black text-stone-900">
+                      {ct.eventsTitle || 'الفعاليات والأنشطة'}
+                    </h3>
+                  </div>
+                  <a
+                    href="/events"
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        setCurrentView('events');
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="text-xs font-bold text-amber-700 hover:underline cursor-pointer inline-flex items-center gap-1"
+                  >
+                    <span>كافة الفعاليات</span>
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+
+                <div className="space-y-4">
+                  {data.events.length === 0 ? (
+                    <p className="text-xs text-stone-500 text-center py-8">
+                      لا توجد فعاليات مجدولة حالياً.
+                    </p>
+                  ) : data.events.slice(0, 3).map(event => (
+                    <div
+                      key={event.id}
+                      className="bg-stone-50/70 rounded-xl border border-stone-200/90 p-4 hover:bg-white hover:shadow-md transition-all flex flex-col justify-between"
+                    >
                       <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          {item.isUrgent && (
-                            <span className="bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded shadow-xs animate-pulse">
-                              ⚡ عاجل
-                            </span>
-                          )}
-                          {item.isFeatured && !item.isUrgent && (
-                            <span className="bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                              مميز
-                            </span>
-                          )}
-                          <span className="text-[11px] text-stone-400 font-medium">
-                            {item.publishDate}
+                        <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
+                          <span className="font-bold text-red-700">
+                            {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                          </span>
+                          <span className="font-bold text-amber-800">
+                            {event.status === 'upcoming' ? 'قادمة' : (event.status === 'completed' ? 'منتهية' : 'جارية')}
                           </span>
                         </div>
-                        <h3 className="font-bold text-stone-900 text-sm group-hover:text-red-700 transition-colors line-clamp-2 mt-0.5">
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-stone-500 line-clamp-2 mt-1">
-                          {item.excerpt}
+                        <h4 className="font-bold text-stone-900 text-sm mb-1">
+                          {event.title}
+                        </h4>
+                        <p className="text-xs text-stone-600 line-clamp-2">
+                          {event.description}
                         </p>
                       </div>
 
-                      <div className="space-y-2 mt-2">
-                        {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
-                          <div className="pt-2 border-t border-stone-100 space-y-1.5">
-                            {renderPersonBadge({
-                              label: 'كتابة / إعداد',
-                              name: item.authorName,
-                              position: item.authorPosition,
-                              secretariatId: item.authorSecretariatId,
-                              fallbackSecretariatId: item.linkedSecretariatId,
-                              tone: 'author'
-                            })}
-                            {renderPersonBadge({
-                              label: 'نشر (أمانة الإعلام)',
-                              name: item.publisherName,
-                              position: item.publisherPosition,
-                              secretariatId: item.publisherSecretariatId,
-                              tone: 'publisher'
-                            })}
-                          </div>
-                        )}
-
-                        <SocialShareButtons
-                          title={item.title}
-                          summary={item.excerpt}
-                          itemType="news"
-                          itemId={item.id}
-                          compact
-                        />
+                      <div className="mt-3 pt-2 border-t border-stone-200/70 flex items-center justify-between text-[11px] text-stone-500">
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3.5 h-3.5 text-stone-400" />
+                          <span>{event.venue}</span>
+                        </span>
+                        <span className="font-medium text-stone-700">{event.organizer}</span>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
 
-            {/* Events Column */}
-            <div>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-amber-600" />
-                  <h2 className="text-xl sm:text-2xl font-black text-stone-900">
-                    {ct.eventsTitle || 'الفعاليات والأنشطة'}
-                  </h2>
+                      {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
+                        <div className="mt-2 pt-2 border-t border-stone-200/70 space-y-1.5">
+                          {renderPersonBadge({
+                            label: 'القائم بالفعالية',
+                            name: event.authorName,
+                            position: event.authorPosition,
+                            secretariatId: event.authorSecretariatId,
+                            tone: 'author'
+                          })}
+                          {renderPersonBadge({
+                            label: 'نشر (أمانة الإعلام)',
+                            name: event.publisherName,
+                            position: event.publisherPosition,
+                            secretariatId: event.publisherSecretariatId,
+                            tone: 'publisher'
+                          })}
+                        </div>
+                      )}
+
+                      <SocialShareButtons
+                        title={event.title}
+                        summary={event.description}
+                        itemType="event"
+                        itemId={event.id}
+                        imageUrl={event.coverUrl}
+                        compact
+                      />
+                    </div>
+                  ))}
                 </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        {/* Band 7: Membership CTA & Direct Contact Summary */}
+        <section className="bg-white py-14 sm:py-16">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+            {/* Membership Callout */}
+            <div className="relative overflow-hidden bg-gradient-to-r from-red-900 via-red-800 to-stone-950 rounded-3xl p-8 sm:p-12 text-white shadow-xl flex flex-col lg:flex-row items-center justify-between gap-8 border border-amber-500/40">
+              <div className="space-y-3 text-right max-w-2xl">
+                <p className="text-xs font-extrabold text-amber-300 flex items-center gap-1.5">
+                  <HeartHandshake className="w-4 h-4" />
+                  <span>{data.settings.membershipTitle || 'كن جزءاً من التغيير!'}</span>
+                </p>
+                <h2 className="text-2xl sm:text-3xl font-black text-white leading-tight">
+                  {data.settings.membershipSubtitle || 'ندعوكم للانضمام إلى مسيرة الحزب والعمل معنا لتحقيق تطلعات الوطن'}
+                </h2>
+                <p className="text-sm text-stone-200 leading-relaxed">
+                  {data.settings.membershipCtaText || 'انضم الآن وساهم في بناء المستقبل'} — نموذج تقديم رقمي معتمد لأبناء قسم ثالث أكتوبر بمحافظة الجيزة.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0 w-full lg:w-auto">
                 <a
-                  href="/events"
+                  href="/join"
                   onClick={(e) => {
                     if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
                       e.preventDefault();
-                      setCurrentView('events');
+                      setCurrentView('join');
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }
                   }}
-                  className="text-xs font-bold text-amber-700 hover:underline cursor-pointer"
+                  className="w-full sm:w-auto bg-amber-500 hover:bg-amber-400 text-stone-950 font-black px-7 py-3.5 rounded-xl shadow-lg transition-transform hover:scale-[1.02] cursor-pointer whitespace-nowrap text-sm sm:text-base text-center"
                 >
-                  المزيد
+                  استمارة العضوية الإلكترونية
+                </a>
+                <a
+                  href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.membershipWhatsapp || data.settings.whatsapp || '01003070108').replace(/\D/g, '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3.5 rounded-xl shadow-lg transition-colors cursor-pointer whitespace-nowrap text-sm sm:text-base inline-flex items-center justify-center gap-2"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>استفسار عبر واتساب</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Direct Contact & Headquarters Summary */}
+            <div className="border-t border-stone-200 pt-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                <div>
+                  <span className="text-xs font-extrabold text-red-700">
+                    خدمة المواطنين والتواصل المباشر
+                  </span>
+                  <h2 className="text-xl sm:text-2xl font-black text-stone-900 mt-0.5">
+                    طرق التواصل ومقر أمانة قسم ثالث أكتوبر بمحافظة الجيزة
+                  </h2>
+                </div>
+                <a
+                  href="/contact"
+                  onClick={(e) => {
+                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                      e.preventDefault();
+                      setCurrentView('contact');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer shrink-0"
+                >
+                  <span>صفحة التواصل والخريطة</span>
+                  <ChevronLeft className="w-4 h-4" />
                 </a>
               </div>
 
-              <div className="space-y-4">
-                {data.events.slice(0, 3).map(event => (
-                  <div
-                    key={event.id}
-                    className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
-                        <span className="font-bold text-red-700">
-                          {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                        </span>
-                        <span className="bg-amber-50 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                          {event.status === 'upcoming' ? 'قادمة' : (event.status === 'completed' ? 'منتهية' : 'جارية')}
-                        </span>
-                      </div>
-                      <h3 className="font-bold text-stone-900 text-sm mb-1">
-                        {event.title}
-                      </h3>
-                      <p className="text-xs text-stone-600 line-clamp-2">
-                        {event.description}
-                      </p>
-                    </div>
-
-                    <div className="mt-3 pt-2 border-t border-stone-100 flex items-center justify-between text-[11px] text-stone-500">
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-3.5 h-3.5 text-stone-400" />
-                        <span>{event.venue}</span>
-                      </span>
-                      <span className="font-medium text-stone-700">{event.organizer}</span>
-                    </div>
-
-                    {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
-                      <div className="mt-2 pt-2 border-t border-stone-100 space-y-1.5">
-                        {renderPersonBadge({
-                          label: 'القائم بالفعالية',
-                          name: event.authorName,
-                          position: event.authorPosition,
-                          secretariatId: event.authorSecretariatId,
-                          tone: 'author'
-                        })}
-                        {renderPersonBadge({
-                          label: 'نشر (أمانة الإعلام)',
-                          name: event.publisherName,
-                          position: event.publisherPosition,
-                          secretariatId: event.publisherSecretariatId,
-                          tone: 'publisher'
-                        })}
-                      </div>
-                    )}
-
-                    <SocialShareButtons
-                      title={event.title}
-                      summary={event.description}
-                      itemType="event"
-                      itemId={event.id}
-                      imageUrl={event.coverUrl}
-                      compact
-                    />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-right">
+                <div className="bg-stone-50 rounded-2xl p-5 border border-stone-200 flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+                    <MapPin className="w-5 h-5" />
                   </div>
-                ))}
-              </div>
-            </div>
-
-          </div>
-        </section>
-
-        {/* Section 6: Join Callout */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="relative overflow-hidden bg-gradient-to-r from-red-900 via-red-800 to-amber-950 rounded-3xl p-8 sm:p-12 text-white shadow-2xl flex flex-col md:flex-row items-center justify-between gap-8 border-2 border-amber-500/40">
-            <div className="space-y-3 text-right">
-              <div className="inline-flex items-center gap-2 bg-amber-400/20 text-amber-300 px-3.5 py-1.5 rounded-full text-xs font-bold border border-amber-400/30">
-                <HeartHandshake className="w-4 h-4 text-amber-300" />
-                <span>كن جزءًا من التغيير!</span>
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-black text-white leading-tight">
-                ندعوكم للانضمام إلى مسيرة الحزب والعمل معنا لتحقيق تطلعات الوطن
-              </h2>
-              <p className="text-sm sm:text-base text-stone-200 max-w-2xl leading-relaxed">
-                انضم الآن وساهم في بناء المستقبل، وكن شريكاً فاعلاً في خدمة أهالي وشباب قسم ثالث أكتوبر بمحافظة الجيزة. نموذج تقديم رقمي معتمد ومحمي بالكامل.
-              </p>
-            </div>
-            <a
-              href="/join"
-              onClick={(e) => {
-                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                  e.preventDefault();
-                  setCurrentView('join');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }
-              }}
-              className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-black px-8 py-4 rounded-xl shadow-xl transition-transform hover:scale-105 cursor-pointer whitespace-nowrap text-base shrink-0"
-            >
-              انضم الآن وساهم في بناء المستقبل
-            </a>
-          </div>
-        </section>
-
-        {/* Section 7: Direct Contact & Headquarters Summary */}
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="bg-white rounded-3xl border border-stone-200 p-6 sm:p-8 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-stone-100 pb-4">
-              <div>
-                <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
-                  خدمة المواطنين والتواصل المباشر
-                </span>
-                <h2 className="text-xl sm:text-2xl font-black text-stone-900 mt-1">
-                  طرق التواصل ومقر أمانة قسم ثالث أكتوبر بمحافظة الجيزة
-                </h2>
-              </div>
-              <a
-                href="/contact"
-                onClick={(e) => {
-                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                    e.preventDefault();
-                    setCurrentView('contact');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 text-sm font-bold text-red-700 hover:text-red-800 transition-colors cursor-pointer shrink-0"
-              >
-                <span>صفحة التواصل والخريطة</span>
-                <ChevronLeft className="w-4 h-4" />
-              </a>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-right">
-              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
-                  <MapPin className="w-5 h-5" />
+                  <div>
+                    <h3 className="font-bold text-stone-900 text-sm">مقر الأمانة</h3>
+                    <p className="text-xs text-stone-600 mt-1 leading-relaxed">
+                      {data.settings.address || 'طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-stone-900 text-sm">مقر الأمانة</h3>
-                  <p className="text-xs text-stone-600 mt-1 leading-relaxed">
-                    {data.settings.address || 'طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة'}
-                  </p>
-                </div>
-              </div>
 
-              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-700 flex items-center justify-center shrink-0">
-                  <Phone className="w-5 h-5" />
+                <div className="bg-stone-50 rounded-2xl p-5 border border-stone-200 flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-red-50 text-red-700 flex items-center justify-center shrink-0">
+                    <Phone className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-stone-900 text-sm">الهاتف الرسمي</h3>
+                    <a
+                      href={`tel:${data.settings.phone || '01003070108'}`}
+                      className="text-sm font-mono font-bold text-red-700 hover:underline mt-1 inline-block"
+                      dir="ltr"
+                    >
+                      {data.settings.phone || '01003070108'}
+                    </a>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-stone-900 text-sm">الهاتف الرسمي</h3>
-                  <a
-                    href={`tel:${data.settings.phone || '01003070108'}`}
-                    className="text-sm font-mono font-bold text-red-700 hover:underline mt-1 inline-block"
-                    dir="ltr"
-                  >
-                    {data.settings.phone || '01003070108'}
-                  </a>
-                </div>
-              </div>
 
-              <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-                  <MessageCircle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-stone-900 text-sm">واتساب وتواصل</h3>
-                  <a
-                    href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.whatsapp || data.settings.phone || '01003070108').replace(/\D/g, '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-bold text-emerald-700 hover:underline mt-1 inline-flex items-center gap-1"
-                  >
-                    <span>مراسلة أمانة قسم ثالث أكتوبر</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                <div className="bg-stone-50 rounded-2xl p-5 border border-stone-200 flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                    <MessageCircle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-stone-900 text-sm">واتساب وتواصل</h3>
+                    <a
+                      href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.whatsapp || data.settings.phone || '01003070108').replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-bold text-emerald-700 hover:underline mt-1 inline-flex items-center gap-1"
+                    >
+                      <span>مراسلة أمانة قسم ثالث أكتوبر</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2517,6 +2476,42 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </span>
                   )}
                 </div>
+
+                {(() => {
+                  const contribs = getPersonContributions(activePersonProfile.name, data);
+                  if (contribs.length === 0) return null;
+                  return (
+                    <div className="pt-4 mt-2 border-t border-amber-200/70 space-y-2 text-right">
+                      <h4 className="text-xs font-black text-stone-800">
+                        المشاركات والأعمال والمنشورات المسجلة ({contribs.length}):
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {contribs.slice(0, 6).map(c => (
+                          <button
+                            type="button"
+                            key={`${c.kind}-${c.id}`}
+                            onClick={() => {
+                              if (c.rawNews) {
+                                setSelectedNews(c.rawNews);
+                                if (onNavigate) onNavigate('news', { newsId: c.rawNews.id });
+                              } else if (c.rawInitiative) {
+                                openInitiative(c.rawInitiative.slug);
+                              } else if (c.rawEvent) {
+                                if (onNavigate) onNavigate('events');
+                                else setCurrentView('events');
+                              }
+                            }}
+                            className="text-right bg-white/90 hover:bg-white border border-stone-200 hover:border-red-500 rounded-xl p-2.5 transition-colors cursor-pointer"
+                          >
+                            <div className="text-[10px] font-bold text-red-700">{c.contributionRole}</div>
+                            <div className="text-xs font-black text-stone-900 truncate mt-0.5">{c.title}</div>
+                            {c.date && <div className="text-[10px] text-stone-400 mt-0.5">{c.date}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -5139,6 +5134,76 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 itemId={selectedNews.id}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Fallback Unlinked Author/Publisher Modal */}
+      {selectedPersonFallback && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto space-y-5">
+            <button
+              onClick={() => setSelectedPersonFallback(null)}
+              className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-stone-800 to-stone-950 text-amber-300 font-black text-2xl flex items-center justify-center shrink-0">
+                {selectedPersonFallback.name.charAt(0)}
+              </div>
+              <div>
+                <h3 className="text-xl font-black text-stone-900">
+                  {selectedPersonFallback.name}
+                </h3>
+                {selectedPersonFallback.position && (
+                  <p className="text-xs sm:text-sm font-bold text-red-700 mt-0.5">
+                    {selectedPersonFallback.position}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {(() => {
+              const contribs = getPersonContributions(selectedPersonFallback.name, data);
+              return (
+                <div className="border-t border-stone-100 pt-4 space-y-2.5">
+                  <h4 className="font-bold text-stone-800 text-xs sm:text-sm">
+                    المشاركات والأعمال المسجلة ({contribs.length}):
+                  </h4>
+                  {contribs.length === 0 ? (
+                    <p className="text-xs text-stone-500">لا توجد منشورات أخرى مسجلة حالياً.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {contribs.map(c => (
+                        <button
+                          type="button"
+                          key={`${c.kind}-${c.id}`}
+                          onClick={() => {
+                            setSelectedPersonFallback(null);
+                            if (c.rawNews) {
+                              setSelectedNews(c.rawNews);
+                              if (onNavigate) onNavigate('news', { newsId: c.rawNews.id });
+                            } else if (c.rawInitiative) {
+                              openInitiative(c.rawInitiative.slug);
+                            } else if (c.rawEvent) {
+                              if (onNavigate) onNavigate('events');
+                              else setCurrentView('events');
+                            }
+                          }}
+                          className="w-full text-right bg-stone-50 hover:bg-amber-50 border border-stone-200 rounded-xl p-3 transition-colors cursor-pointer"
+                        >
+                          <div className="text-[11px] font-bold text-red-700">{c.contributionRole}</div>
+                          <div className="text-xs sm:text-sm font-black text-stone-900 mt-0.5">{c.title}</div>
+                          {c.date && <div className="text-[10px] text-stone-400 mt-0.5">{c.date}</div>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

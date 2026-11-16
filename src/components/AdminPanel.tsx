@@ -84,10 +84,7 @@ import {
   Mail,
   Send,
   Volume2,
-  VolumeX,
-  Cloud,
-  CloudOff,
-  RefreshCw
+  VolumeX
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -121,7 +118,7 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshPublicData }) => {
-  const { user, firebaseUser, login, loginWithGoogle, linkCloudSync, logout, hasPermission } = useAuth();
+  const { user, login, loginWithGoogle, logout, hasPermission } = useAuth();
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
@@ -129,8 +126,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<{ configured: boolean; initialized: boolean; hasPendingChanges?: boolean } | null>(null);
-  const [cloudBusy, setCloudBusy] = useState(false);
 
   // Active admin tab
   const [activeTab, setActiveTab] = useState<
@@ -334,10 +329,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
       const st = await api.getAdminStats();
       setStats(st);
-
-      api.getCloudStatus()
-        .then(cs => setCloudStatus(cs))
-        .catch(() => {});
     } catch (err) {
       console.error('Error fetching admin data:', err);
     }
@@ -478,7 +469,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
           <div className="relative flex py-1 items-center">
             <div className="grow border-t border-stone-200" />
-            <span className="shrink mx-3 text-[11px] font-bold text-stone-400">أو المزامنة السحابية</span>
+            <span className="shrink mx-3 text-[11px] font-bold text-stone-400">أو</span>
             <div className="grow border-t border-stone-200" />
           </div>
 
@@ -498,8 +489,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
             }}
             className="w-full bg-stone-900 hover:bg-stone-800 text-amber-300 border border-amber-500/40 font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            <Cloud className="w-4 h-4 text-emerald-400" />
-            <span>{googleLoginLoading ? 'جاري الربط مع جوجل...' : 'تسجيل الدخول بحساب جوجل للمزامنة السحابية الدائمة'}</span>
+            <Globe className="w-4 h-4 text-amber-300" />
+            <span>{googleLoginLoading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول بحساب جوجل'}</span>
           </button>
 
           <div className="text-center pt-2">
@@ -541,59 +532,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
-            {cloudStatus?.configured !== false && (
-              <button
-                type="button"
-                disabled={cloudBusy}
-                onClick={async () => {
-                  setCloudBusy(true);
-                  try {
-                    if (firebaseUser) {
-                      await api.adminCloudSync({ forcePush: true });
-                      showBanner('success', 'تم تثبيت وحفظ كافة التعديلات في السحابة بنجاح ولن يتم التراجع عنها');
-                    } else {
-                      const res = await linkCloudSync();
-                      if (res?.seeded) {
-                        showBanner('success', 'تم ربط حساب جوجل وحفظ التعديلات في السحابة بنجاح');
-                      } else {
-                        showBanner('success', 'تم ربط حساب جوجل وتفعيل المزامنة السحابية الدائمة');
-                      }
-                    }
-                    await loadAdminData();
-                    onRefreshPublicData();
-                  } catch (err: any) {
-                    showBanner('error', err?.message || 'تعذر المزامنة السحابية حالياً');
-                  } finally {
-                    setCloudBusy(false);
-                  }
-                }}
-                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 ${
-                  firebaseUser && !cloudStatus?.hasPendingChanges
-                    ? 'bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border-emerald-700'
-                    : 'bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-400 font-black'
-                }`}
-                title="تثبيت ومزامنة التعديلات مع قاعدة البيانات السحابية"
-              >
-                {cloudBusy ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : firebaseUser ? (
-                  <Cloud className="w-3.5 h-3.5" />
-                ) : (
-                  <CloudOff className="w-3.5 h-3.5" />
-                )}
-                <span className="hidden md:inline">
-                  {cloudBusy
-                    ? 'جاري المزامنة...'
-                    : firebaseUser
-                    ? (cloudStatus?.hasPendingChanges ? 'رفع التعديلات المعلقة للسحابة' : 'مزامنة سحابية نشطة')
-                    : 'ربط جوجل وحفظ التعديلات في السحابة'}
-                </span>
-                <span className="md:hidden">
-                  {firebaseUser ? 'السحابة' : 'ربط السحابة'}
-                </span>
-              </button>
-            )}
-
             <button
               onClick={onBackToSite}
               className="bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold px-3 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer flex items-center gap-1"

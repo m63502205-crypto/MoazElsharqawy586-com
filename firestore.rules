@@ -24,7 +24,7 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isSignedIn() && request.auth.token.email.lower() == 'moazmahmoud586@gmail.com';
+      return isSignedIn() && request.auth.token.email.lower() in ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'];
     }
 
     function isAdmin() {
@@ -105,7 +105,7 @@ service cloud.firestore {
     // Site Config (public settings & live stream)
     match /site_config/{configId} {
       allow get: if isValidId(configId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(configId) && isValidSiteConfig(incoming(), configId);
       allow update: if isAdmin() && isValidId(configId) && isValidSiteConfig(incoming(), configId)
         && incoming().id == existing().id
@@ -116,7 +116,7 @@ service cloud.firestore {
     // Public Content Collections
     match /party_leaders/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -125,7 +125,7 @@ service cloud.firestore {
 
     match /secretariat_leaders/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -134,7 +134,7 @@ service cloud.firestore {
 
     match /secretariats/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -143,7 +143,7 @@ service cloud.firestore {
 
     match /secretariat_members/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -152,7 +152,7 @@ service cloud.firestore {
 
     match /initiatives/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -161,7 +161,7 @@ service cloud.firestore {
 
     match /news/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -170,7 +170,7 @@ service cloud.firestore {
 
     match /events/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -179,7 +179,7 @@ service cloud.firestore {
 
     match /media/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -188,7 +188,7 @@ service cloud.firestore {
 
     match /pages/{docId} {
       allow get: if isValidId(docId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if resource.data.isPublic == true || isBootstrappedAdmin();
+      allow list: if resource.data.isPublic == true || isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPublicRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'data', 'updatedAt']);
@@ -197,7 +197,7 @@ service cloud.firestore {
 
     match /uploads_public/{assetId} {
       allow get: if isValidId(assetId) && (resource == null || resource.data.isPublic == true || isAdmin());
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(assetId) && isValidUploadAsset(incoming(), assetId);
       allow update: if isAdmin() && isValidId(assetId) && isValidUploadAsset(incoming(), assetId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['mime', 'dataBase64', 'isPublic', 'createdAt']);
@@ -207,7 +207,7 @@ service cloud.firestore {
     // Restricted PII & Administrative Vaults
     match /applications/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -216,7 +216,7 @@ service cloud.firestore {
 
     match /members/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -225,7 +225,7 @@ service cloud.firestore {
 
     match /roles/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -234,7 +234,7 @@ service cloud.firestore {
 
     match /admin_users/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -243,7 +243,7 @@ service cloud.firestore {
 
     match /audit_logs/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -252,7 +252,7 @@ service cloud.firestore {
 
     match /subscribers/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -261,7 +261,7 @@ service cloud.firestore {
 
     match /email_dispatch_logs/{docId} {
       allow get: if isAdmin() && isValidId(docId);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
       allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
         && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
@@ -270,7 +270,7 @@ service cloud.firestore {
 
     match /admins/{adminUid} {
       allow get: if isAdmin() && isValidId(adminUid);
-      allow list: if isBootstrappedAdmin();
+      allow list: if isAdmin();
       allow create: if isBootstrappedAdmin() && isValidId(adminUid) && isValidAdminRegistry(incoming(), adminUid);
       allow update: if isBootstrappedAdmin() && isValidId(adminUid) && isValidAdminRegistry(incoming(), adminUid)
         && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'createdAt']);

@@ -4,6 +4,7 @@ export interface PartyLeader {
   position: string;
   level: string; // flexible custom level (e.g. 'قيادة مركزية', 'قيادات المحافظات', 'الهيئة العليا', or any custom text)
   governorate?: string;
+  specializedSecretariatId?: string;
   bio: string;
   photoUrl: string;
   sortOrder: number;
@@ -85,10 +86,24 @@ export interface Initiative {
   startDate: string;
   endDate?: string;
   status: 'active' | 'paused' | 'completed';
-  activities: Array<{ title: string; date: string; description: string; authorName?: string; authorPosition?: string }>;
+  activities: Array<{
+    title: string;
+    date: string;
+    description: string;
+    authorName?: string;
+    authorPosition?: string;
+    authorSecretariatId?: string;
+    publisherName?: string;
+    publisherPosition?: string;
+    publisherSecretariatId?: string;
+  }>;
   galleryImages?: string[];
   authorName?: string;
   authorPosition?: string;
+  authorSecretariatId?: string;
+  publisherName?: string;
+  publisherPosition?: string;
+  publisherSecretariatId?: string;
   isVisible: boolean;
   createdAt: string;
 }
@@ -110,6 +125,10 @@ export interface NewsItem {
   isDraft: boolean;
   authorName?: string;
   authorPosition?: string;
+  authorSecretariatId?: string;
+  publisherName?: string;
+  publisherPosition?: string;
+  publisherSecretariatId?: string;
   createdAt: string;
 }
 
@@ -122,6 +141,10 @@ export interface EventItem {
   organizer: string;
   authorName?: string;
   authorPosition?: string;
+  authorSecretariatId?: string;
+  publisherName?: string;
+  publisherPosition?: string;
+  publisherSecretariatId?: string;
   images: string[];
   galleryImages?: string[];
   coverUrl?: string;
@@ -146,6 +169,12 @@ export interface MediaItem {
   linkedSecretariatId?: string;
   linkedInitiativeId?: string;
   linkedEventId?: string;
+  authorName?: string;
+  authorPosition?: string;
+  authorSecretariatId?: string;
+  publisherName?: string;
+  publisherPosition?: string;
+  publisherSecretariatId?: string;
   isVisible: boolean;
   sortOrder: number;
   createdAt: string;

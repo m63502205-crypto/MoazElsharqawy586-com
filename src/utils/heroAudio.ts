@@ -14,7 +14,9 @@ let videoTimeProvider: (() => number) | null = null;
 let initializedEarly = false;
 
 const decodedBuffers = new Map<string, AudioBuffer>();
+const failedDecodeUrls = new Set<string>();
 const pendingFetches = new Map<string, Promise<AudioBuffer | null>>();
+let fallbackChangeHandler: ((useNative: boolean) => void) | null = null;
 
 function getAudioContextClass(): typeof AudioContext | undefined {
   if (typeof window === 'undefined') return undefined;
@@ -61,16 +63,28 @@ export function resolveHeroAudioUrl(videoUrl: string): string {
   return videoUrl === DEFAULT_HERO_VIDEO_URL ? DEFAULT_HERO_AUDIO_URL : videoUrl;
 }
 
+export function shouldUseNativeVideoAudio(videoUrl?: string | null): boolean {
+  if (!videoUrl) return false;
+  const audioUrl = resolveHeroAudioUrl(videoUrl);
+  return audioUrl !== DEFAULT_HERO_AUDIO_URL && failedDecodeUrls.has(audioUrl);
+}
+
 async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
   if (decodedBuffers.has(url)) {
     return decodedBuffers.get(url) || null;
+  }
+  if (failedDecodeUrls.has(url)) {
+    return null;
   }
   if (pendingFetches.has(url)) {
     return pendingFetches.get(url)!;
   }
 
   const ctx = getOrCreateAudioContext();
-  if (!ctx) return null;
+  if (!ctx) {
+    failedDecodeUrls.add(url);
+    return null;
+  }
 
   const task = fetch(url)
     .then((res) => {
@@ -80,11 +94,16 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
     .then((arr) => ctx.decodeAudioData(arr))
     .then((decoded) => {
       decodedBuffers.set(url, decoded);
+      failedDecodeUrls.delete(url);
       pendingFetches.delete(url);
       return decoded;
     })
     .catch(() => {
+      failedDecodeUrls.add(url);
       pendingFetches.delete(url);
+      if (desiredEnabled && desiredAudioUrl === url && url !== DEFAULT_HERO_AUDIO_URL) {
+        fallbackChangeHandler?.(true);
+      }
       return null;
     });
 
@@ -149,6 +168,21 @@ async function tryStartPlayback(): Promise<void> {
   }
 }
 
+export async function unlockHeroAudioNow(): Promise<void> {
+  const ctx = getOrCreateAudioContext();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      // ignore
+    }
+  }
+  if (desiredEnabled && desiredAudioUrl && !document.hidden) {
+    await tryStartPlayback();
+  }
+}
+
 function handleEarlyOrGlobalGesture(): void {
   const ctx = getOrCreateAudioContext();
   if (!ctx) return;
@@ -210,6 +244,7 @@ export function syncHeroAudioState(options: {
   enabled: boolean;
   videoUrl?: string | null;
   getCurrentVideoTime?: () => number;
+  onFallbackChange?: (useNative: boolean) => void;
 }): void {
   initHeroAudioEarly();
   clearBrowserMediaSession();
@@ -217,16 +252,31 @@ export function syncHeroAudioState(options: {
   desiredEnabled = options.enabled;
   desiredAudioUrl = options.enabled && options.videoUrl ? resolveHeroAudioUrl(options.videoUrl) : null;
   videoTimeProvider = options.getCurrentVideoTime || null;
+  fallbackChangeHandler = options.onFallbackChange || null;
 
   if (!desiredEnabled || !desiredAudioUrl) {
     stopCurrentSource();
+    fallbackChangeHandler?.(false);
     return;
   }
 
+  if (failedDecodeUrls.has(desiredAudioUrl) && desiredAudioUrl !== DEFAULT_HERO_AUDIO_URL) {
+    stopCurrentSource();
+    fallbackChangeHandler?.(true);
+    return;
+  }
+
+  fallbackChangeHandler?.(false);
+
   // Warm cache & start immediately whenever AudioContext is allowed/running
-  fetchAndDecodeAudio(desiredAudioUrl).then(() => {
+  fetchAndDecodeAudio(desiredAudioUrl).then((buf) => {
     if (desiredEnabled && desiredAudioUrl) {
-      tryStartPlayback();
+      if (!buf && desiredAudioUrl !== DEFAULT_HERO_AUDIO_URL) {
+        fallbackChangeHandler?.(true);
+      } else if (buf) {
+        fallbackChangeHandler?.(false);
+        tryStartPlayback();
+      }
     }
   });
   tryStartPlayback();
@@ -235,5 +285,6 @@ export function syncHeroAudioState(options: {
 export function stopHeroAudio(): void {
   desiredEnabled = false;
   desiredAudioUrl = null;
+  fallbackChangeHandler = null;
   stopCurrentSource();
 }

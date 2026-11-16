@@ -2,7 +2,7 @@
 
 ## 1. Data Invariants
 1. **Default-Deny Baseline**: Every path not explicitly matched is denied (`allow read, write: if false`).
-2. **Verified Admin Identity**: Only verified Google accounts matching the bootstrapped super admin (`moazmahmoud586@gmail.com` with `request.auth.token.email_verified == true`) or registered in `/admins/{uid}` (with `email_verified == true`) hold admin privileges.
+2. **Verified Admin Identity**: Only verified Google accounts matching a bootstrapped super admin (`moazmahmoud586@gmail.com` or `m63502205@gmail.com` with `request.auth.token.email_verified == true`) or registered in `/admins/{uid}` (with `email_verified == true`) hold admin privileges.
 3. **Public vs PII Isolation**: Publicly readable collections (`site_config`, `party_leaders`, `secretariat_leaders`, `secretariats`, `secretariat_members`, `initiatives`, `news`, `events`, `media`, `pages`, `uploads_public`) NEVER store applicant national IDs, member PII, admin password hashes, or audit trails. Hidden/draft documents (`isPublic == false`) are unreadable except by admins.
 4. **Strict Key & Size Boundaries**: Every write validates required + allowed keys (`hasAll` + `hasOnly`), document ID pattern `^[a-zA-Z0-9_\-]+$` (<= 128 chars), string types and max sizes.
 

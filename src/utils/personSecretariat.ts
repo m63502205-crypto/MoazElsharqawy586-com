@@ -2,6 +2,7 @@ import {
   SpecializedSecretariat,
   SecretariatMember,
   SecretariatLeader,
+  PartyLeader,
   AssistantSecretaryEntry
 } from '../types';
 
@@ -99,7 +100,8 @@ function getAllAssistantsForSecretariat(
 export function getAllPeopleInSecretariat(
   sec: SpecializedSecretariat,
   secretariatMembers: SecretariatMember[],
-  secretariatLeaders: SecretariatLeader[]
+  secretariatLeaders: SecretariatLeader[],
+  partyLeaders: PartyLeader[] = []
 ): ResolvedPersonProfile[] {
   const list: ResolvedPersonProfile[] = [];
   const membersForSec = (secretariatMembers || []).filter(m => m.secretariatId === sec.id);
@@ -107,12 +109,16 @@ export function getAllPeopleInSecretariat(
   const findMatchingLeader = (name: string) =>
     (secretariatLeaders || []).find(l => namesMatch(l.name, name));
 
+  const findMatchingPartyLeader = (name: string) =>
+    (partyLeaders || []).find(l => namesMatch(l.name, name));
+
   const findMatchingMember = (name: string) =>
     membersForSec.find(m => namesMatch(m.name, name));
 
   // 1. Secretary
   if (sec.secretaryName?.trim()) {
     const leaderMatch = findMatchingLeader(sec.secretaryName);
+    const partyMatch = findMatchingPartyLeader(sec.secretaryName);
     const memberMatch = findMatchingMember(sec.secretaryName);
     list.push({
       personKey: sec.secretaryName.trim(),
@@ -120,8 +126,8 @@ export function getAllPeopleInSecretariat(
       role: `أمين ${sec.name}`,
       tierLabel: 'أمين الأمانة (المسؤول الأول)',
       secretariat: sec,
-      photoUrl: sec.secretaryPhotoUrl || memberMatch?.photoUrl || leaderMatch?.photoUrl || '',
-      bio: sec.secretaryBio || leaderMatch?.bio || memberMatch?.notes || '',
+      photoUrl: sec.secretaryPhotoUrl || memberMatch?.photoUrl || leaderMatch?.photoUrl || partyMatch?.photoUrl || '',
+      bio: sec.secretaryBio || leaderMatch?.bio || partyMatch?.bio || memberMatch?.notes || '',
       phone: sec.secretaryPhone || memberMatch?.phone || '',
       email: memberMatch?.email || '',
       assignmentDate: memberMatch?.assignmentDate || leaderMatch?.appointmentDate || ''
@@ -189,6 +195,21 @@ export function getAllPeopleInSecretariat(
     });
   }
 
+  // 5. Any PartyLeader explicitly linked to this secretariat who is not yet in the list
+  for (const pldr of partyLeaders || []) {
+    if (pldr.specializedSecretariatId !== sec.id || !pldr.name?.trim()) continue;
+    if (list.some(existing => namesMatch(existing.name, pldr.name))) continue;
+    list.push({
+      personKey: pldr.id || pldr.name.trim(),
+      name: pldr.name.trim(),
+      role: pldr.position || `قيادة مقيدة في ${sec.name}`,
+      tierLabel: pldr.level || 'قيادة حزبية مقيدة بالأمانة',
+      secretariat: sec,
+      photoUrl: pldr.photoUrl || '',
+      bio: pldr.bio || ''
+    });
+  }
+
   return list;
 }
 
@@ -199,6 +220,7 @@ export function resolvePersonInSecretariats(params: {
   specializedSecretariats: SpecializedSecretariat[];
   secretariatMembers: SecretariatMember[];
   secretariatLeaders: SecretariatLeader[];
+  partyLeaders?: PartyLeader[];
 }): ResolvedPersonProfile | null {
   const {
     name,
@@ -206,14 +228,15 @@ export function resolvePersonInSecretariats(params: {
     explicitSecretariatId,
     specializedSecretariats = [],
     secretariatMembers = [],
-    secretariatLeaders = []
+    secretariatLeaders = [],
+    partyLeaders = []
   } = params;
 
   if (!specializedSecretariats.length) return null;
 
   // Helper to search inside a specific secretariat
   const findInSec = (sec: SpecializedSecretariat): ResolvedPersonProfile | null => {
-    const people = getAllPeopleInSecretariat(sec, secretariatMembers, secretariatLeaders);
+    const people = getAllPeopleInSecretariat(sec, secretariatMembers, secretariatLeaders, partyLeaders);
     if (personKey) {
       const byKey = people.find(p => p.personKey === personKey || namesMatch(p.name, personKey));
       if (byKey) return byKey;
@@ -233,7 +256,6 @@ export function resolvePersonInSecretariats(params: {
     if (targetSec) {
       const match = findInSec(targetSec);
       if (match) return match;
-      // Even if name wasn't listed inside secretary/members yet, if explicitly linked via SecretariatLeader, synthesize a clean profile
       const matchedLeader = (secretariatLeaders || []).find(
         l =>
           l.specializedSecretariatId === targetSec.id &&
@@ -251,6 +273,22 @@ export function resolvePersonInSecretariats(params: {
           assignmentDate: matchedLeader.appointmentDate || ''
         };
       }
+      const matchedParty = (partyLeaders || []).find(
+        l =>
+          l.specializedSecretariatId === targetSec.id &&
+          ((name && namesMatch(l.name, name)) || (personKey && (l.id === personKey || namesMatch(l.name, personKey))))
+      );
+      if (matchedParty) {
+        return {
+          personKey: matchedParty.id,
+          name: matchedParty.name,
+          role: matchedParty.position,
+          tierLabel: matchedParty.level || 'قيادة حزبية مقيدة بالأمانة',
+          secretariat: targetSec,
+          photoUrl: matchedParty.photoUrl || '',
+          bio: matchedParty.bio || ''
+        };
+      }
     }
   }
 
@@ -258,6 +296,29 @@ export function resolvePersonInSecretariats(params: {
   for (const sec of specializedSecretariats) {
     const match = findInSec(sec);
     if (match) return match;
+  }
+
+  // 3. If party leader has an explicit secretariat link even if not passed by caller
+  if (name || personKey) {
+    const linkedParty = (partyLeaders || []).find(
+      l =>
+        Boolean(l.specializedSecretariatId) &&
+        ((name && namesMatch(l.name, name)) || (personKey && (l.id === personKey || namesMatch(l.name, personKey))))
+    );
+    if (linkedParty?.specializedSecretariatId) {
+      const sec = specializedSecretariats.find(s => s.id === linkedParty.specializedSecretariatId);
+      if (sec) {
+        return {
+          personKey: linkedParty.id,
+          name: linkedParty.name,
+          role: linkedParty.position,
+          tierLabel: linkedParty.level || 'قيادة حزبية مقيدة بالأمانة',
+          secretariat: sec,
+          photoUrl: linkedParty.photoUrl || '',
+          bio: linkedParty.bio || ''
+        };
+      }
+    }
   }
 
   return null;

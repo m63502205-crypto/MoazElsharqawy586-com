@@ -138,7 +138,7 @@ export const api = {
       body: JSON.stringify({ idToken })
     }),
 
-  getCloudStatus: () => apiFetch<{ configured: boolean; initialized: boolean }>('/api/admin/cloud-status'),
+  getCloudStatus: () => apiFetch<{ configured: boolean; initialized: boolean; hasPendingChanges?: boolean }>('/api/admin/cloud-status'),
 
   adminCloudSync: (options?: { idToken?: string; forcePush?: boolean }) =>
     apiFetch<{ success: boolean; seeded?: boolean; pulled?: boolean }>('/api/admin/cloud-sync', {

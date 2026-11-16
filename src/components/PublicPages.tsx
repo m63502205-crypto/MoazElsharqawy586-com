@@ -49,14 +49,21 @@ import {
   X,
   Radio,
   LayoutGrid,
-  ShieldCheck
+  ShieldCheck,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { VideoPlayer } from './VideoPlayer';
-import { syncHeroAudioState, stopHeroAudio, clearBrowserMediaSession } from '../utils/heroAudio';
+import {
+  syncHeroAudioState,
+  stopHeroAudio,
+  clearBrowserMediaSession,
+  unlockHeroAudioNow
+} from '../utils/heroAudio';
 import {
   resolvePersonInSecretariats,
   getAllPeopleInSecretariat,
@@ -155,6 +162,15 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const adminLockedMute = Boolean(data.settings.heroDefaultMuted);
+  const [visitorMuted, setVisitorMuted] = useState<boolean>(adminLockedMute);
+  const [useNativeHeroVideoAudio, setUseNativeHeroVideoAudio] = useState(false);
+  const effectiveHeroMuted = adminLockedMute || visitorMuted;
+  const wantNativeHeroAudio = !effectiveHeroMuted && useNativeHeroVideoAudio;
+
+  useEffect(() => {
+    setVisitorMuted(Boolean(data.settings.heroDefaultMuted));
+  }, [data.settings.heroDefaultMuted]);
 
   // Stop hero audio when leaving PublicPages
   useEffect(() => {
@@ -226,7 +242,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     data.settings.officialLogo
   ]);
 
-  // Keep <video> muted & always playing visually, while syncing early-boot Web Audio soundtrack
+  // Keep hero <video> always playing and sync Web Audio / native fallback audio respecting heroDefaultMuted
   useEffect(() => {
     clearBrowserMediaSession();
 
@@ -238,12 +254,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     const vid = heroVideoRef.current;
     const ensureVideoPlaying = () => {
       if (!vid || document.hidden || currentView !== 'home') return;
-      vid.setAttribute('muted', '');
       vid.setAttribute('playsinline', '');
       vid.setAttribute('webkit-playsinline', '');
-      vid.muted = true;
-      vid.defaultMuted = true;
-      vid.volume = 0;
+      if (wantNativeHeroAudio) {
+        vid.removeAttribute('muted');
+        vid.muted = false;
+        vid.defaultMuted = false;
+        vid.volume = 1;
+      } else {
+        vid.setAttribute('muted', '');
+        vid.muted = true;
+        vid.defaultMuted = true;
+        vid.volume = 0;
+      }
       if (vid.paused) {
         vid.play().catch(() => {});
       }
@@ -260,9 +283,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     const isVideoSlide = Boolean(activeSlide && activeSlide.type === 'video' && activeSlide.url);
 
     syncHeroAudioState({
-      enabled: isVideoSlide,
+      enabled: isVideoSlide && !effectiveHeroMuted,
       videoUrl: activeSlide?.url || null,
-      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
+      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0,
+      onFallbackChange: setUseNativeHeroVideoAudio
     });
 
     const handleVisibilityOrFocus = () => {
@@ -291,7 +315,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
       syncHeroAudioState({ enabled: false });
     };
-  }, [currentView, heroSlideIndex, heroSlides]);
+  }, [currentView, heroSlideIndex, heroSlides, effectiveHeroMuted, wantNativeHeroAudio]);
 
   // Auto-flip effect every 5 seconds (only when more than 1 slide)
   useEffect(() => {
@@ -312,10 +336,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     }
   }, [selectedNewsId, data?.news]);
 
-  // Sync focused person from URL query (?person=...)
+  // Sync focused person from URL query (?person=...) and scroll smoothly to profile card
   useEffect(() => {
     setFocusedPersonKey(selectedPerson || null);
   }, [selectedPerson, selectedSlug]);
+
+  useEffect(() => {
+    if (currentView === 'secretariat-detail' && (focusedPersonKey || selectedPerson)) {
+      const timer = window.setTimeout(() => {
+        const el = document.getElementById('active-person-profile');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 140);
+      return () => window.clearTimeout(timer);
+    }
+  }, [currentView, focusedPersonKey, selectedPerson, selectedSlug]);
 
   // Filter states
   const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>(
@@ -587,7 +623,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       explicitSecretariatId: options?.explicitSecretariatId,
       specializedSecretariats: data.specializedSecretariats || [],
       secretariatMembers: data.secretariatMembers || [],
-      secretariatLeaders: data.secretariatLeaders || []
+      secretariatLeaders: data.secretariatLeaders || [],
+      partyLeaders: data.partyLeaders || []
     });
 
     if (matched) {
@@ -625,6 +662,84 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     if (byPartyLeader) {
       setSelectedPartyLeader(byPartyLeader);
     }
+  };
+
+  const renderPersonBadge = (params: {
+    label: string;
+    name?: string;
+    position?: string;
+    secretariatId?: string;
+    fallbackSecretariatId?: string;
+    dark?: boolean;
+    tone?: 'author' | 'publisher';
+  }) => {
+    const { label, name, position, secretariatId, fallbackSecretariatId, dark, tone = 'author' } = params;
+    if (!name && !position) return null;
+    const resolvedSec = resolvePersonInSecretariats({
+      name,
+      explicitSecretariatId: secretariatId || fallbackSecretariatId,
+      specializedSecretariats: data.specializedSecretariats || [],
+      secretariatMembers: data.secretariatMembers || [],
+      secretariatLeaders: data.secretariatLeaders || [],
+      partyLeaders: data.partyLeaders || []
+    });
+    const wrapperClass = dark
+      ? tone === 'publisher'
+        ? 'bg-red-500/15 border-red-400/30 text-red-100'
+        : 'bg-amber-500/15 border-amber-400/30 text-amber-100'
+      : tone === 'publisher'
+      ? 'bg-red-50/70 border-red-200 text-red-950'
+      : 'bg-amber-50/80 border-amber-200 text-amber-950';
+
+    return (
+      <div className={`flex flex-wrap items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] ${wrapperClass}`}>
+        <div className="flex flex-wrap items-center gap-1 min-w-0">
+          <span className="font-bold opacity-80">{label}:</span>
+          {name ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handlePersonClick(name, {
+                  explicitSecretariatId: secretariatId || fallbackSecretariatId
+                });
+              }}
+              className={`font-black hover:underline cursor-pointer text-right ${
+                dark ? 'text-white hover:text-amber-300' : 'text-stone-900 hover:text-red-700'
+              }`}
+              title={resolvedSec ? `الانتقال إلى ${resolvedSec.secretariat.name} وعرض بيانات ${name}` : `عرض بيانات ${name}`}
+            >
+              {name}
+            </button>
+          ) : (
+            <span className="font-bold">{tone === 'publisher' ? 'أمانة الإعلام' : 'أمانة قسم ثالث أكتوبر'}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {position && (
+            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${dark ? 'bg-white/10 text-stone-100' : 'bg-white text-stone-700 border border-stone-200/80'}`}>
+              {position}
+            </span>
+          )}
+          {resolvedSec && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openSecretariat(resolvedSec.secretariat.slug, resolvedSec.personKey);
+              }}
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-md cursor-pointer transition-colors ${
+                dark
+                  ? 'bg-amber-400/20 text-amber-300 hover:bg-amber-400/30'
+                  : 'bg-red-700/10 text-red-800 hover:bg-red-700 hover:text-white'
+              }`}
+            >
+              {resolvedSec.secretariat.name}
+            </button>
+          )}
+        </div>
+      </div>
+    );
   };
 
   // Helper to open initiative details
@@ -675,7 +790,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         ref={isActive ? heroVideoRef : undefined}
                         src={slide.url}
                         autoPlay
-                        muted
+                        muted={!wantNativeHeroAudio}
                         loop
                         playsInline
                         preload="auto"
@@ -687,15 +802,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         controlsList="nodownload noplaybackrate noremoteplayback"
                         onContextMenu={(e) => e.preventDefault()}
                         onLoadedData={(e) => {
-                          e.currentTarget.muted = true;
-                          e.currentTarget.volume = 0;
+                          if (!wantNativeHeroAudio) {
+                            e.currentTarget.muted = true;
+                            e.currentTarget.volume = 0;
+                          } else {
+                            e.currentTarget.muted = false;
+                            e.currentTarget.volume = 1;
+                          }
                           if (!document.hidden && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
                           }
                         }}
                         onCanPlay={(e) => {
-                          e.currentTarget.muted = true;
-                          e.currentTarget.volume = 0;
+                          if (!wantNativeHeroAudio) {
+                            e.currentTarget.muted = true;
+                            e.currentTarget.volume = 0;
+                          } else {
+                            e.currentTarget.muted = false;
+                            e.currentTarget.volume = 1;
+                          }
                           if (!document.hidden && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
                           }
@@ -706,7 +831,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           }
                         }}
                         onVolumeChange={(e) => {
-                          if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
+                          if (!wantNativeHeroAudio && (!e.currentTarget.muted || e.currentTarget.volume !== 0)) {
                             e.currentTarget.muted = true;
                             e.currentTarget.volume = 0;
                           }
@@ -766,6 +891,53 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     ))}
                   </div>
                 </>
+              )}
+
+              {/* Global & Visitor Sound Control Overlay on Hero Video */}
+              {heroSlides[heroSlideIndex]?.type === 'video' && (
+                adminLockedMute ? (
+                  <div className="absolute bottom-3 right-3 z-30 bg-black/65 text-stone-200 border border-white/15 backdrop-blur-xs text-[11px] font-bold px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                    <VolumeX className="w-3.5 h-3.5 text-red-400" />
+                    <span>الصوت مقفل من الإدارة</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMuted = !visitorMuted;
+                      setVisitorMuted(nextMuted);
+                      if (!nextMuted) {
+                        unlockHeroAudioNow();
+                        const vid = heroVideoRef.current;
+                        if (vid && useNativeHeroVideoAudio) {
+                          vid.removeAttribute('muted');
+                          vid.muted = false;
+                          vid.defaultMuted = false;
+                          vid.volume = 1;
+                          vid.play().catch(() => {});
+                        }
+                      }
+                    }}
+                    className={`absolute bottom-3 right-3 z-30 border backdrop-blur-xs text-xs font-black px-3.5 py-2 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-lg ${
+                      effectiveHeroMuted
+                        ? 'bg-stone-950/80 hover:bg-amber-500 hover:text-stone-950 text-amber-300 border-amber-400/40'
+                        : 'bg-emerald-700/90 hover:bg-stone-900 text-white border-emerald-400/50'
+                    }`}
+                    aria-label={effectiveHeroMuted ? 'تشغيل صوت الفيديو' : 'كتم صوت الفيديو'}
+                  >
+                    {effectiveHeroMuted ? (
+                      <>
+                        <VolumeX className="w-4 h-4" />
+                        <span>تشغيل الصوت</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-4 h-4" />
+                        <span>الصوت مفعّل · كتم</span>
+                      </>
+                    )}
+                  </button>
+                )
               )}
 
             </div>
@@ -921,7 +1093,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       key={leader.id}
                       onClick={() =>
                         handlePersonClick(leader.name, {
-                          personKey: leader.name,
+                          explicitSecretariatId: leader.specializedSecretariatId,
+                          personKey: leader.id || leader.name,
                           fallbackPartyLeader: leader
                         })
                       }
@@ -977,7 +1150,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       explicitSecretariatId: leader.specializedSecretariatId,
                       specializedSecretariats: data.specializedSecretariats || [],
                       secretariatMembers: data.secretariatMembers || [],
-                      secretariatLeaders: data.secretariatLeaders || []
+                      secretariatLeaders: data.secretariatLeaders || [],
+                      partyLeaders: data.partyLeaders || []
                     });
                     return (
                     <div
@@ -1348,27 +1522,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       {init.description}
                     </p>
 
-                    {(init.authorName || init.authorPosition) && (
-                      <div className="mb-3 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
-                        {init.authorName ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handlePersonClick(init.authorName);
-                            }}
-                            className="font-bold text-amber-300 hover:underline cursor-pointer text-right"
-                          >
-                            {`إعداد وتنفيذ: ${init.authorName}`}
-                          </button>
-                        ) : (
-                          <span className="font-bold text-amber-300">أمانة قسم ثالث أكتوبر</span>
-                        )}
-                        {init.authorPosition && (
-                          <span className="text-stone-200 text-[11px] bg-white/10 px-2.5 py-0.5 rounded-lg">
-                            {init.authorPosition}
-                          </span>
-                        )}
+                    {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                      <div className="mb-3 pt-2.5 border-t border-white/10 space-y-1.5">
+                        {renderPersonBadge({
+                          label: 'إعداد وتنفيذ',
+                          name: init.authorName,
+                          position: init.authorPosition,
+                          secretariatId: init.authorSecretariatId,
+                          dark: true,
+                          tone: 'author'
+                        })}
+                        {renderPersonBadge({
+                          label: 'نشر ورفع (أمانة الإعلام)',
+                          name: init.publisherName,
+                          position: init.publisherPosition,
+                          secretariatId: init.publisherSecretariatId,
+                          dark: true,
+                          tone: 'publisher'
+                        })}
                       </div>
                     )}
 
@@ -1458,29 +1629,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       </div>
 
                       <div className="space-y-2 mt-2">
-                        {(item.authorName || item.authorPosition) && (
-                          <div className="pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
-                            {item.authorName ? (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePersonClick(item.authorName, {
-                                    explicitSecretariatId: item.linkedSecretariatId
-                                  });
-                                }}
-                                className="font-bold text-amber-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                              >
-                                {`نشر / إعداد: ${item.authorName}`}
-                              </button>
-                            ) : (
-                              <span className="font-bold text-amber-900">المكتب الإعلامي</span>
-                            )}
-                            {item.authorPosition && (
-                              <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[10px] px-2 py-0.5 rounded-md">
-                                {item.authorPosition}
-                              </span>
-                            )}
+                        {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
+                          <div className="pt-2 border-t border-stone-100 space-y-1.5">
+                            {renderPersonBadge({
+                              label: 'كتابة / إعداد',
+                              name: item.authorName,
+                              position: item.authorPosition,
+                              secretariatId: item.authorSecretariatId,
+                              fallbackSecretariatId: item.linkedSecretariatId,
+                              tone: 'author'
+                            })}
+                            {renderPersonBadge({
+                              label: 'نشر (أمانة الإعلام)',
+                              name: item.publisherName,
+                              position: item.publisherPosition,
+                              secretariatId: item.publisherSecretariatId,
+                              tone: 'publisher'
+                            })}
                           </div>
                         )}
 
@@ -1553,24 +1718,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <span className="font-medium text-stone-700">{event.organizer}</span>
                     </div>
 
-                    {(event.authorName || event.authorPosition) && (
-                      <div className="mt-2 pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
-                        {event.authorName ? (
-                          <button
-                            type="button"
-                            onClick={() => handlePersonClick(event.authorName)}
-                            className="font-bold text-amber-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                          >
-                            {`القائم بالفعالية: ${event.authorName}`}
-                          </button>
-                        ) : (
-                          <span className="font-bold text-amber-900">أمانة قسم ثالث أكتوبر</span>
-                        )}
-                        {event.authorPosition && (
-                          <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[10px] px-2 py-0.5 rounded-md">
-                            {event.authorPosition}
-                          </span>
-                        )}
+                    {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
+                      <div className="mt-2 pt-2 border-t border-stone-100 space-y-1.5">
+                        {renderPersonBadge({
+                          label: 'القائم بالفعالية',
+                          name: event.authorName,
+                          position: event.authorPosition,
+                          secretariatId: event.authorSecretariatId,
+                          tone: 'author'
+                        })}
+                        {renderPersonBadge({
+                          label: 'نشر (أمانة الإعلام)',
+                          name: event.publisherName,
+                          position: event.publisherPosition,
+                          secretariatId: event.publisherSecretariatId,
+                          tone: 'publisher'
+                        })}
                       </div>
                     )}
 
@@ -1910,7 +2073,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 key={leader.id}
                 onClick={() =>
                   handlePersonClick(leader.name, {
-                    personKey: leader.name,
+                    explicitSecretariatId: leader.specializedSecretariatId,
+                    personKey: leader.id || leader.name,
                     fallbackPartyLeader: leader
                   })
                 }
@@ -1961,7 +2125,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 explicitSecretariatId: leader.specializedSecretariatId,
                 specializedSecretariats: data.specializedSecretariats || [],
                 secretariatMembers: data.secretariatMembers || [],
-                secretariatLeaders: data.secretariatLeaders || []
+                secretariatLeaders: data.secretariatLeaders || [],
+                partyLeaders: data.partyLeaders || []
               });
               return (
               <div
@@ -2196,7 +2361,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     const sec = data.specializedSecretariats.find(s => s.slug === selectedSlug || s.id === selectedSlug) || data.specializedSecretariats[0];
     const relatedNews = data.news.filter(n => n.linkedSecretariatId === sec?.id);
     const allSecPeople = sec
-      ? getAllPeopleInSecretariat(sec, data.secretariatMembers || [], data.secretariatLeaders || [])
+      ? getAllPeopleInSecretariat(
+          sec,
+          data.secretariatMembers || [],
+          data.secretariatLeaders || [],
+          data.partyLeaders || []
+        )
       : [];
     const activePersonKey = focusedPersonKey || selectedPerson || null;
     const activePersonProfile = activePersonKey
@@ -2256,7 +2426,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
         {/* Highlighted Person Profile Card inside their Registered Secretariat */}
         {activePersonProfile && (
-          <div className="bg-gradient-to-br from-amber-50 via-white to-stone-50 rounded-3xl border-2 border-amber-500 p-6 sm:p-8 shadow-xl relative text-right">
+          <div id="active-person-profile" className="bg-gradient-to-br from-amber-50 via-white to-stone-50 rounded-3xl border-2 border-amber-500 p-6 sm:p-8 shadow-xl relative text-right">
             <div className="flex items-center justify-between gap-3 border-b border-amber-200/70 pb-3 mb-5">
               <div className="flex items-center gap-2 text-red-700 font-black text-sm">
                 <ShieldCheck className="w-5 h-5 text-red-700" />
@@ -2783,9 +2953,28 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     className="w-20 h-20 object-cover rounded-lg bg-stone-100 shrink-0"
                     referrerPolicy="no-referrer"
                   />
-                  <div>
+                  <div className="flex-1 space-y-1.5">
                     <span className="text-[10px] text-stone-400">{item.publishDate}</span>
                     <h4 className="font-bold text-sm text-stone-900 line-clamp-2 mt-0.5">{item.title}</h4>
+                    {(item.authorName || item.publisherName) && (
+                      <div className="space-y-1 pt-1">
+                        {renderPersonBadge({
+                          label: 'كتابة / إعداد',
+                          name: item.authorName,
+                          position: item.authorPosition,
+                          secretariatId: item.authorSecretariatId,
+                          fallbackSecretariatId: item.linkedSecretariatId,
+                          tone: 'author'
+                        })}
+                        {renderPersonBadge({
+                          label: 'نشر (أمانة الإعلام)',
+                          name: item.publisherName,
+                          position: item.publisherPosition,
+                          secretariatId: item.publisherSecretariatId,
+                          tone: 'publisher'
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -2891,27 +3080,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
 
               <div className="p-6 pt-0 space-y-3">
-                {(init.authorName || init.authorPosition) && (
-                  <div className="pt-3 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-                    {init.authorName ? (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handlePersonClick(init.authorName);
-                        }}
-                        className="font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                      >
-                        {`إعداد وتنفيذ: ${init.authorName}`}
-                      </button>
-                    ) : (
-                      <span className="font-bold text-stone-900">أمانة قسم ثالث أكتوبر</span>
-                    )}
-                    {init.authorPosition && (
-                      <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[11px] px-2.5 py-0.5 rounded-md">
-                        {init.authorPosition}
-                      </span>
-                    )}
+                {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                  <div className="pt-3 border-t border-stone-100 space-y-1.5">
+                    {renderPersonBadge({
+                      label: 'إعداد وتنفيذ',
+                      name: init.authorName,
+                      position: init.authorPosition,
+                      secretariatId: init.authorSecretariatId,
+                      tone: 'author'
+                    })}
+                    {renderPersonBadge({
+                      label: 'نشر (أمانة الإعلام)',
+                      name: init.publisherName,
+                      position: init.publisherPosition,
+                      secretariatId: init.publisherSecretariatId,
+                      tone: 'publisher'
+                    })}
                   </div>
                 )}
 
@@ -2986,14 +3170,32 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </h3>
               <div className="space-y-4">
                 {init.activities.map((act, i) => (
-                  <div key={i} className="border-r-4 border-amber-600 pr-4 py-1 space-y-1">
-                    <div className="flex items-center gap-2">
+                  <div key={i} className="border-r-4 border-amber-600 pr-4 py-1 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-bold text-stone-900">{act.title}</span>
                       <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded">
                         {act.date}
                       </span>
                     </div>
                     <p className="text-xs text-stone-600">{act.description}</p>
+                    {(act.authorName || act.authorPosition || act.publisherName || act.publisherPosition) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        {renderPersonBadge({
+                          label: 'القائم بالنشاط',
+                          name: act.authorName,
+                          position: act.authorPosition,
+                          secretariatId: act.authorSecretariatId,
+                          tone: 'author'
+                        })}
+                        {renderPersonBadge({
+                          label: 'نشر (أمانة الإعلام)',
+                          name: act.publisherName,
+                          position: act.publisherPosition,
+                          secretariatId: act.publisherSecretariatId,
+                          tone: 'publisher'
+                        })}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -3032,29 +3234,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             );
           })()}
 
-          {(init.authorName || init.authorPosition) && (
-            <div className="pt-4 border-t border-stone-200 flex items-center gap-3 bg-stone-50 border p-4 rounded-2xl">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
-                {(init.authorName || 'ح').charAt(0)}
-              </div>
-              <div className="text-right">
-                {init.authorName ? (
-                  <button
-                    type="button"
-                    onClick={() => handlePersonClick(init.authorName)}
-                    className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                  >
-                    {`إعداد وتنفيذ: ${init.authorName}`}
-                  </button>
-                ) : (
-                  <div className="text-xs font-bold text-stone-900">أمانة قسم ثالث أكتوبر</div>
-                )}
-                {init.authorPosition && (
-                  <div className="text-[11px] font-semibold text-amber-800">
-                    {init.authorPosition}
-                  </div>
-                )}
-              </div>
+          {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+            <div className="pt-4 border-t border-stone-200 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {renderPersonBadge({
+                label: 'القائم بالمبادرة / مُعدّها',
+                name: init.authorName,
+                position: init.authorPosition,
+                secretariatId: init.authorSecretariatId,
+                tone: 'author'
+              })}
+              {renderPersonBadge({
+                label: 'مسؤول النشر والرفع (أمانة الإعلام)',
+                name: init.publisherName,
+                position: init.publisherPosition,
+                secretariatId: init.publisherSecretariatId,
+                tone: 'publisher'
+              })}
             </div>
           )}
         </div>
@@ -3148,27 +3343,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <p className="text-xs text-stone-600 line-clamp-3 leading-relaxed">
                     {item.excerpt}
                   </p>
-                  {(item.authorName || item.authorPosition) && (
-                    <div className="pt-2 border-t border-stone-100 flex items-center gap-1.5 text-[11px] text-amber-900 font-bold">
-                      {item.authorName ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handlePersonClick(item.authorName, {
-                              explicitSecretariatId: item.linkedSecretariatId
-                            });
-                          }}
-                          className="hover:text-red-700 hover:underline cursor-pointer text-right"
-                        >
-                          {`بقلم: ${item.authorName}`}
-                        </button>
-                      ) : (
-                        <span>المكتب الإعلامي</span>
-                      )}
-                      {item.authorPosition && (
-                        <span className="text-stone-500 font-normal text-[10px]">({item.authorPosition})</span>
-                      )}
+                  {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
+                    <div className="pt-2 border-t border-stone-100 space-y-1.5">
+                      {renderPersonBadge({
+                        label: 'كتابة / إعداد',
+                        name: item.authorName,
+                        position: item.authorPosition,
+                        secretariatId: item.authorSecretariatId,
+                        fallbackSecretariatId: item.linkedSecretariatId,
+                        tone: 'author'
+                      })}
+                      {renderPersonBadge({
+                        label: 'نشر (أمانة الإعلام)',
+                        name: item.publisherName,
+                        position: item.publisherPosition,
+                        secretariatId: item.publisherSecretariatId,
+                        tone: 'publisher'
+                      })}
                     </div>
                   )}
                 </div>
@@ -3337,29 +3528,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 );
               })()}
 
-              {(event.authorName || event.authorPosition) && (
-                <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
-                    {(event.authorName || 'ح').charAt(0)}
-                  </div>
-                  <div className="text-right">
-                    {event.authorName ? (
-                      <button
-                        type="button"
-                        onClick={() => handlePersonClick(event.authorName)}
-                        className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                      >
-                        {`القائم بالفعالية: ${event.authorName}`}
-                      </button>
-                    ) : (
-                      <div className="text-xs font-bold text-stone-900">أمانة قسم ثالث أكتوبر</div>
-                    )}
-                    {event.authorPosition && (
-                      <div className="text-[11px] font-semibold text-amber-800">
-                        {event.authorPosition}
-                      </div>
-                    )}
-                  </div>
+              {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {renderPersonBadge({
+                    label: 'القائم بالفعالية',
+                    name: event.authorName,
+                    position: event.authorPosition,
+                    secretariatId: event.authorSecretariatId,
+                    tone: 'author'
+                  })}
+                  {renderPersonBadge({
+                    label: 'مسؤول النشر والتغطية (أمانة الإعلام)',
+                    name: event.publisherName,
+                    position: event.publisherPosition,
+                    secretariatId: event.publisherSecretariatId,
+                    tone: 'publisher'
+                  })}
                 </div>
               )}
 
@@ -4928,33 +5112,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               )}
 
-              {(selectedNews.authorName || selectedNews.authorPosition) && (
-                <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
-                    {(selectedNews.authorName || 'ح').charAt(0)}
-                  </div>
-                  <div className="text-right">
-                    {selectedNews.authorName ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handlePersonClick(selectedNews.authorName, {
-                            explicitSecretariatId: selectedNews.linkedSecretariatId
-                          })
-                        }
-                        className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
-                      >
-                        {`نشر / إعداد: ${selectedNews.authorName}`}
-                      </button>
-                    ) : (
-                      <div className="text-xs font-bold text-stone-900">المكتب الإعلامي للأمانة</div>
-                    )}
-                    {selectedNews.authorPosition && (
-                      <div className="text-[11px] font-semibold text-amber-800">
-                        {selectedNews.authorPosition}
-                      </div>
-                    )}
-                  </div>
+              {(selectedNews.authorName || selectedNews.authorPosition || selectedNews.publisherName || selectedNews.publisherPosition) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  {renderPersonBadge({
+                    label: 'كاتب / مُعد الخبر',
+                    name: selectedNews.authorName,
+                    position: selectedNews.authorPosition,
+                    secretariatId: selectedNews.authorSecretariatId,
+                    fallbackSecretariatId: selectedNews.linkedSecretariatId,
+                    tone: 'author'
+                  })}
+                  {renderPersonBadge({
+                    label: 'مسؤول النشر والرفع (أمانة الإعلام)',
+                    name: selectedNews.publisherName,
+                    position: selectedNews.publisherPosition,
+                    secretariatId: selectedNews.publisherSecretariatId,
+                    tone: 'publisher'
+                  })}
                 </div>
               )}
 

@@ -176,24 +176,109 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFi
   }
 }
 
-const BOOTSTRAPPED_ADMIN_EMAIL = 'moazmahmoud586@gmail.com';
+const BOOTSTRAPPED_ADMIN_EMAILS = new Set([
+  'moazmahmoud586@gmail.com',
+  'm63502205@gmail.com'
+]);
 
-function isAuthorizedCloudAdmin(verified: VerifiedFirebaseUser | null): boolean {
-  return Boolean(verified && verified.emailVerified && verified.email === BOOTSTRAPPED_ADMIN_EMAIL);
+const SYNC_STATE_PATH = path.resolve(process.cwd(), 'data', '.sync-state.json');
+
+interface PersistedSyncState {
+  hasUnpushedCloudChanges: boolean;
+  lastLocalMutationAt: number;
+  lastCloudSyncAt: number;
 }
+
+function loadPersistedSyncState(): PersistedSyncState {
+  try {
+    if (fs.existsSync(SYNC_STATE_PATH)) {
+      const raw = fs.readFileSync(SYNC_STATE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return {
+        hasUnpushedCloudChanges: Boolean(parsed?.hasUnpushedCloudChanges),
+        lastLocalMutationAt: Number(parsed?.lastLocalMutationAt || 0),
+        lastCloudSyncAt: Number(parsed?.lastCloudSyncAt || 0)
+      };
+    }
+  } catch {
+    // ignore corrupt sync state
+  }
+  return {
+    hasUnpushedCloudChanges: false,
+    lastLocalMutationAt: 0,
+    lastCloudSyncAt: 0
+  };
+}
+
+function writePersistedSyncState(state: PersistedSyncState): void {
+  try {
+    const dir = path.dirname(SYNC_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${SYNC_STATE_PATH}.tmp.${Date.now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+    fs.renameSync(tmp, SYNC_STATE_PATH);
+  } catch {
+    // ignore fs write failures
+  }
+}
+
+const initialSyncState = loadPersistedSyncState();
 
 // Track hashes of last known cloud documents so we only push real diffs
 const cloudHashes = new Map<string, string>();
 let cloudInitialized = false;
 let lastPublicPullAt = 0;
-let lastLocalMutationAt = 0;
-let hasUnpushedCloudChanges = false;
+let lastLocalMutationAt = initialSyncState.lastLocalMutationAt;
+let lastCloudSyncAt = initialSyncState.lastCloudSyncAt;
+let hasUnpushedCloudChanges = initialSyncState.hasUnpushedCloudChanges;
 let pullPromise: Promise<boolean> | null = null;
+
+const authorizedAdminDocCache = new Map<string, { allowed: boolean; expiresAt: number }>();
+
+async function isAuthorizedCloudAdmin(verified: VerifiedFirebaseUser | null, idToken?: string): Promise<boolean> {
+  if (!verified || !verified.emailVerified) return false;
+  if (BOOTSTRAPPED_ADMIN_EMAILS.has(verified.email)) return true;
+  if (!idToken) return false;
+
+  const cached = authorizedAdminDocCache.get(verified.uid);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.allowed;
+  }
+
+  const base = getRestBase();
+  if (!base) return false;
+  try {
+    const uid = sanitizeFirestoreId(verified.uid);
+    const resp = await fetch(`${base}/admins/${uid}`, {
+      headers: { Authorization: `Bearer ${idToken}` }
+    });
+    const allowed = resp.ok;
+    authorizedAdminDocCache.set(verified.uid, { allowed, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return allowed;
+  } catch {
+    return false;
+  }
+}
 
 export function markLocalMutation(): void {
   lastLocalMutationAt = Date.now();
   lastPublicPullAt = Date.now();
   hasUnpushedCloudChanges = true;
+  writePersistedSyncState({
+    hasUnpushedCloudChanges,
+    lastLocalMutationAt,
+    lastCloudSyncAt
+  });
+}
+
+function markCloudSyncCompleted(): void {
+  hasUnpushedCloudChanges = false;
+  lastCloudSyncAt = Date.now();
+  writePersistedSyncState({
+    hasUnpushedCloudChanges,
+    lastLocalMutationAt,
+    lastCloudSyncAt
+  });
 }
 
 export function hasPendingLocalChanges(): boolean {
@@ -338,7 +423,7 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
   if (!docNamePrefix || !idToken) return false;
 
   const verified = await verifyFirebaseIdToken(idToken);
-  if (!isAuthorizedCloudAdmin(verified)) {
+  if (!(await isAuthorizedCloudAdmin(verified, idToken))) {
     return false;
   }
 
@@ -378,7 +463,7 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
   }
 
   if (writes.length === 0) {
-    hasUnpushedCloudChanges = false;
+    markCloudSyncCompleted();
     return true;
   }
 
@@ -394,7 +479,7 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
       cloudHashes.set(k, v);
     }
     cloudInitialized = true;
-    hasUnpushedCloudChanges = false;
+    markCloudSyncCompleted();
   }
   return ok;
 }
@@ -408,7 +493,7 @@ export async function syncUploadAssetToFirestore(
   const docNamePrefix = getDocNamePrefix();
   if (!docNamePrefix || !idToken) return false;
   const verified = await verifyFirebaseIdToken(idToken);
-  if (!isAuthorizedCloudAdmin(verified)) return false;
+  if (!(await isAuthorizedCloudAdmin(verified, idToken))) return false;
   if (base64Data.length > 880000) {
     return false;
   }
@@ -457,10 +542,11 @@ export async function ensureAdminRegistryDoc(user: VerifiedFirebaseUser, idToken
   const docNamePrefix = getDocNamePrefix();
   if (!docNamePrefix || !idToken || !user.uid) return;
   const uid = sanitizeFirestoreId(user.uid);
+  const roleVal = BOOTSTRAPPED_ADMIN_EMAILS.has(user.email) ? 'super_admin' : 'sub_admin';
   const fields = {
     uid: toFirestoreValue(uid),
     email: toFirestoreValue(user.email),
-    role: toFirestoreValue(user.email === 'moazmahmoud586@gmail.com' ? 'super_admin' : 'sub_admin'),
+    role: toFirestoreValue(roleVal),
     createdAt: toFirestoreValue(new Date().toISOString())
   };
   await commitWritesRest(
@@ -602,6 +688,7 @@ export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<A
 
 export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: (next: AppDatabase) => void): Promise<void> {
   if (!serverFirestore) return;
+  // Never overwrite local DB while there are unpushed admin/public edits waiting to sync
   if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) return;
   if (Date.now() - lastPublicPullAt < 5000) return;
   if (pullPromise) {
@@ -632,21 +719,20 @@ export async function syncAdminFullWithFirestore(
   }
 
   const verified = await verifyFirebaseIdToken(idToken);
-  if (!isAuthorizedCloudAdmin(verified)) {
+  if (!(await isAuthorizedCloudAdmin(verified, idToken))) {
+    // Protect unpushed local edits unconditionally — never revert them!
     if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) {
       return { db: currentDb, seeded: false, pulled: false };
     }
-    // Cached Firebase session does not hold cloud admin privileges — sync public collections silently without 403s
     const publicDb = await pullPublicFromFirestore(currentDb);
     return { db: publicDb || currentDb, seeded: false, pulled: Boolean(publicDb) };
   }
 
   // If there are pending local writes made before this request, flush them to Firestore BEFORE pulling
   if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 15000) {
-    const pushed = await pushDatabaseDiffToFirestore(currentDb, idToken, false);
-    if (pushed) {
-      return { db: currentDb, seeded: false, pulled: false };
-    }
+    await pushDatabaseDiffToFirestore(currentDb, idToken, false);
+    // Whether push succeeded or not, do NOT pull stale cloud data over just-written local edits
+    return { db: currentDb, seeded: false, pulled: false };
   }
 
   // Check if site_config/public already exists in Firestore

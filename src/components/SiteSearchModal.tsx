@@ -149,14 +149,17 @@ export const SiteSearchModal: React.FC<SiteSearchModalProps> = ({
 
     // 1. Search in News
     (data.news || []).forEach(n => {
-      const score = scoreItem(n.title, n.excerpt || '', n.content || '');
+      const score = scoreItem(n.title, `${n.excerpt || ''} ${n.authorName || ''} ${n.publisherName || ''}`, n.content || '');
       if (score > 0) {
+        const parts: string[] = [];
+        if (n.authorName) parts.push(`كتابة: ${n.authorName}`);
+        if (n.publisherName) parts.push(`نشر: ${n.publisherName}`);
         results.push({
           id: `news-${n.id}`,
           type: 'news',
           typeLabel: 'خبر رسمي',
           title: n.title,
-          subtitle: n.authorName ? `بقلم: ${n.authorName} ${n.authorPosition ? `(${n.authorPosition})` : ''}` : undefined,
+          subtitle: parts.length > 0 ? parts.join(' · ') : undefined,
           snippet: n.excerpt || n.content?.slice(0, 140) || '',
           imageUrl: n.coverImage || data.settings?.officialLogo,
           date: n.publishDate,
@@ -168,14 +171,18 @@ export const SiteSearchModal: React.FC<SiteSearchModalProps> = ({
 
     // 2. Search in Events
     (data.events || []).forEach(ev => {
-      const score = scoreItem(ev.title, ev.venue || '', ev.description || '');
+      const score = scoreItem(ev.title, `${ev.venue || ''} ${ev.authorName || ''} ${ev.publisherName || ''}`, ev.description || '');
       if (score > 0) {
+        const subtitleParts: string[] = [];
+        if (ev.venue) subtitleParts.push(`المكان: ${ev.venue}`);
+        if (ev.authorName) subtitleParts.push(`القائم: ${ev.authorName}`);
+        if (ev.publisherName) subtitleParts.push(`نشر: ${ev.publisherName}`);
         results.push({
           id: `event-${ev.id}`,
           type: 'event',
           typeLabel: 'فعالية حزبية',
           title: ev.title,
-          subtitle: ev.venue ? `المكان: ${ev.venue}` : undefined,
+          subtitle: subtitleParts.length > 0 ? subtitleParts.join(' · ') : undefined,
           snippet: ev.description?.slice(0, 140) || '',
           imageUrl: ev.coverUrl || ev.coverImage || data.settings?.officialLogo,
           date: ev.dateTime ? new Date(ev.dateTime).toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' }) : undefined,
@@ -188,8 +195,8 @@ export const SiteSearchModal: React.FC<SiteSearchModalProps> = ({
     // 3. Search in Initiatives
     (data.initiatives || []).forEach(init => {
       const goalsText = (init.goals || []).join(' ');
-      const activitiesText = (init.activities || []).map(a => `${a.title} ${a.description}`).join(' ');
-      const score = scoreItem(init.title, init.description || '', `${goalsText} ${activitiesText}`);
+      const activitiesText = (init.activities || []).map(a => `${a.title} ${a.description} ${a.authorName || ''} ${a.publisherName || ''}`).join(' ');
+      const score = scoreItem(init.title, `${init.description || ''} ${init.authorName || ''} ${init.publisherName || ''}`, `${goalsText} ${activitiesText}`);
       if (score > 0) {
         results.push({
           id: `init-${init.id}`,

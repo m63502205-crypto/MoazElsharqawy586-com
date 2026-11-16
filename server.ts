@@ -1447,16 +1447,16 @@ app.post('/api/admin/login-google', async (req: Request, res: Response) => {
   }
 
   const data = db.get();
-  const BOOTSTRAPPED_ADMIN_EMAIL = 'moazmahmoud586@gmail.com';
+  const BOOTSTRAPPED_ADMIN_EMAILS = ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'];
   let admin = data.admins.find(
     a => a.email.toLowerCase() === verified.email && a.isActive
   );
 
   // If bootstrapped owner logs in with Google, ensure they have super_admin access
-  if (!admin && verified.email === BOOTSTRAPPED_ADMIN_EMAIL) {
+  if (!admin && BOOTSTRAPPED_ADMIN_EMAILS.includes(verified.email)) {
     admin = data.admins.find(a => a.role === 'super_admin' && a.isActive);
     if (admin) {
-      admin.email = BOOTSTRAPPED_ADMIN_EMAIL;
+      admin.email = verified.email;
       db.save();
     }
   }
@@ -1507,7 +1507,8 @@ app.post('/api/admin/login-google', async (req: Request, res: Response) => {
 app.get('/api/admin/cloud-status', authenticateAdmin, (_req: Request, res: Response) => {
   res.json({
     configured: isCloudConfigured(),
-    initialized: isCloudInitialized()
+    initialized: isCloudInitialized(),
+    hasPendingChanges: hasPendingLocalChanges()
   });
 });
 
@@ -1637,6 +1638,7 @@ app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leade
     position: body.position.trim(),
     level: body.level || 'national',
     governorate: body.governorate || '',
+    specializedSecretariatId: typeof body.specializedSecretariatId === 'string' ? body.specializedSecretariatId.trim() : '',
     bio: body.bio || '',
     photoUrl: body.photoUrl ? persistDataUrlIfAny(body.photoUrl, 'party_leader') : '',
     sortOrder: Number(body.sortOrder) || (data.partyLeaders.length + 1),
@@ -2100,7 +2102,11 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
           date: String(a.date || '').trim(),
           description: String(a.description || '').trim(),
           authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
-          authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : ''
+          authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
+          authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
+          publisherName: typeof a.publisherName === 'string' ? a.publisherName.trim() : '',
+          publisherPosition: typeof a.publisherPosition === 'string' ? a.publisherPosition.trim() : '',
+          publisherSecretariatId: typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : ''
         }))
     : [];
 
@@ -2121,6 +2127,10 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
     galleryImages: rawGallery.map((img: string) => persistDataUrlIfAny(img, 'init_gallery')).filter(Boolean),
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
+    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
+    publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
+    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
     isVisible: body.isVisible !== false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -2181,7 +2191,11 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
               date: String(a.date || '').trim(),
               description: String(a.description || '').trim(),
               authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
-              authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : ''
+              authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
+              authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
+              publisherName: typeof a.publisherName === 'string' ? a.publisherName.trim() : '',
+              publisherPosition: typeof a.publisherPosition === 'string' ? a.publisherPosition.trim() : '',
+              publisherSecretariatId: typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : ''
             }))
         : [])
     : existing.activities || [];
@@ -2213,6 +2227,10 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
     galleryImages: nextGalleryImages,
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
+    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
+    publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
+    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
     isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : (existing.isVisible !== false),
     updatedAt: new Date().toISOString()
   } as any;
@@ -2263,6 +2281,10 @@ app.post('/api/admin/news', authenticateAdmin, requirePermission('news'), async 
     isDraft: !!body.isDraft,
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
+    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
+    publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
+    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -2343,6 +2365,10 @@ app.put('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), asy
     publishDate: body.publishDate !== undefined ? (String(body.publishDate || '').trim() || existing.publishDate || new Date().toISOString().split('T')[0]) : existing.publishDate,
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
+    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
+    publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
+    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
     updatedAt: new Date().toISOString()
   } as any;
   db.save();
@@ -2408,6 +2434,10 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
     organizer: (typeof body.organizer === 'string' && body.organizer.trim()) || 'أمانة قسم ثالث أكتوبر',
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
+    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
+    publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
+    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
     images: persistedImages,
     galleryImages: persistedImages,
     coverUrl: body.coverUrl ? persistDataUrlIfAny(body.coverUrl, 'event_cover') : '',
@@ -2480,6 +2510,10 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
     postReport: body.postReport !== undefined ? String(body.postReport || '').trim() : (existing.postReport || ''),
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
+    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
+    publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
+    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
     images: persistedImages,
     galleryImages: persistedImages,
     coverUrl: body.coverUrl !== undefined ? (body.coverUrl ? persistDataUrlIfAny(String(body.coverUrl), 'event_cover') : '') : (existing.coverUrl ? persistDataUrlIfAny(existing.coverUrl, 'event_cover') : ''),
@@ -2528,6 +2562,12 @@ app.post('/api/admin/media', authenticateAdmin, requirePermission('media'), asyn
     linkedSecretariatId: body.linkedSecretariatId || '',
     linkedInitiativeId: body.linkedInitiativeId || '',
     linkedEventId: body.linkedEventId || '',
+    authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
+    authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
+    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
+    publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
+    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
     isVisible: body.isVisible !== false,
     sortOrder: Number(body.sortOrder) || (data.media.length + 1),
     createdAt: new Date().toISOString(),
@@ -2551,6 +2591,12 @@ app.put('/api/admin/media/:id', authenticateAdmin, requirePermission('media'), a
 
   const nextBody = { ...req.body };
   if (typeof nextBody.title === 'string') nextBody.title = nextBody.title.trim();
+  if (typeof nextBody.authorName === 'string') nextBody.authorName = nextBody.authorName.trim();
+  if (typeof nextBody.authorPosition === 'string') nextBody.authorPosition = nextBody.authorPosition.trim();
+  if (typeof nextBody.authorSecretariatId === 'string') nextBody.authorSecretariatId = nextBody.authorSecretariatId.trim();
+  if (typeof nextBody.publisherName === 'string') nextBody.publisherName = nextBody.publisherName.trim();
+  if (typeof nextBody.publisherPosition === 'string') nextBody.publisherPosition = nextBody.publisherPosition.trim();
+  if (typeof nextBody.publisherSecretariatId === 'string') nextBody.publisherSecretariatId = nextBody.publisherSecretariatId.trim();
   if (nextBody.url) nextBody.url = persistDataUrlIfAny(String(nextBody.url).trim(), 'media_item');
   if (nextBody.thumbnail) nextBody.thumbnail = persistDataUrlIfAny(String(nextBody.thumbnail).trim(), 'media_thumb');
 
@@ -2976,8 +3022,8 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   const target = data.admins[idx];
   const { name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body;
 
-  // Protect main super admin account
-  if (target.email === 'moazmahmoud586@gmail.com') {
+  // Protect main super admin accounts
+  if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes(target.email.toLowerCase())) {
     if (isActive === false) {
       return res.status(400).json({ error: 'لا يمكن تعطيل حساب المدير الرئيسي للمنصة' });
     }
@@ -3019,7 +3065,7 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
   if (!target) {
     return res.status(404).json({ error: 'المشرف غير موجود' });
   }
-  if (target.email === 'moazmahmoud586@gmail.com') {
+  if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes(target.email.toLowerCase())) {
     return res.status(400).json({ error: 'لا يمكن حذف حساب المدير الرئيسي للمنصة' });
   }
 
@@ -3402,12 +3448,16 @@ app.get(['/api/news/:id/image', '/api/events/:id/image'], (req: Request, res: Re
 // -------------------------------------------------------------
 
 async function startServer() {
-  // Hydrate initial public data from Firestore if already initialized (never overwrites Firestore!)
+  // Hydrate initial public data from Firestore ONLY when no unpushed local edits exist
   try {
-    const cloudPublic = await pullPublicFromFirestore(db.get());
-    if (cloudPublic) {
-      db.setFromCloud(cloudPublic);
-      console.log('[NFP Platform] Hydrated public portal state from Firestore.');
+    if (hasPendingLocalChanges()) {
+      console.log('[NFP Platform] Skipped startup Firestore pull because local edits are pending cloud sync.');
+    } else {
+      const cloudPublic = await pullPublicFromFirestore(db.get());
+      if (cloudPublic) {
+        db.setFromCloud(cloudPublic);
+        console.log('[NFP Platform] Hydrated public portal state from Firestore.');
+      }
     }
   } catch (err) {
     console.error('[NFP Platform] Initial Firestore pull failed (using local snapshot):', err);

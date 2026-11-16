@@ -196,7 +196,8 @@ function MainApp() {
             explicitSecretariatId: res.rawItem?.specializedSecretariatId,
             specializedSecretariats: data.specializedSecretariats,
             secretariatMembers: data.secretariatMembers,
-            secretariatLeaders: data.secretariatLeaders
+            secretariatLeaders: data.secretariatLeaders,
+            partyLeaders: data.partyLeaders
           })
         : null;
       if (matched) {

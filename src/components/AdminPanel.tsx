@@ -27,6 +27,7 @@ import { ImageFieldWithPicker } from './ImageFieldWithPicker';
 import { MultiImageGalleryField } from './MultiImageGalleryField';
 import { MediaPickerModal } from './MediaPickerModal';
 import { VideoUploadField } from './VideoUploadField';
+import { PersonAttributionFields } from './PersonAttributionFields';
 import {
   Shield,
   Users,
@@ -81,7 +82,12 @@ import {
   HeartHandshake,
   Globe,
   Mail,
-  Send
+  Send,
+  Volume2,
+  VolumeX,
+  Cloud,
+  CloudOff,
+  RefreshCw
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -115,13 +121,16 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshPublicData }) => {
-  const { user, login, logout, hasPermission } = useAuth();
+  const { user, firebaseUser, login, loginWithGoogle, linkCloudSync, logout, hasPermission } = useAuth();
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
+  const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<{ configured: boolean; initialized: boolean; hasPendingChanges?: boolean } | null>(null);
+  const [cloudBusy, setCloudBusy] = useState(false);
 
   // Active admin tab
   const [activeTab, setActiveTab] = useState<
@@ -325,6 +334,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
       const st = await api.getAdminStats();
       setStats(st);
+
+      api.getCloudStatus()
+        .then(cs => setCloudStatus(cs))
+        .catch(() => {});
     } catch (err) {
       console.error('Error fetching admin data:', err);
     }
@@ -455,13 +468,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
             <button
               type="submit"
-              disabled={loginLoading}
+              disabled={loginLoading || googleLoginLoading}
               className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <Key className="w-4 h-4 text-amber-300" />
               <span>{loginLoading ? 'جاري التحقق...' : 'تسجيل الدخول الآمن'}</span>
             </button>
           </form>
+
+          <div className="relative flex py-1 items-center">
+            <div className="grow border-t border-stone-200" />
+            <span className="shrink mx-3 text-[11px] font-bold text-stone-400">أو المزامنة السحابية</span>
+            <div className="grow border-t border-stone-200" />
+          </div>
+
+          <button
+            type="button"
+            disabled={googleLoginLoading || loginLoading}
+            onClick={async () => {
+              setLoginError(null);
+              setGoogleLoginLoading(true);
+              try {
+                await loginWithGoogle();
+              } catch (err: any) {
+                setLoginError(err?.message || 'تعذر تسجيل الدخول بحساب جوجل، تأكد من السماح للنوافذ المنبثقة');
+              } finally {
+                setGoogleLoginLoading(false);
+              }
+            }}
+            className="w-full bg-stone-900 hover:bg-stone-800 text-amber-300 border border-amber-500/40 font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <Cloud className="w-4 h-4 text-emerald-400" />
+            <span>{googleLoginLoading ? 'جاري الربط مع جوجل...' : 'تسجيل الدخول بحساب جوجل للمزامنة السحابية الدائمة'}</span>
+          </button>
 
           <div className="text-center pt-2">
             <button
@@ -501,7 +540,60 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
+            {cloudStatus?.configured !== false && (
+              <button
+                type="button"
+                disabled={cloudBusy}
+                onClick={async () => {
+                  setCloudBusy(true);
+                  try {
+                    if (firebaseUser) {
+                      await api.adminCloudSync({ forcePush: true });
+                      showBanner('success', 'تم تثبيت وحفظ كافة التعديلات في السحابة بنجاح ولن يتم التراجع عنها');
+                    } else {
+                      const res = await linkCloudSync();
+                      if (res?.seeded) {
+                        showBanner('success', 'تم ربط حساب جوجل وحفظ التعديلات في السحابة بنجاح');
+                      } else {
+                        showBanner('success', 'تم ربط حساب جوجل وتفعيل المزامنة السحابية الدائمة');
+                      }
+                    }
+                    await loadAdminData();
+                    onRefreshPublicData();
+                  } catch (err: any) {
+                    showBanner('error', err?.message || 'تعذر المزامنة السحابية حالياً');
+                  } finally {
+                    setCloudBusy(false);
+                  }
+                }}
+                className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  firebaseUser && !cloudStatus?.hasPendingChanges
+                    ? 'bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border-emerald-700'
+                    : 'bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-400 font-black'
+                }`}
+                title="تثبيت ومزامنة التعديلات مع قاعدة البيانات السحابية"
+              >
+                {cloudBusy ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : firebaseUser ? (
+                  <Cloud className="w-3.5 h-3.5" />
+                ) : (
+                  <CloudOff className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden md:inline">
+                  {cloudBusy
+                    ? 'جاري المزامنة...'
+                    : firebaseUser
+                    ? (cloudStatus?.hasPendingChanges ? 'رفع التعديلات المعلقة للسحابة' : 'مزامنة سحابية نشطة')
+                    : 'ربط جوجل وحفظ التعديلات في السحابة'}
+                </span>
+                <span className="md:hidden">
+                  {firebaseUser ? 'السحابة' : 'ربط السحابة'}
+                </span>
+              </button>
+            )}
+
             <button
               onClick={onBackToSite}
               className="bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-bold px-3 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer flex items-center gap-1"
@@ -2263,10 +2355,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <h3 className="font-extrabold text-stone-900 text-base">{init.title}</h3>
                         </div>
                         <p className="text-xs text-stone-600 line-clamp-2 max-w-xl">{init.description}</p>
-                        {(init.authorName || init.authorPosition) && (
-                          <p className="text-[11px] font-bold text-amber-800 pt-0.5">
-                            {init.authorName || 'أمانة قسم ثالث أكتوبر'}{init.authorPosition ? ` — ${init.authorPosition}` : ''}
-                          </p>
+                        {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                            {(init.authorName || init.authorPosition) && (
+                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                إعداد: {init.authorName || 'أمانة قسم ثالث أكتوبر'}{init.authorPosition ? ` — ${init.authorPosition}` : ''}
+                              </span>
+                            )}
+                            {(init.publisherName || init.publisherPosition) && (
+                              <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                نشر (الإعلام): {init.publisherName || 'أمانة الإعلام'}{init.publisherPosition ? ` — ${init.publisherPosition}` : ''}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
 
@@ -2384,10 +2485,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             <span className="text-[11px] text-stone-400 font-mono">{item.publishDate}</span>
                           </div>
                           <h3 className="font-bold text-stone-900 text-sm mt-0.5 line-clamp-1">{item.title}</h3>
-                          {(item.authorName || item.authorPosition) && (
-                            <p className="text-[11px] font-bold text-amber-800 mt-0.5">
-                              {item.authorName || 'المكتب الإعلامي'}{item.authorPosition ? ` — ${item.authorPosition}` : ''}
-                            </p>
+                          {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
+                              {(item.authorName || item.authorPosition) && (
+                                <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                  كتابة: {item.authorName || 'محرر الخبر'}{item.authorPosition ? ` — ${item.authorPosition}` : ''}
+                                </span>
+                              )}
+                              {(item.publisherName || item.publisherPosition) && (
+                                <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                  نشر: {item.publisherName || 'أمانة الإعلام'}{item.publisherPosition ? ` — ${item.publisherPosition}` : ''}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2525,10 +2635,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         </div>
                         <h3 className="font-bold text-stone-900 text-sm mt-1">{ev.title}</h3>
                         <p className="text-xs text-stone-500 mt-0.5">المكان: {ev.venue} · المنظم: {ev.organizer}</p>
-                        {(ev.authorName || ev.authorPosition) && (
-                          <p className="text-[11px] font-bold text-amber-800 mt-0.5">
-                            القائم بالفعالية: {ev.authorName || 'أمانة قسم ثالث أكتوبر'}{ev.authorPosition ? ` — ${ev.authorPosition}` : ''}
-                          </p>
+                        {(ev.authorName || ev.authorPosition || ev.publisherName || ev.publisherPosition) && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
+                            {(ev.authorName || ev.authorPosition) && (
+                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                القائم بالفعالية: {ev.authorName || 'أمانة قسم ثالث أكتوبر'}{ev.authorPosition ? ` — ${ev.authorPosition}` : ''}
+                              </span>
+                            )}
+                            {(ev.publisherName || ev.publisherPosition) && (
+                              <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                نشر: {ev.publisherName || 'أمانة الإعلام'}{ev.publisherPosition ? ` — ${ev.publisherPosition}` : ''}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
 
@@ -2715,6 +2834,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </div>
                       <div className="p-3 text-right">
                         <h4 className="font-bold text-xs text-stone-900 line-clamp-1">{m.title}</h4>
+                        {(m.authorName || m.publisherName) && (
+                          <div className="mt-1 space-y-0.5 text-[10px]">
+                            {m.authorName && <p className="text-amber-800 font-bold truncate">إعداد/تصوير: {m.authorName}</p>}
+                            {m.publisherName && <p className="text-red-700 font-bold truncate">رفع/نشر: {m.publisherName}</p>}
+                          </div>
+                        )}
                         <div className="flex items-center justify-between mt-2 pt-2 border-t border-stone-100">
                           <button
                             onClick={() => {
@@ -3638,6 +3763,78 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             <span>جارٍ رفع ملف الفيديو وحفظه في مساحة التخزين بالخادم... يرجى الانتظار</span>
                           </div>
                         )}
+
+                        {/* Global Hero Video Audio Control (Unmute for All vs Lock/Mute for All) */}
+                        <div className="bg-stone-900 border border-amber-500/35 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1 text-right">
+                            <div className="flex items-center gap-2 text-xs font-black text-amber-300">
+                              {settings.heroDefaultMuted ? (
+                                <VolumeX className="w-4 h-4 text-red-400" />
+                              ) : (
+                                <Volume2 className="w-4 h-4 text-emerald-400" />
+                              )}
+                              <span>التحكم بصوت فيديو العرض لجميع الزوار</span>
+                            </div>
+                            <p className="text-[11px] text-stone-400">
+                              الحالة الحالية:{' '}
+                              <strong className={settings.heroDefaultMuted ? 'text-red-400' : 'text-emerald-400'}>
+                                {settings.heroDefaultMuted
+                                  ? 'الصوت مقفل ومكتوم للجميع'
+                                  : 'الصوت مفعّل ومفتوح لجميع الزوار'}
+                              </strong>
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const updated = { ...settings, heroDefaultMuted: false };
+                                setSettings(updated);
+                                try {
+                                  await api.updateSettings(updated);
+                                  await loadAdminData();
+                                  onRefreshPublicData();
+                                  showBanner('success', 'تم تفعيل صوت فيديو العرض لجميع الزوار وحفظه فوراً');
+                                } catch (err: any) {
+                                  showBanner('error', err?.message || 'تعذر حفظ إعداد الصوت');
+                                }
+                              }}
+                              className={`px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all border ${
+                                !settings.heroDefaultMuted
+                                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
+                              }`}
+                            >
+                              <Volume2 className="w-4 h-4" />
+                              <span>تفعيل الصوت للكل</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const updated = { ...settings, heroDefaultMuted: true };
+                                setSettings(updated);
+                                try {
+                                  await api.updateSettings(updated);
+                                  await loadAdminData();
+                                  onRefreshPublicData();
+                                  showBanner('success', 'تم قفل وكتم صوت فيديو العرض لجميع الزوار وحفظه فوراً');
+                                } catch (err: any) {
+                                  showBanner('error', err?.message || 'تعذر حفظ إعداد الصوت');
+                                }
+                              }}
+                              className={`px-3.5 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all border ${
+                                settings.heroDefaultMuted
+                                  ? 'bg-red-700 text-white border-red-500 shadow-md'
+                                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
+                              }`}
+                            >
+                              <VolumeX className="w-4 h-4" />
+                              <span>قفل / كتم الصوت للكل</span>
+                            </button>
+                          </div>
+                        </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div>
@@ -5800,6 +5997,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  ربط بأمانة تخصصية (للانتقال المباشر لصفحة الأمانة وبيانات القيادي عند الضغط على الاسم)
+                </label>
+                <select
+                  value={editingPartyLeader.specializedSecretariatId || ''}
+                  onChange={e => setEditingPartyLeader({ ...editingPartyLeader, specializedSecretariatId: e.target.value })}
+                  className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs bg-white text-stone-900"
+                >
+                  <option value="">بدون ربط مباشر بأمانة تخصصية</option>
+                  {secretariats.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
               <ImageFieldWithPicker
                 label="الصورة الشخصية للقيادة الحزبية"
                 value={editingPartyLeader.photoUrl || ''}
@@ -7034,34 +7247,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 />
               </div>
 
-              {/* Initiative Author / Coordinator Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    اسم القائم بالمبادرة / الناشر
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أ. فلان الفلاني"
-                    value={editingInitiative.authorName || ''}
-                    onChange={e => setEditingInitiative({ ...editingInitiative, authorName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    المنصب أو الصفة الحزبية
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أمين قسم ثالث أكتوبر / أمين المبادرات"
-                    value={editingInitiative.authorPosition || ''}
-                    onChange={e => setEditingInitiative({ ...editingInitiative, authorPosition: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-              </div>
+              {/* Initiative Dual Attribution (Creator/Executor vs Media Publisher) */}
+              <PersonAttributionFields
+                authorName={editingInitiative.authorName}
+                authorPosition={editingInitiative.authorPosition}
+                authorSecretariatId={editingInitiative.authorSecretariatId}
+                publisherName={editingInitiative.publisherName}
+                publisherPosition={editingInitiative.publisherPosition}
+                publisherSecretariatId={editingInitiative.publisherSecretariatId}
+                onChange={patch => setEditingInitiative({ ...editingInitiative, ...patch })}
+                secretariats={secretariats}
+                secretariatMembers={secretariatMembers}
+                secretariatLeaders={secretariatLeaders}
+                partyLeaders={partyLeaders}
+                authorHeading="القائم بالمبادرة / مُعدّها"
+                publisherHeading="مسؤول النشر والرفع (أمانة الإعلام)"
+              />
 
               {/* Initiative Activities Editor */}
               <div className="bg-stone-50 border border-stone-200 p-3 rounded-2xl space-y-2.5">
@@ -7082,7 +7283,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             date: new Date().toISOString().split('T')[0],
                             description: '',
                             authorName: editingInitiative.authorName || '',
-                            authorPosition: editingInitiative.authorPosition || ''
+                            authorPosition: editingInitiative.authorPosition || '',
+                            authorSecretariatId: editingInitiative.authorSecretariatId || '',
+                            publisherName: editingInitiative.publisherName || '',
+                            publisherPosition: editingInitiative.publisherPosition || '',
+                            publisherSecretariatId: editingInitiative.publisherSecretariatId || ''
                           }
                         ]
                       });
@@ -7153,30 +7358,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           }}
                           className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
                         />
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <input
-                            type="text"
-                            placeholder="القائم بالنشاط"
-                            value={act.authorName || ''}
-                            onChange={e => {
-                              const updated = [...(editingInitiative.activities || [])];
-                              updated[idx] = { ...updated[idx], authorName: e.target.value };
-                              setEditingInitiative({ ...editingInitiative, activities: updated });
-                            }}
-                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
-                          />
-                          <input
-                            type="text"
-                            placeholder="المنصب / الصفة"
-                            value={act.authorPosition || ''}
-                            onChange={e => {
-                              const updated = [...(editingInitiative.activities || [])];
-                              updated[idx] = { ...updated[idx], authorPosition: e.target.value };
-                              setEditingInitiative({ ...editingInitiative, activities: updated });
-                            }}
-                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
-                          />
-                        </div>
+                        <PersonAttributionFields
+                          compact
+                          authorName={act.authorName}
+                          authorPosition={act.authorPosition}
+                          authorSecretariatId={act.authorSecretariatId}
+                          publisherName={act.publisherName}
+                          publisherPosition={act.publisherPosition}
+                          publisherSecretariatId={act.publisherSecretariatId}
+                          onChange={patch => {
+                            const updated = [...(editingInitiative.activities || [])];
+                            updated[idx] = { ...updated[idx], ...patch };
+                            setEditingInitiative({ ...editingInitiative, activities: updated });
+                          }}
+                          secretariats={secretariats}
+                          secretariatMembers={secretariatMembers}
+                          secretariatLeaders={secretariatLeaders}
+                          partyLeaders={partyLeaders}
+                          authorHeading="القائم بالنشاط"
+                          publisherHeading="مسؤول النشر (أمانة الإعلام)"
+                        />
                       </div>
                     ))}
                   </div>
@@ -7346,34 +7547,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              {/* Publisher / Author Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    اسم ناشر الخبر / المحرر
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أ. معاذ محمود / الأمانة الإعلامية"
-                    value={editingNews.authorName || ''}
-                    onChange={e => setEditingNews({ ...editingNews, authorName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    المنصب أو الصفة الحزبية
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أمين التنظيم / أمين الإعلام / عضو هيئة المكتب"
-                    value={editingNews.authorPosition || ''}
-                    onChange={e => setEditingNews({ ...editingNews, authorPosition: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-              </div>
+              {/* News Dual Attribution (Author vs Media Secretariat Publisher) */}
+              <PersonAttributionFields
+                authorName={editingNews.authorName}
+                authorPosition={editingNews.authorPosition}
+                authorSecretariatId={editingNews.authorSecretariatId}
+                publisherName={editingNews.publisherName}
+                publisherPosition={editingNews.publisherPosition}
+                publisherSecretariatId={editingNews.publisherSecretariatId}
+                onChange={patch => setEditingNews({ ...editingNews, ...patch })}
+                secretariats={secretariats}
+                secretariatMembers={secretariatMembers}
+                secretariatLeaders={secretariatLeaders}
+                partyLeaders={partyLeaders}
+                authorHeading="كاتب / مُعد الخبر أو المحرر"
+                publisherHeading="مسؤول النشر والرفع (أمانة الإعلام)"
+              />
 
               {/* News Attached Video */}
               <VideoUploadField
@@ -7536,34 +7725,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </div>
               </div>
 
-              {/* Event Author / Responsible Person Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    اسم القائم بالفعالية أو النشاط / الناشر
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أ. فلان الفلاني"
-                    value={editingEvent.authorName || ''}
-                    onChange={e => setEditingEvent({ ...editingEvent, authorName: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-stone-800 mb-1">
-                    المنصب أو الصفة الحزبية
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: أمين التنظيم / أمين الشباب"
-                    value={editingEvent.authorPosition || ''}
-                    onChange={e => setEditingEvent({ ...editingEvent, authorPosition: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
-                  />
-                </div>
-              </div>
+              {/* Event Dual Attribution (Executor vs Media Publisher) */}
+              <PersonAttributionFields
+                authorName={editingEvent.authorName}
+                authorPosition={editingEvent.authorPosition}
+                authorSecretariatId={editingEvent.authorSecretariatId}
+                publisherName={editingEvent.publisherName}
+                publisherPosition={editingEvent.publisherPosition}
+                publisherSecretariatId={editingEvent.publisherSecretariatId}
+                onChange={patch => setEditingEvent({ ...editingEvent, ...patch })}
+                secretariats={secretariats}
+                secretariatMembers={secretariatMembers}
+                secretariatLeaders={secretariatLeaders}
+                partyLeaders={partyLeaders}
+                authorHeading="القائم بالفعالية أو النشاط"
+                publisherHeading="مسؤول النشر والتغطية (أمانة الإعلام)"
+              />
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">وصف الفعالية</label>
@@ -7668,7 +7845,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       {/* MEDIA MODAL */}
       {showMediaModal && editingMedia && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 text-right space-y-4 shadow-2xl">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 text-right space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-black text-stone-900">
               {editingMedia.id ? 'تعديل الوسيط' : 'إضافة صورة أو فيديو للمعرض'}
             </h3>
@@ -7869,6 +8046,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
+
+              <PersonAttributionFields
+                authorName={editingMedia.authorName}
+                authorPosition={editingMedia.authorPosition}
+                authorSecretariatId={editingMedia.authorSecretariatId}
+                publisherName={editingMedia.publisherName}
+                publisherPosition={editingMedia.publisherPosition}
+                publisherSecretariatId={editingMedia.publisherSecretariatId}
+                onChange={patch => setEditingMedia({ ...editingMedia, ...patch })}
+                secretariats={secretariats}
+                secretariatMembers={secretariatMembers}
+                secretariatLeaders={secretariatLeaders}
+                partyLeaders={partyLeaders}
+                authorHeading="المصور / مُعد المحتوى"
+                publisherHeading="مسؤول الرفع والنشر (أمانة الإعلام)"
+              />
             </div>
 
             {modalError && (

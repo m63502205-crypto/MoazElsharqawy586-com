@@ -379,9 +379,9 @@ export function getPersonContributions(
         date: item.publishDate,
         contributionRole:
           isAuthor && isPublisher
-            ? 'كتابة وإعداد ونشر الخبر'
+            ? 'بقلم ونشر الخبر'
             : isAuthor
-            ? 'كتابة / إعداد الخبر'
+            ? 'بقلم'
             : 'نشر ورفع الخبر (أمانة الإعلام)',
         positionUsed: isAuthor ? item.authorPosition : item.publisherPosition,
         secretariatId: isAuthor

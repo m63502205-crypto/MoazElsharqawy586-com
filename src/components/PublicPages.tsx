@@ -50,7 +50,8 @@ import {
   Radio,
   ShieldCheck,
   Volume2,
-  VolumeX
+  VolumeX,
+  PenTool
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
@@ -74,6 +75,13 @@ function normalizeArabicDigits(val: string): string {
   return val
     .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
     .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+}
+
+function normalizeLocationHref(url?: string): string | null {
+  const raw = (url || '').trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
 }
 
 function extractDobFromNationalId(nid: string): string | null {
@@ -731,6 +739,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         className={`flex flex-wrap items-center justify-between gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer ${wrapperClass}`}
       >
         <div className="flex flex-wrap items-center gap-1 min-w-0">
+          {tone === 'author' && label.includes('بقلم') && (
+            <PenTool className={`w-3 h-3 shrink-0 ${dark ? 'text-amber-300' : 'text-amber-700'}`} />
+          )}
           <span className="font-bold opacity-80">{label}:</span>
           {name ? (
             <button
@@ -1428,57 +1439,131 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {data.initiatives.map(init => (
-                  <div
-                    key={init.id}
-                    onClick={() => openInitiative(init.slug)}
-                    className="bg-stone-900/90 border border-white/10 rounded-2xl p-6 hover:border-amber-500/40 transition-all cursor-pointer group flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between text-xs text-stone-400 mb-3">
-                        <span className="font-bold text-amber-300">
-                          {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة')}
-                        </span>
-                        <span>بدأت: {init.startDate}</span>
-                      </div>
+                {data.initiatives.map(init => {
+                  const initImgs = Array.from(
+                    new Set([
+                      ...(init.coverUrl ? [init.coverUrl] : []),
+                      ...(init.galleryImages || []),
+                      ...(init.activities || []).map(a => a.imageUrl || ''),
+                      ...(init.logoUrl ? [init.logoUrl] : [])
+                    ])
+                  ).filter(Boolean);
+                  const initLeadImg = initImgs[0];
+                  const initLocationHref = normalizeLocationHref(init.locationUrl);
 
-                      <h3 className="text-xl font-bold text-white group-hover:text-amber-300 transition-colors mb-2">
-                        {init.title}
-                      </h3>
-                      <p className="text-xs sm:text-sm text-stone-300 leading-relaxed line-clamp-3 mb-4">
-                        {init.description}
-                      </p>
-                    </div>
-
-                    <div>
-                      {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
-                        <div className="mb-3 pt-2.5 border-t border-white/10 space-y-1.5">
-                          {renderPersonBadge({
-                            label: 'إعداد وتنفيذ',
-                            name: init.authorName,
-                            position: init.authorPosition,
-                            secretariatId: init.authorSecretariatId,
-                            dark: true,
-                            tone: 'author'
-                          })}
-                          {renderPersonBadge({
-                            label: 'نشر ورفع (أمانة الإعلام)',
-                            name: init.publisherName,
-                            position: init.publisherPosition,
-                            secretariatId: init.publisherSecretariatId,
-                            dark: true,
-                            tone: 'publisher'
-                          })}
+                  return (
+                    <div
+                      key={init.id}
+                      onClick={() => openInitiative(init.slug)}
+                      className="bg-stone-900/90 border border-white/10 rounded-2xl overflow-hidden hover:border-amber-500/40 transition-all cursor-pointer group flex flex-col justify-between"
+                    >
+                      <div>
+                        <div
+                          className="aspect-video bg-stone-950/80 overflow-hidden relative cursor-pointer"
+                          onClick={(e) => {
+                            if (initImgs.length > 0) {
+                              e.stopPropagation();
+                              openLightbox(initImgs, 0, init.title);
+                            }
+                          }}
+                        >
+                          <img
+                            src={initLeadImg || data.settings.officialLogo}
+                            alt={init.title}
+                            className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                              initLeadImg ? 'object-cover' : 'object-contain p-6 opacity-85'
+                            }`}
+                            referrerPolicy="no-referrer"
+                          />
+                          {initImgs.length > 0 && (
+                            <span className="absolute bottom-2.5 left-2.5 bg-black/70 text-white text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1">
+                              <Maximize2 className="w-3 h-3 text-amber-400" />
+                              <span>{initImgs.length > 1 ? `${initImgs.length} صور` : 'تكبير الصورة'}</span>
+                            </span>
+                          )}
                         </div>
-                      )}
 
-                      <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
-                        <span>استعراض أنشطة وفعاليات المبادرة</span>
-                        <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+                        <div className="p-6 pb-4">
+                          <div className="flex items-center justify-between text-xs text-stone-400 mb-3">
+                            <span className="font-bold text-amber-300">
+                              {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة')}
+                            </span>
+                            <span>بدأت: {init.startDate}</span>
+                          </div>
+
+                          <h3 className="text-xl font-bold text-white group-hover:text-amber-300 transition-colors mb-2">
+                            {init.title}
+                          </h3>
+                          <p className="text-xs sm:text-sm text-stone-300 leading-relaxed line-clamp-3">
+                            {init.description}
+                          </p>
+
+                          {(init.venue || initLocationHref) && (
+                            <div className="mt-3 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
+                              {init.venue && (
+                                <span className="flex items-center gap-1.5 text-stone-300">
+                                  <MapPin className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span>{init.venue}</span>
+                                </span>
+                              )}
+                              {initLocationHref && (
+                                <a
+                                  href={initLocationHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={e => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 font-bold bg-amber-500/15 border border-amber-400/30 px-2.5 py-1 rounded-lg transition-colors"
+                                >
+                                  <MapPin className="w-3 h-3" />
+                                  <span>اللوكيشن على الخريطة</span>
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="px-6 pb-6 space-y-3">
+                        {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                          <div className="pt-2.5 border-t border-white/10 space-y-1.5">
+                            {renderPersonBadge({
+                              label: 'إعداد وتنفيذ',
+                              name: init.authorName,
+                              position: init.authorPosition,
+                              secretariatId: init.authorSecretariatId,
+                              dark: true,
+                              tone: 'author'
+                            })}
+                            {renderPersonBadge({
+                              label: 'نشر ورفع (أمانة الإعلام)',
+                              name: init.publisherName,
+                              position: init.publisherPosition,
+                              secretariatId: init.publisherSecretariatId,
+                              dark: true,
+                              tone: 'publisher'
+                            })}
+                          </div>
+                        )}
+
+                        <SocialShareButtons
+                          title={init.title}
+                          summary={init.description}
+                          itemType="initiative"
+                          itemId={init.slug || init.id}
+                          imageUrl={initLeadImg}
+                          compact
+                          dark
+                        />
+
+                        <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
+                          <span>استعراض أنشطة وفعاليات المبادرة</span>
+                          <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </section>
@@ -1573,7 +1658,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
                             <div className="pt-2 border-t border-stone-200/70 space-y-1.5">
                               {renderPersonBadge({
-                                label: 'كتابة / إعداد',
+                                label: 'بقلم',
                                 name: item.authorName,
                                 position: item.authorPosition,
                                 secretariatId: item.authorSecretariatId,
@@ -1634,65 +1719,127 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <p className="text-xs text-stone-500 text-center py-8">
                       لا توجد فعاليات مجدولة حالياً.
                     </p>
-                  ) : data.events.slice(0, 3).map(event => (
-                    <div
-                      key={event.id}
-                      className="bg-stone-50/70 rounded-xl border border-stone-200/90 p-4 hover:bg-white hover:shadow-md transition-all flex flex-col justify-between"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
-                          <span className="font-bold text-red-700">
-                            {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                          </span>
-                          <span className="font-bold text-amber-800">
-                            {event.status === 'upcoming' ? 'قادمة' : (event.status === 'completed' ? 'منتهية' : 'جارية')}
-                          </span>
+                  ) : data.events.slice(0, 3).map(event => {
+                    const eventImgs = Array.from(
+                      new Set([
+                        ...(event.coverUrl ? [event.coverUrl] : []),
+                        ...(event.coverImage ? [event.coverImage] : []),
+                        ...(event.images || []),
+                        ...(event.galleryImages || [])
+                      ])
+                    ).filter(Boolean);
+                    const eventLeadImg = eventImgs[0];
+                    const eventLocationHref = normalizeLocationHref(event.locationUrl);
+
+                    return (
+                      <div
+                        key={event.id}
+                        onClick={() => {
+                          if (onNavigate) {
+                            onNavigate('events', { eventId: event.id });
+                          } else {
+                            setCurrentView('events');
+                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }
+                        }}
+                        className="bg-stone-50/70 rounded-xl border border-stone-200/90 p-4 hover:bg-white hover:shadow-md transition-all flex flex-col justify-between cursor-pointer group"
+                      >
+                        <div className="flex flex-col sm:flex-row gap-4">
+                          <div
+                            className="w-full sm:w-28 h-36 sm:h-28 rounded-lg overflow-hidden shrink-0 bg-stone-100 border border-stone-200/70 relative"
+                            onClick={(e) => {
+                              if (eventImgs.length > 0) {
+                                e.stopPropagation();
+                                openLightbox(eventImgs, 0, event.title);
+                              }
+                            }}
+                          >
+                            <img
+                              src={eventLeadImg || data.settings.officialLogo}
+                              alt={event.title}
+                              className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                                eventLeadImg ? 'object-cover' : 'object-contain p-2 bg-stone-100'
+                              }`}
+                              referrerPolicy="no-referrer"
+                            />
+                            {eventImgs.length > 1 && (
+                              <span className="absolute bottom-1.5 left-1.5 bg-black/70 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                {eventImgs.length} صور
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 text-xs text-stone-500 mb-1">
+                              <span className="font-bold text-red-700">
+                                {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                              </span>
+                              <span className="font-bold text-amber-800 shrink-0">
+                                {event.status === 'upcoming' ? 'قادمة' : (event.status === 'completed' ? 'منتهية' : 'جارية')}
+                              </span>
+                            </div>
+                            <h4 className="font-bold text-stone-900 text-sm mb-1 group-hover:text-red-700 transition-colors">
+                              {event.title}
+                            </h4>
+                            <p className="text-xs text-stone-600 line-clamp-2">
+                              {event.description}
+                            </p>
+                          </div>
                         </div>
-                        <h4 className="font-bold text-stone-900 text-sm mb-1">
-                          {event.title}
-                        </h4>
-                        <p className="text-xs text-stone-600 line-clamp-2">
-                          {event.description}
-                        </p>
-                      </div>
 
-                      <div className="mt-3 pt-2 border-t border-stone-200/70 flex items-center justify-between text-[11px] text-stone-500">
-                        <span className="flex items-center gap-1">
-                          <MapPin className="w-3.5 h-3.5 text-stone-400" />
-                          <span>{event.venue}</span>
-                        </span>
-                        <span className="font-medium text-stone-700">{event.organizer}</span>
-                      </div>
-
-                      {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
-                        <div className="mt-2 pt-2 border-t border-stone-200/70 space-y-1.5">
-                          {renderPersonBadge({
-                            label: 'القائم بالفعالية',
-                            name: event.authorName,
-                            position: event.authorPosition,
-                            secretariatId: event.authorSecretariatId,
-                            tone: 'author'
-                          })}
-                          {renderPersonBadge({
-                            label: 'نشر (أمانة الإعلام)',
-                            name: event.publisherName,
-                            position: event.publisherPosition,
-                            secretariatId: event.publisherSecretariatId,
-                            tone: 'publisher'
-                          })}
+                        <div className="mt-3 pt-2.5 border-t border-stone-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-600">
+                          <span className="flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5 text-red-700 shrink-0" />
+                            <span>{event.venue}</span>
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {eventLocationHref && (
+                              <a
+                                href={eventLocationHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-amber-800 hover:text-amber-900 font-bold bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md transition-colors"
+                              >
+                                <MapPin className="w-3 h-3" />
+                                <span>رابط اللوكيشن</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                            <span className="font-medium text-stone-700">{event.organizer}</span>
+                          </div>
                         </div>
-                      )}
 
-                      <SocialShareButtons
-                        title={event.title}
-                        summary={event.description}
-                        itemType="event"
-                        itemId={event.id}
-                        imageUrl={event.coverUrl}
-                        compact
-                      />
-                    </div>
-                  ))}
+                        {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
+                          <div className="mt-2 pt-2 border-t border-stone-200/70 space-y-1.5">
+                            {renderPersonBadge({
+                              label: 'القائم بالفعالية',
+                              name: event.authorName,
+                              position: event.authorPosition,
+                              secretariatId: event.authorSecretariatId,
+                              tone: 'author'
+                            })}
+                            {renderPersonBadge({
+                              label: 'نشر (أمانة الإعلام)',
+                              name: event.publisherName,
+                              position: event.publisherPosition,
+                              secretariatId: event.publisherSecretariatId,
+                              tone: 'publisher'
+                            })}
+                          </div>
+                        )}
+
+                        <SocialShareButtons
+                          title={event.title}
+                          summary={event.description}
+                          itemType="event"
+                          itemId={event.id}
+                          imageUrl={eventLeadImg}
+                          compact
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2503,7 +2650,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             }}
                             className="text-right bg-white/90 hover:bg-white border border-stone-200 hover:border-red-500 rounded-xl p-2.5 transition-colors cursor-pointer"
                           >
-                            <div className="text-[10px] font-bold text-red-700">{c.contributionRole}</div>
+                            <div className="text-[10px] font-bold text-red-700 flex items-center gap-1">
+                              {c.contributionRole.includes('بقلم') && <PenTool className="w-3 h-3 shrink-0 text-amber-700" />}
+                              <span>{c.contributionRole}</span>
+                            </div>
                             <div className="text-xs font-black text-stone-900 truncate mt-0.5">{c.title}</div>
                             {c.date && <div className="text-[10px] text-stone-400 mt-0.5">{c.date}</div>}
                           </button>
@@ -2954,7 +3104,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     {(item.authorName || item.publisherName) && (
                       <div className="space-y-1 pt-1">
                         {renderPersonBadge({
-                          label: 'كتابة / إعداد',
+                          label: 'بقلم',
                           name: item.authorName,
                           position: item.authorPosition,
                           secretariatId: item.authorSecretariatId,
@@ -3031,76 +3181,149 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {data.initiatives.map(init => (
-            <div
-              key={init.id}
-              onClick={() => openInitiative(init.slug)}
-              className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="p-6 sm:p-8 space-y-4 text-right">
-                <div className="flex items-center justify-between">
-                  <span className={`text-xs px-3 py-1 rounded-full font-bold ${
-                    init.status === 'active'
-                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                      : 'bg-stone-100 text-stone-600'
-                  }`}>
-                    {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة مؤقتاً')}
-                  </span>
-                  <span className="text-xs text-stone-400">
-                    انطلقت: {init.startDate}
-                  </span>
+          {data.initiatives.map(init => {
+            const initImgs = Array.from(
+              new Set([
+                ...(init.coverUrl ? [init.coverUrl] : []),
+                ...(init.galleryImages || []),
+                ...(init.activities || []).map(a => a.imageUrl || ''),
+                ...(init.logoUrl ? [init.logoUrl] : [])
+              ])
+            ).filter(Boolean);
+            const initLeadImg = initImgs[0];
+            const initLocationHref = normalizeLocationHref(init.locationUrl);
+
+            return (
+              <div
+                key={init.id}
+                onClick={() => openInitiative(init.slug)}
+                className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div
+                    className="aspect-video bg-stone-100 overflow-hidden relative"
+                    onClick={(e) => {
+                      if (initImgs.length > 0) {
+                        e.stopPropagation();
+                        openLightbox(initImgs, 0, init.title);
+                      }
+                    }}
+                  >
+                    <img
+                      src={initLeadImg || data.settings.officialLogo}
+                      alt={init.title}
+                      className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                        initLeadImg ? 'object-cover' : 'object-contain p-6 bg-stone-50'
+                      }`}
+                      referrerPolicy="no-referrer"
+                    />
+                    {initImgs.length > 0 && (
+                      <span className="absolute bottom-3 left-3 bg-black/70 text-white text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1.5">
+                        <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{initImgs.length > 1 ? `${initImgs.length} صور` : 'تكبير الصورة'}</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="p-6 sm:p-8 space-y-4 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs px-3 py-1 rounded-full font-bold ${
+                        init.status === 'active'
+                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                          : 'bg-stone-100 text-stone-600'
+                      }`}>
+                        {init.status === 'active' ? 'مبادرة نشطة' : (init.status === 'completed' ? 'مكتملة' : 'متوقفة مؤقتاً')}
+                      </span>
+                      <span className="text-xs text-stone-400">
+                        انطلقت: {init.startDate}
+                      </span>
+                    </div>
+
+                    <h2 className="text-2xl font-black text-stone-900 group-hover:text-red-700 transition-colors">
+                      {init.title}
+                    </h2>
+
+                    <p className="text-xs sm:text-sm text-stone-600 leading-relaxed line-clamp-3">
+                      {init.description}
+                    </p>
+
+                    {(init.venue || initLocationHref) && (
+                      <div className="pt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-700">
+                        {init.venue && (
+                          <span className="flex items-center gap-1.5">
+                            <MapPin className="w-4 h-4 text-red-700 shrink-0" />
+                            <span><strong>العنوان:</strong> {init.venue}</span>
+                          </span>
+                        )}
+                        {initLocationHref && (
+                          <a
+                            href={initLocationHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="inline-flex items-center gap-1.5 text-amber-800 hover:text-amber-900 font-bold bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg transition-colors"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            <span>فتح اللوكيشن على الخريطة</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {init.goals && init.goals.length > 0 && (
+                      <div className="space-y-1.5 pt-2">
+                        <span className="text-xs font-bold text-stone-800">أبرز الأهداف:</span>
+                        <ul className="text-xs text-stone-600 space-y-1">
+                          {init.goals.slice(0, 2).map((g, i) => (
+                            <li key={i} className="flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>{g}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <h2 className="text-2xl font-black text-stone-900 group-hover:text-red-700 transition-colors">
-                  {init.title}
-                </h2>
+                <div className="p-6 pt-0 space-y-3">
+                  {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                    <div className="pt-3 border-t border-stone-100 space-y-1.5">
+                      {renderPersonBadge({
+                        label: 'إعداد وتنفيذ',
+                        name: init.authorName,
+                        position: init.authorPosition,
+                        secretariatId: init.authorSecretariatId,
+                        tone: 'author'
+                      })}
+                      {renderPersonBadge({
+                        label: 'نشر (أمانة الإعلام)',
+                        name: init.publisherName,
+                        position: init.publisherPosition,
+                        secretariatId: init.publisherSecretariatId,
+                        tone: 'publisher'
+                      })}
+                    </div>
+                  )}
 
-                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed line-clamp-3">
-                  {init.description}
-                </p>
+                  <SocialShareButtons
+                    title={init.title}
+                    summary={init.description}
+                    itemType="initiative"
+                    itemId={init.slug || init.id}
+                    imageUrl={initLeadImg}
+                    compact
+                  />
 
-                {init.goals && init.goals.length > 0 && (
-                  <div className="space-y-1.5 pt-2">
-                    <span className="text-xs font-bold text-stone-800">أبرز الأهداف:</span>
-                    <ul className="text-xs text-stone-600 space-y-1">
-                      {init.goals.slice(0, 2).map((g, i) => (
-                        <li key={i} className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          <span>{g}</span>
-                        </li>
-                      ))}
-                    </ul>
+                  <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold">
+                    <span>استعراض أنشطة وفعاليات المبادرة كاملة</span>
+                    <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
                   </div>
-                )}
-              </div>
-
-              <div className="p-6 pt-0 space-y-3">
-                {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
-                  <div className="pt-3 border-t border-stone-100 space-y-1.5">
-                    {renderPersonBadge({
-                      label: 'إعداد وتنفيذ',
-                      name: init.authorName,
-                      position: init.authorPosition,
-                      secretariatId: init.authorSecretariatId,
-                      tone: 'author'
-                    })}
-                    {renderPersonBadge({
-                      label: 'نشر (أمانة الإعلام)',
-                      name: init.publisherName,
-                      position: init.publisherPosition,
-                      secretariatId: init.publisherSecretariatId,
-                      tone: 'publisher'
-                    })}
-                  </div>
-                )}
-
-                <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold">
-                  <span>استعراض أنشطة وفعاليات المبادرة كاملة</span>
-                  <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -3111,6 +3334,16 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // -------------------------------------------------------------
   if (currentView === 'initiative-detail') {
     const init = data.initiatives.find(i => i.slug === selectedSlug || i.id === selectedSlug) || data.initiatives[0];
+    const allInitImgs = Array.from(
+      new Set([
+        ...(init.coverUrl ? [init.coverUrl] : []),
+        ...(init.galleryImages || []),
+        ...(init.activities || []).map(a => a.imageUrl || ''),
+        ...(init.logoUrl ? [init.logoUrl] : [])
+      ])
+    ).filter(Boolean);
+    const initLeadImg = allInitImgs[0];
+    const initLocationHref = normalizeLocationHref(init.locationUrl);
 
     return (
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10">
@@ -3122,85 +3355,187 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <span>العودة لكافة المبادرات</span>
         </button>
 
-        <div className="bg-white rounded-3xl border border-stone-200 p-8 sm:p-12 shadow-sm space-y-8 text-right">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
-              {init.status === 'active' ? 'مبادرة نشطة ومستمرة' : 'مبادرة'}
-            </span>
-            <span className="text-xs text-stone-400">
-              تاريخ البداية: {init.startDate}
-            </span>
-          </div>
-
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
-            {init.title}
-          </h1>
-
-          <p className="text-sm sm:text-base text-stone-700 leading-relaxed">
-            {init.description}
-          </p>
-
-          {/* Goals */}
-          {init.goals && init.goals.length > 0 && (
-            <div className="space-y-3 pt-4 border-t border-stone-100">
-              <h3 className="font-extrabold text-stone-900 text-lg">
-                أهداف المبادرة:
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {init.goals.map((goal, idx) => (
-                  <div key={idx} className="flex items-start gap-2.5 bg-stone-50 p-3.5 rounded-xl border border-stone-200">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span className="text-xs sm:text-sm font-medium text-stone-800">{goal}</span>
-                  </div>
-                ))}
+        <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden shadow-sm text-right">
+          {initLeadImg && (
+            <div
+              className="aspect-video max-h-[420px] w-full bg-stone-100 overflow-hidden relative cursor-pointer group"
+              onClick={() => openLightbox(allInitImgs, 0, init.title)}
+            >
+              <img
+                src={initLeadImg}
+                alt={init.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <span className="bg-black/75 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-2">
+                  <Maximize2 className="w-4 h-4 text-amber-400" />
+                  <span>عرض الصور بالحجم الكامل ({allInitImgs.length})</span>
+                </span>
               </div>
             </div>
           )}
 
-          {/* Activities Timeline */}
-          {init.activities && init.activities.length > 0 && (
-            <div className="space-y-4 pt-4 border-t border-stone-100">
-              <h3 className="font-extrabold text-stone-900 text-lg">
-                سجل الأنشطة والمراحل الميدانية:
-              </h3>
-              <div className="space-y-4">
-                {init.activities.map((act, i) => (
-                  <div key={i} className="border-r-4 border-amber-600 pr-4 py-1 space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-stone-900">{act.title}</span>
-                      <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded">
-                        {act.date}
-                      </span>
+          <div className="p-8 sm:p-12 space-y-8">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
+                {init.status === 'active' ? 'مبادرة نشطة ومستمرة' : 'مبادرة'}
+              </span>
+              <span className="text-xs text-stone-400">
+                تاريخ البداية: {init.startDate}
+              </span>
+            </div>
+
+            <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
+              {init.title}
+            </h1>
+
+            <p className="text-sm sm:text-base text-stone-700 leading-relaxed">
+              {init.description}
+            </p>
+
+            {(init.venue || initLocationHref) && (
+              <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm">
+                {init.venue && (
+                  <div className="flex items-center gap-2 text-stone-800">
+                    <MapPin className="w-4 h-4 text-red-700 shrink-0" />
+                    <span><strong>العنوان / المكان:</strong> {init.venue}</span>
+                  </div>
+                )}
+                {initLocationHref && (
+                  <a
+                    href={initLocationHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition-colors shadow-xs"
+                  >
+                    <MapPin className="w-4 h-4" />
+                    <span>فتح اللوكيشن على خرائط جوجل</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+            )}
+
+            {/* Goals */}
+            {init.goals && init.goals.length > 0 && (
+              <div className="space-y-3 pt-4 border-t border-stone-100">
+                <h3 className="font-extrabold text-stone-900 text-lg">
+                  أهداف المبادرة:
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {init.goals.map((goal, idx) => (
+                    <div key={idx} className="flex items-start gap-2.5 bg-stone-50 p-3.5 rounded-xl border border-stone-200">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span className="text-xs sm:text-sm font-medium text-stone-800">{goal}</span>
                     </div>
-                    <p className="text-xs text-stone-600">{act.description}</p>
-                    {(act.authorName || act.authorPosition || act.publisherName || act.publisherPosition) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                        {renderPersonBadge({
-                          label: 'القائم بالنشاط',
-                          name: act.authorName,
-                          position: act.authorPosition,
-                          secretariatId: act.authorSecretariatId,
-                          tone: 'author'
-                        })}
-                        {renderPersonBadge({
-                          label: 'نشر (أمانة الإعلام)',
-                          name: act.publisherName,
-                          position: act.publisherPosition,
-                          secretariatId: act.publisherSecretariatId,
-                          tone: 'publisher'
-                        })}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Multi-image Gallery */}
-          {((init.galleryImages && init.galleryImages.length > 0) || init.coverUrl) && (() => {
-            const allInitImgs = Array.from(new Set([...(init.coverUrl ? [init.coverUrl] : []), ...(init.galleryImages || [])])).filter(Boolean);
-            return (
+            {/* Activities Timeline */}
+            {init.activities && init.activities.length > 0 && (
+              <div className="space-y-4 pt-4 border-t border-stone-100">
+                <h3 className="font-extrabold text-stone-900 text-lg">
+                  سجل الأنشطة والمراحل الميدانية:
+                </h3>
+                <div className="space-y-4">
+                  {init.activities.map((act, i) => {
+                    const actLocHref = normalizeLocationHref(act.locationUrl);
+                    const actLightboxIndex = act.imageUrl ? Math.max(0, allInitImgs.indexOf(act.imageUrl)) : 0;
+
+                    return (
+                      <div key={i} className="border-r-4 border-amber-600 bg-stone-50/70 rounded-l-2xl p-4 sm:p-5 space-y-3">
+                        <div className="flex flex-col md:flex-row gap-4 items-start">
+                          {act.imageUrl && (
+                            <div
+                              className="w-full md:w-56 aspect-video rounded-xl overflow-hidden border border-stone-200 shrink-0 cursor-pointer relative group bg-stone-100"
+                              onClick={() => openLightbox(allInitImgs.length > 0 ? allInitImgs : [act.imageUrl!], actLightboxIndex, `${act.title} - ${init.title}`)}
+                            >
+                              <img
+                                src={act.imageUrl}
+                                alt={act.title || `نشاط ${i + 1}`}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                <Maximize2 className="w-4 h-4" />
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex-1 space-y-2 min-w-0 w-full">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-extrabold text-stone-900">{act.title}</span>
+                              <span className="text-[11px] text-amber-800 font-semibold bg-amber-100/80 px-2.5 py-0.5 rounded-md">
+                                {act.date}
+                              </span>
+                            </div>
+
+                            <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">{act.description}</p>
+
+                            {(act.venue || actLocHref) && (
+                              <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-stone-700">
+                                {act.venue && (
+                                  <span className="flex items-center gap-1.5">
+                                    <MapPin className="w-3.5 h-3.5 text-red-700 shrink-0" />
+                                    <span><strong>المكان:</strong> {act.venue}</span>
+                                  </span>
+                                )}
+                                {actLocHref && (
+                                  <a
+                                    href={actLocHref}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 text-amber-800 hover:text-amber-900 font-bold bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg transition-colors"
+                                  >
+                                    <MapPin className="w-3 h-3" />
+                                    <span>فتح اللوكيشن على الخريطة</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            {(act.authorName || act.authorPosition || act.publisherName || act.publisherPosition) && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                                {renderPersonBadge({
+                                  label: 'القائم بالنشاط',
+                                  name: act.authorName,
+                                  position: act.authorPosition,
+                                  secretariatId: act.authorSecretariatId,
+                                  tone: 'author'
+                                })}
+                                {renderPersonBadge({
+                                  label: 'نشر (أمانة الإعلام)',
+                                  name: act.publisherName,
+                                  position: act.publisherPosition,
+                                  secretariatId: act.publisherSecretariatId,
+                                  tone: 'publisher'
+                                })}
+                              </div>
+                            )}
+
+                            <SocialShareButtons
+                              title={`${act.title || 'نشاط ميداني'} – ${init.title}`}
+                              summary={act.description}
+                              itemType="initiative"
+                              itemId={init.slug || init.id}
+                              imageUrl={act.imageUrl || initLeadImg}
+                              compact
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Multi-image Gallery */}
+            {allInitImgs.length > 0 && (
               <div className="space-y-4 pt-4 border-t border-stone-100">
                 <h3 className="font-extrabold text-stone-900 text-lg flex items-center gap-2">
                   <ImageIcon className="w-5 h-5 text-amber-600" />
@@ -3226,27 +3561,35 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   ))}
                 </div>
               </div>
-            );
-          })()}
+            )}
 
-          {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
-            <div className="pt-4 border-t border-stone-200 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {renderPersonBadge({
-                label: 'القائم بالمبادرة / مُعدّها',
-                name: init.authorName,
-                position: init.authorPosition,
-                secretariatId: init.authorSecretariatId,
-                tone: 'author'
-              })}
-              {renderPersonBadge({
-                label: 'مسؤول النشر والرفع (أمانة الإعلام)',
-                name: init.publisherName,
-                position: init.publisherPosition,
-                secretariatId: init.publisherSecretariatId,
-                tone: 'publisher'
-              })}
-            </div>
-          )}
+            {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+              <div className="pt-4 border-t border-stone-200 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {renderPersonBadge({
+                  label: 'القائم بالمبادرة / مُعدّها',
+                  name: init.authorName,
+                  position: init.authorPosition,
+                  secretariatId: init.authorSecretariatId,
+                  tone: 'author'
+                })}
+                {renderPersonBadge({
+                  label: 'مسؤول النشر والرفع (أمانة الإعلام)',
+                  name: init.publisherName,
+                  position: init.publisherPosition,
+                  secretariatId: init.publisherSecretariatId,
+                  tone: 'publisher'
+                })}
+              </div>
+            )}
+
+            <SocialShareButtons
+              title={init.title}
+              summary={init.description}
+              itemType="initiative"
+              itemId={init.slug || init.id}
+              imageUrl={initLeadImg}
+            />
+          </div>
         </div>
       </div>
     );
@@ -3341,7 +3684,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
                     <div className="pt-2 border-t border-stone-100 space-y-1.5">
                       {renderPersonBadge({
-                        label: 'كتابة / إعداد',
+                        label: 'بقلم',
                         name: item.authorName,
                         position: item.authorPosition,
                         secretariatId: item.authorSecretariatId,
@@ -3436,121 +3779,169 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         </div>
 
         <div className="space-y-6">
-          {filteredEvents.map(event => (
-            <div
-              key={event.id}
-              className={`bg-white rounded-2xl border p-6 sm:p-8 shadow-xs hover:shadow-md transition-all text-right space-y-4 ${
-                selectedEventId === event.id
-                  ? 'border-amber-500 ring-2 ring-amber-400/30'
-                  : 'border-stone-200'
-              }`}
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-4">
-                <div>
-                  <span className={`text-[11px] font-bold px-2.5 py-1 rounded-md ${
-                    event.status === 'upcoming'
-                      ? 'bg-amber-100 text-amber-900'
-                      : 'bg-stone-100 text-stone-700'
-                  }`}>
-                    {event.status === 'upcoming' ? 'فعالية قادمة' : (event.status === 'completed' ? 'فعالية منتهية' : 'جارية')}
-                  </span>
-                  <h3 className="text-xl sm:text-2xl font-black text-stone-900 mt-2">
-                    {event.title}
-                  </h3>
-                </div>
+          {filteredEvents.map(event => {
+            const allEventImgs = Array.from(
+              new Set([
+                ...(event.coverUrl ? [event.coverUrl] : []),
+                ...(event.coverImage ? [event.coverImage] : []),
+                ...(event.images || []),
+                ...(event.galleryImages || [])
+              ])
+            ).filter(Boolean);
+            const leadEventImg = allEventImgs[0];
+            const eventLocationHref = normalizeLocationHref(event.locationUrl);
 
-                <div className="text-left sm:text-right">
-                  <div className="text-xs font-bold text-red-700">
-                    {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                  </div>
-                  <div className="text-xs text-stone-500 font-medium">
-                    الساعة: {new Date(event.dateTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">
-                {event.description}
-              </p>
-
-              <div className="flex flex-wrap items-center gap-6 pt-2 text-xs text-stone-600">
-                <div className="flex items-center gap-1.5">
-                  <MapPin className="w-4 h-4 text-red-700" />
-                  <span><strong>المكان:</strong> {event.venue}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 text-amber-600" />
-                  <span><strong>الجهة المنظمة:</strong> {event.organizer}</span>
-                </div>
-              </div>
-
-              {event.postReport && (
-                <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 text-xs text-stone-700 space-y-1">
-                  <span className="font-bold text-stone-900">تقرير ما بعد الفعالية:</span>
-                  <p>{event.postReport}</p>
-                </div>
-              )}
-
-              {/* Event Multi-image Gallery */}
-              {((event.images && event.images.length > 0) || (event.galleryImages && event.galleryImages.length > 0) || event.coverUrl || event.coverImage) && (() => {
-                const allEventImgs = Array.from(new Set([...(event.images || []), ...(event.galleryImages || []), ...(event.coverUrl ? [event.coverUrl] : []), ...(event.coverImage ? [event.coverImage] : [])])).filter(Boolean);
-                return (
-                  <div className="pt-3 border-t border-stone-100 space-y-2">
-                    <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
-                      <ImageIcon className="w-4 h-4 text-amber-600" />
-                      <span>تغطية وصور الفعالية ({allEventImgs.length} صورة)</span>
-                    </span>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                      {allEventImgs.map((img, i) => (
-                        <div
-                          key={i}
-                          className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
-                          onClick={() => openLightbox(allEventImgs, i, `${event.title} - تغطية مصورة`)}
-                        >
-                          <img
-                            src={img}
-                            alt={`${event.title} - صورة ${i + 1}`}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                            <Maximize2 className="w-4 h-4" />
-                          </div>
-                        </div>
-                      ))}
+            return (
+              <div
+                key={event.id}
+                className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all text-right ${
+                  selectedEventId === event.id
+                    ? 'border-amber-500 ring-2 ring-amber-400/30'
+                    : 'border-stone-200'
+                }`}
+              >
+                {leadEventImg && (
+                  <div
+                    className="aspect-video max-h-[380px] w-full bg-stone-100 overflow-hidden relative cursor-pointer group"
+                    onClick={() => openLightbox(allEventImgs, 0, `${event.title} - تغطية مصورة`)}
+                  >
+                    <img
+                      src={leadEventImg}
+                      alt={event.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span className="bg-black/75 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-2">
+                        <Maximize2 className="w-4 h-4 text-amber-400" />
+                        <span>{allEventImgs.length > 1 ? `عرض التغطية المصورة (${allEventImgs.length} صور)` : 'تكبير الصورة'}</span>
+                      </span>
                     </div>
                   </div>
-                );
-              })()}
+                )}
 
-              {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {renderPersonBadge({
-                    label: 'القائم بالفعالية',
-                    name: event.authorName,
-                    position: event.authorPosition,
-                    secretariatId: event.authorSecretariatId,
-                    tone: 'author'
-                  })}
-                  {renderPersonBadge({
-                    label: 'مسؤول النشر والتغطية (أمانة الإعلام)',
-                    name: event.publisherName,
-                    position: event.publisherPosition,
-                    secretariatId: event.publisherSecretariatId,
-                    tone: 'publisher'
-                  })}
+                <div className="p-6 sm:p-8 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-4">
+                    <div>
+                      <span className={`text-[11px] font-bold px-2.5 py-1 rounded-md ${
+                        event.status === 'upcoming'
+                          ? 'bg-amber-100 text-amber-900'
+                          : 'bg-stone-100 text-stone-700'
+                      }`}>
+                        {event.status === 'upcoming' ? 'فعالية قادمة' : (event.status === 'completed' ? 'فعالية منتهية' : 'جارية')}
+                      </span>
+                      <h3 className="text-xl sm:text-2xl font-black text-stone-900 mt-2">
+                        {event.title}
+                      </h3>
+                    </div>
+
+                    <div className="text-left sm:text-right">
+                      <div className="text-xs font-bold text-red-700">
+                        {new Date(event.dateTime).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                      </div>
+                      <div className="text-xs text-stone-500 font-medium">
+                        الساعة: {new Date(event.dateTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">
+                    {event.description}
+                  </p>
+
+                  <div className="bg-stone-50 border border-stone-200/80 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-4 text-xs text-stone-700">
+                    <div className="flex flex-wrap items-center gap-5">
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="w-4 h-4 text-red-700 shrink-0" />
+                        <span><strong>المكان / العنوان:</strong> {event.venue}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Building2 className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span><strong>الجهة المنظمة:</strong> {event.organizer}</span>
+                      </div>
+                    </div>
+
+                    {eventLocationHref && (
+                      <a
+                        href={eventLocationHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs transition-colors shadow-xs"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>فتح اللوكيشن على الخريطة</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+
+                  {event.postReport && (
+                    <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 text-xs text-stone-700 space-y-1">
+                      <span className="font-bold text-stone-900">تقرير ما بعد الفعالية:</span>
+                      <p>{event.postReport}</p>
+                    </div>
+                  )}
+
+                  {/* Event Multi-image Gallery */}
+                  {allEventImgs.length > 0 && (
+                    <div className="pt-3 border-t border-stone-100 space-y-2">
+                      <span className="text-xs font-bold text-stone-900 flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-amber-600" />
+                        <span>تغطية وصور الفعالية ({allEventImgs.length} صورة)</span>
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        {allEventImgs.map((img, i) => (
+                          <div
+                            key={i}
+                            className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                            onClick={() => openLightbox(allEventImgs, i, `${event.title} - تغطية مصورة`)}
+                          >
+                            <img
+                              src={img}
+                              alt={`${event.title} - صورة ${i + 1}`}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                              <Maximize2 className="w-4 h-4" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {(event.authorName || event.authorPosition || event.publisherName || event.publisherPosition) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {renderPersonBadge({
+                        label: 'القائم بالفعالية',
+                        name: event.authorName,
+                        position: event.authorPosition,
+                        secretariatId: event.authorSecretariatId,
+                        tone: 'author'
+                      })}
+                      {renderPersonBadge({
+                        label: 'مسؤول النشر والتغطية (أمانة الإعلام)',
+                        name: event.publisherName,
+                        position: event.publisherPosition,
+                        secretariatId: event.publisherSecretariatId,
+                        tone: 'publisher'
+                      })}
+                    </div>
+                  )}
+
+                  {/* Share Buttons for Event */}
+                  <SocialShareButtons
+                    title={event.title}
+                    summary={event.description}
+                    itemType="event"
+                    itemId={event.id}
+                    imageUrl={leadEventImg}
+                  />
                 </div>
-              )}
-
-              {/* Share Buttons for Event */}
-              <SocialShareButtons
-                title={event.title}
-                summary={event.description}
-                itemType="event"
-                itemId={event.id}
-              />
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -5110,7 +5501,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               {(selectedNews.authorName || selectedNews.authorPosition || selectedNews.publisherName || selectedNews.publisherPosition) && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                   {renderPersonBadge({
-                    label: 'كاتب / مُعد الخبر',
+                    label: 'بقلم',
                     name: selectedNews.authorName,
                     position: selectedNews.authorPosition,
                     secretariatId: selectedNews.authorSecretariatId,
@@ -5194,7 +5585,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           }}
                           className="w-full text-right bg-stone-50 hover:bg-amber-50 border border-stone-200 rounded-xl p-3 transition-colors cursor-pointer"
                         >
-                          <div className="text-[11px] font-bold text-red-700">{c.contributionRole}</div>
+                          <div className="text-[11px] font-bold text-red-700 flex items-center gap-1">
+                            {c.contributionRole.includes('بقلم') && <PenTool className="w-3 h-3 shrink-0 text-amber-700" />}
+                            <span>{c.contributionRole}</span>
+                          </div>
                           <div className="text-xs sm:text-sm font-black text-stone-900 mt-0.5">{c.title}</div>
                           {c.date && <div className="text-[10px] text-stone-400 mt-0.5">{c.date}</div>}
                         </button>

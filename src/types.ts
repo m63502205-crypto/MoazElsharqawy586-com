@@ -82,6 +82,8 @@ export interface Initiative {
   logoUrl?: string;
   coverUrl?: string;
   description: string;
+  venue?: string;
+  locationUrl?: string;
   goals: string[];
   startDate: string;
   endDate?: string;
@@ -90,6 +92,9 @@ export interface Initiative {
     title: string;
     date: string;
     description: string;
+    venue?: string;
+    locationUrl?: string;
+    imageUrl?: string;
     authorName?: string;
     authorPosition?: string;
     authorSecretariatId?: string;
@@ -138,6 +143,7 @@ export interface EventItem {
   description: string;
   dateTime: string;
   venue: string;
+  locationUrl?: string;
   organizer: string;
   authorName?: string;
   authorPosition?: string;

@@ -4,11 +4,12 @@ import { Share2, Check, Copy, MessageCircle, Twitter, Send } from 'lucide-react'
 interface SocialShareButtonsProps {
   title: string;
   summary?: string;
-  itemType: 'news' | 'event';
+  itemType: 'news' | 'event' | 'initiative';
   itemId?: string;
   imageUrl?: string;
   url?: string;
   compact?: boolean;
+  dark?: boolean;
 }
 
 export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
@@ -18,13 +19,14 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
   itemId,
   imageUrl,
   url,
-  compact = false
+  compact = false,
+  dark = false
 }) => {
   const [copied, setCopied] = useState(false);
 
-  // Compute shareable URL: use direct server preview URL so social bots (WhatsApp, Facebook) unfurl the exact news/event image
+  // Compute shareable URL: use direct server preview URL so social bots (WhatsApp, Facebook) unfurl the exact item image
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const routePath = itemType === 'news' ? 'news' : 'events';
+  const routePath = itemType === 'news' ? 'news' : itemType === 'initiative' ? 'initiative' : 'events';
   const shareUrl = url || (itemId ? `${baseUrl}/${routePath}/${itemId}` : `${baseUrl}/${routePath}`);
 
   const cleanTitle = title.trim();
@@ -78,11 +80,13 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
   if (compact) {
     return (
       <div
-        className="flex items-center gap-1.5 pt-2 border-t border-stone-100 text-xs"
+        className={`flex flex-wrap items-center gap-1.5 pt-2.5 border-t text-xs ${
+          dark ? 'border-white/10' : 'border-stone-100'
+        }`}
         onClick={e => e.stopPropagation()}
       >
-        <span className="text-[11px] font-bold text-stone-500 flex items-center gap-1">
-          <Share2 className="w-3.5 h-3.5 text-amber-600" />
+        <span className={`text-[11px] font-bold flex items-center gap-1 ${dark ? 'text-stone-300' : 'text-stone-500'}`}>
+          <Share2 className={`w-3.5 h-3.5 ${dark ? 'text-amber-400' : 'text-amber-600'}`} />
           <span>مشاركة:</span>
         </span>
 
@@ -91,7 +95,11 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           type="button"
           onClick={handleWhatsApp}
           title="مشاركة عبر واتساب"
-          className="w-7 h-7 rounded-lg bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 flex items-center justify-center transition-colors cursor-pointer border border-emerald-200"
+          className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
+            dark
+              ? 'bg-emerald-500/15 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-500/30'
+              : 'bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 border-emerald-200'
+          }`}
         >
           <MessageCircle className="w-3.5 h-3.5" />
         </button>
@@ -101,7 +109,11 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           type="button"
           onClick={handleFacebook}
           title="مشاركة عبر فيسبوك"
-          className="w-7 h-7 rounded-lg bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 flex items-center justify-center font-black text-xs transition-colors cursor-pointer border border-blue-200"
+          className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs transition-colors cursor-pointer border ${
+            dark
+              ? 'bg-blue-500/15 hover:bg-blue-600 text-blue-300 hover:text-white border-blue-500/30'
+              : 'bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 border-blue-200'
+          }`}
         >
           f
         </button>
@@ -111,7 +123,11 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           type="button"
           onClick={handleTwitter}
           title="مشاركة عبر إكس (تويتر)"
-          className="w-7 h-7 rounded-lg bg-stone-100 hover:bg-black hover:text-white text-stone-800 flex items-center justify-center transition-colors cursor-pointer border border-stone-200"
+          className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
+            dark
+              ? 'bg-white/10 hover:bg-black text-stone-200 hover:text-white border-white/15'
+              : 'bg-stone-100 hover:bg-black hover:text-white text-stone-800 border-stone-200'
+          }`}
         >
           <Twitter className="w-3.5 h-3.5" />
         </button>
@@ -121,7 +137,11 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           type="button"
           onClick={handleTelegram}
           title="مشاركة عبر تيليجرام"
-          className="w-7 h-7 rounded-lg bg-sky-50 hover:bg-sky-500 hover:text-white text-sky-600 flex items-center justify-center transition-colors cursor-pointer border border-sky-200"
+          className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
+            dark
+              ? 'bg-sky-500/15 hover:bg-sky-500 text-sky-300 hover:text-white border-sky-500/30'
+              : 'bg-sky-50 hover:bg-sky-500 hover:text-white text-sky-600 border-sky-200'
+          }`}
         >
           <Send className="w-3.5 h-3.5" />
         </button>
@@ -134,7 +154,9 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           className={`h-7 px-2 rounded-lg flex items-center gap-1 text-[11px] font-semibold transition-all cursor-pointer border ${
             copied
               ? 'bg-emerald-600 text-white border-emerald-600'
-              : 'bg-stone-50 hover:bg-stone-200 text-stone-700 border-stone-200'
+              : dark
+                ? 'bg-white/10 hover:bg-white/20 text-stone-200 border-white/15'
+                : 'bg-stone-50 hover:bg-stone-200 text-stone-700 border-stone-200'
           }`}
         >
           {copied ? (
@@ -155,12 +177,14 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
 
   return (
     <div
-      className="bg-stone-50 rounded-xl p-3 border border-stone-200/80 space-y-2 mt-4"
+      className={`rounded-xl p-3 border space-y-2 mt-4 ${
+        dark ? 'bg-stone-900 border-white/10' : 'bg-stone-50 border-stone-200/80'
+      }`}
       onClick={e => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between text-xs font-bold text-stone-700">
+      <div className={`flex items-center justify-between text-xs font-bold ${dark ? 'text-stone-200' : 'text-stone-700'}`}>
         <span className="flex items-center gap-1.5">
-          <Share2 className="w-4 h-4 text-amber-600" />
+          <Share2 className={`w-4 h-4 ${dark ? 'text-amber-400' : 'text-amber-600'}`} />
           <span>مشاركة هذا المحتوى عبر وسائل التواصل:</span>
         </span>
         {copied && (

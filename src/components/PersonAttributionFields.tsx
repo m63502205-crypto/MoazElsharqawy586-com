@@ -5,7 +5,7 @@ import {
   SecretariatLeader,
   PartyLeader
 } from '../types';
-import { UserCheck, Megaphone, Search, X } from 'lucide-react';
+import { UserCheck, Megaphone, Search, X, PenTool } from 'lucide-react';
 import { normalizeArabicPersonName } from '../utils/personSecretariat';
 
 export interface AttributionPatch {
@@ -41,6 +41,7 @@ interface PersonAttributionFieldsProps {
   secretariatLeaders: SecretariatLeader[];
   partyLeaders: PartyLeader[];
   authorHeading?: string;
+  authorIcon?: 'pen' | 'user';
   publisherHeading?: string;
   compact?: boolean;
 }
@@ -72,6 +73,7 @@ export const PersonAttributionFields: React.FC<PersonAttributionFieldsProps> = (
   secretariatLeaders,
   partyLeaders,
   authorHeading = 'مُعد / كاتب المحتوى (أو القائم بالعمل)',
+  authorIcon,
   publisherHeading = 'مسؤول النشر والرفع على المنصة (أمانة الإعلام)',
   compact = false
 }) => {
@@ -269,7 +271,11 @@ export const PersonAttributionFields: React.FC<PersonAttributionFieldsProps> = (
       {/* 1. Author / Executor */}
       <div className={`bg-stone-50 border border-stone-200 rounded-2xl space-y-2 ${compact ? 'p-2.5' : 'p-3.5'}`}>
         <div className="flex items-center gap-1.5 text-stone-900 font-black text-xs border-b border-stone-200/80 pb-1.5">
-          <UserCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          {authorIcon === 'pen' || authorHeading.includes('بقلم') ? (
+            <PenTool className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          ) : (
+            <UserCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+          )}
           <span>{authorHeading}</span>
         </div>
 

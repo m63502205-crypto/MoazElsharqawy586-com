@@ -84,7 +84,8 @@ import {
   Mail,
   Send,
   Volume2,
-  VolumeX
+  VolumeX,
+  PenTool
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -118,14 +119,13 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshPublicData }) => {
-  const { user, login, loginWithGoogle, logout, hasPermission } = useAuth();
+  const { user, login, logout, hasPermission } = useAuth();
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
-  const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
 
   // Active admin tab
   const [activeTab, setActiveTab] = useState<
@@ -459,39 +459,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
             <button
               type="submit"
-              disabled={loginLoading || googleLoginLoading}
+              disabled={loginLoading}
               className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <Key className="w-4 h-4 text-amber-300" />
               <span>{loginLoading ? 'جاري التحقق...' : 'تسجيل الدخول الآمن'}</span>
             </button>
           </form>
-
-          <div className="relative flex py-1 items-center">
-            <div className="grow border-t border-stone-200" />
-            <span className="shrink mx-3 text-[11px] font-bold text-stone-400">أو</span>
-            <div className="grow border-t border-stone-200" />
-          </div>
-
-          <button
-            type="button"
-            disabled={googleLoginLoading || loginLoading}
-            onClick={async () => {
-              setLoginError(null);
-              setGoogleLoginLoading(true);
-              try {
-                await loginWithGoogle();
-              } catch (err: any) {
-                setLoginError(err?.message || 'تعذر تسجيل الدخول بحساب جوجل، تأكد من السماح للنوافذ المنبثقة');
-              } finally {
-                setGoogleLoginLoading(false);
-              }
-            }}
-            className="w-full bg-stone-900 hover:bg-stone-800 text-amber-300 border border-amber-500/40 font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            <Globe className="w-4 h-4 text-amber-300" />
-            <span>{googleLoginLoading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول بحساب جوجل'}</span>
-          </button>
 
           <div className="text-center pt-2">
             <button
@@ -2285,28 +2259,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <div className="space-y-4">
                   {initiatives.map(init => (
                     <div key={init.id} className="border border-stone-200 rounded-2xl p-5 bg-stone-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${init.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-700'}`}>
-                            {init.status === 'active' ? 'نشطة' : 'غير نشطة'}
-                          </span>
-                          <h3 className="font-extrabold text-stone-900 text-base">{init.title}</h3>
-                        </div>
-                        <p className="text-xs text-stone-600 line-clamp-2 max-w-xl">{init.description}</p>
-                        {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
-                          <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-                            {(init.authorName || init.authorPosition) && (
-                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                                إعداد: {init.authorName || 'أمانة قسم ثالث أكتوبر'}{init.authorPosition ? ` — ${init.authorPosition}` : ''}
-                              </span>
-                            )}
-                            {(init.publisherName || init.publisherPosition) && (
-                              <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
-                                نشر (الإعلام): {init.publisherName || 'أمانة الإعلام'}{init.publisherPosition ? ` — ${init.publisherPosition}` : ''}
-                              </span>
-                            )}
-                          </div>
+                      <div className="flex items-start gap-3.5 min-w-0">
+                        {(init.coverUrl || init.galleryImages?.[0]) && (
+                          <img
+                            src={init.coverUrl || init.galleryImages?.[0]}
+                            alt={init.title}
+                            className="w-16 h-16 object-cover rounded-xl bg-stone-100 shrink-0 border border-stone-200"
+                          />
                         )}
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${init.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-700'}`}>
+                              {init.status === 'active' ? 'نشطة' : 'غير نشطة'}
+                            </span>
+                            <h3 className="font-extrabold text-stone-900 text-base">{init.title}</h3>
+                          </div>
+                          <p className="text-xs text-stone-600 line-clamp-2 max-w-xl">{init.description}</p>
+                          {(init.venue || init.locationUrl) && (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-600">
+                              {init.venue && <span>📍 {init.venue}</span>}
+                              {init.locationUrl && (
+                                <a
+                                  href={init.locationUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-amber-700 hover:underline font-bold"
+                                >
+                                  رابط اللوكيشن ↗
+                                </a>
+                              )}
+                            </div>
+                          )}
+                          {(init.authorName || init.authorPosition || init.publisherName || init.publisherPosition) && (
+                            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                              {(init.authorName || init.authorPosition) && (
+                                <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                  إعداد: {init.authorName || 'أمانة قسم ثالث أكتوبر'}{init.authorPosition ? ` — ${init.authorPosition}` : ''}
+                                </span>
+                              )}
+                              {(init.publisherName || init.publisherPosition) && (
+                                <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                  نشر (الإعلام): {init.publisherName || 'أمانة الإعلام'}{init.publisherPosition ? ` — ${init.publisherPosition}` : ''}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
@@ -2426,8 +2424,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           {(item.authorName || item.authorPosition || item.publisherName || item.publisherPosition) && (
                             <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
                               {(item.authorName || item.authorPosition) && (
-                                <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                                  كتابة: {item.authorName || 'محرر الخبر'}{item.authorPosition ? ` — ${item.authorPosition}` : ''}
+                                <span className="inline-flex items-center gap-1 font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                  <PenTool className="w-3 h-3 text-amber-700 shrink-0" />
+                                  <span>بقلم: {item.authorName || 'محرر الخبر'}{item.authorPosition ? ` — ${item.authorPosition}` : ''}</span>
                                 </span>
                               )}
                               {(item.publisherName || item.publisherPosition) && (
@@ -2564,29 +2563,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <div className="space-y-4">
                   {events.map(ev => (
                     <div key={ev.id} className="border border-stone-200 rounded-2xl p-4 bg-stone-50/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-900">
-                            {ev.status === 'upcoming' ? 'قادمة' : 'منتهية'}
-                          </span>
-                          <span className="text-xs font-mono text-stone-500">{ev.dateTime.replace('T', ' ')}</span>
-                        </div>
-                        <h3 className="font-bold text-stone-900 text-sm mt-1">{ev.title}</h3>
-                        <p className="text-xs text-stone-500 mt-0.5">المكان: {ev.venue} · المنظم: {ev.organizer}</p>
-                        {(ev.authorName || ev.authorPosition || ev.publisherName || ev.publisherPosition) && (
-                          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
-                            {(ev.authorName || ev.authorPosition) && (
-                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                                القائم بالفعالية: {ev.authorName || 'أمانة قسم ثالث أكتوبر'}{ev.authorPosition ? ` — ${ev.authorPosition}` : ''}
-                              </span>
-                            )}
-                            {(ev.publisherName || ev.publisherPosition) && (
-                              <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
-                                نشر: {ev.publisherName || 'أمانة الإعلام'}{ev.publisherPosition ? ` — ${ev.publisherPosition}` : ''}
-                              </span>
-                            )}
-                          </div>
+                      <div className="flex items-start gap-3.5 min-w-0">
+                        {(ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0]) && (
+                          <img
+                            src={ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0]}
+                            alt={ev.title}
+                            className="w-16 h-16 object-cover rounded-xl bg-stone-100 shrink-0 border border-stone-200"
+                          />
                         )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-900">
+                              {ev.status === 'upcoming' ? 'قادمة' : 'منتهية'}
+                            </span>
+                            <span className="text-xs font-mono text-stone-500">{ev.dateTime.replace('T', ' ')}</span>
+                          </div>
+                          <h3 className="font-bold text-stone-900 text-sm mt-1">{ev.title}</h3>
+                          <p className="text-xs text-stone-500 mt-0.5">
+                            المكان: {ev.venue} · المنظم: {ev.organizer}
+                            {ev.locationUrl && (
+                              <>
+                                {' · '}
+                                <a
+                                  href={ev.locationUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-amber-700 hover:underline font-bold"
+                                >
+                                  رابط اللوكيشن ↗
+                                </a>
+                              </>
+                            )}
+                          </p>
+                          {(ev.authorName || ev.authorPosition || ev.publisherName || ev.publisherPosition) && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px]">
+                              {(ev.authorName || ev.authorPosition) && (
+                                <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                  القائم بالفعالية: {ev.authorName || 'أمانة قسم ثالث أكتوبر'}{ev.authorPosition ? ` — ${ev.authorPosition}` : ''}
+                                </span>
+                              )}
+                              {(ev.publisherName || ev.publisherPosition) && (
+                                <span className="font-bold text-red-800 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">
+                                  نشر: {ev.publisherName || 'أمانة الإعلام'}{ev.publisherPosition ? ` — ${ev.publisherPosition}` : ''}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
@@ -7123,7 +7146,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       {/* INITIATIVE MODAL */}
       {showInitiativeModal && editingInitiative && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 text-right space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 text-right space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-black text-stone-900">
               {editingInitiative.id ? 'تعديل المبادرة' : 'إضافة مبادرة جديدة'}
             </h3>
@@ -7150,7 +7173,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">حالة المبادرة</label>
                   <select
@@ -7171,6 +7194,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     value={editingInitiative.startDate || ''}
                     onChange={e => setEditingInitiative({ ...editingInitiative, startDate: e.target.value })}
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">العنوان / المكان (اختياري)</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: منطقة ابني بيتك 7 – قسم ثالث أكتوبر"
+                    value={editingInitiative.venue || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, venue: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">رابط اللوكيشن على الخريطة (Google Maps)</label>
+                  <input
+                    type="url"
+                    dir="ltr"
+                    placeholder="https://maps.google.com/?q=..."
+                    value={editingInitiative.locationUrl || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, locationUrl: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-left"
                   />
                 </div>
               </div>
@@ -7220,6 +7268,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             title: '',
                             date: new Date().toISOString().split('T')[0],
                             description: '',
+                            venue: editingInitiative.venue || '',
+                            locationUrl: editingInitiative.locationUrl || '',
+                            imageUrl: '',
                             authorName: editingInitiative.authorName || '',
                             authorPosition: editingInitiative.authorPosition || '',
                             authorSecretariatId: editingInitiative.authorSecretariatId || '',
@@ -7242,9 +7293,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     لا توجد أنشطة مضافة بعد لهذه المبادرة.
                   </p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {(editingInitiative.activities || []).map((act, idx) => (
-                      <div key={idx} className="bg-white border border-stone-200 rounded-xl p-2.5 space-y-2">
+                      <div key={idx} className="bg-white border border-stone-200 rounded-xl p-3 space-y-2.5">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-black text-amber-800">نشاط #{idx + 1}</span>
                           <button
@@ -7285,6 +7336,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
                           />
                         </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            placeholder="عنوان / مكان النشاط (اختياري)"
+                            value={act.venue || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], venue: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                          />
+                          <input
+                            type="url"
+                            dir="ltr"
+                            placeholder="رابط اللوكيشن (Google Maps)"
+                            value={act.locationUrl || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], locationUrl: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-left"
+                          />
+                        </div>
                         <textarea
                           rows={2}
                           placeholder="تفاصيل النشاط..."
@@ -7295,6 +7371,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             setEditingInitiative({ ...editingInitiative, activities: updated });
                           }}
                           className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                        />
+                        <ImageFieldWithPicker
+                          label="صورة النشاط (اختياري)"
+                          value={act.imageUrl || ''}
+                          onChange={url => {
+                            const updated = [...(editingInitiative.activities || [])];
+                            updated[idx] = { ...updated[idx], imageUrl: url };
+                            setEditingInitiative({ ...editingInitiative, activities: updated });
+                          }}
+                          media={media}
+                          onMediaCreated={handleMediaCreated}
+                          shape="banner"
+                          helpText="تظهر هذه الصورة مباشرة مع تفاصيل النشاط"
+                          pickerTitle={`اختيار صورة للنشاط: ${act.title || `#${idx + 1}`}`}
                         />
                         <PersonAttributionFields
                           compact
@@ -7498,7 +7588,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 secretariatMembers={secretariatMembers}
                 secretariatLeaders={secretariatLeaders}
                 partyLeaders={partyLeaders}
-                authorHeading="كاتب / مُعد الخبر أو المحرر"
+                authorHeading="بقلم"
+                authorIcon="pen"
                 publisherHeading="مسؤول النشر والرفع (أمانة الإعلام)"
               />
 
@@ -7612,7 +7703,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       {/* EVENT MODAL */}
       {showEventModal && editingEvent && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 text-right space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 text-right space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-black text-stone-900">
               {editingEvent.id ? 'تعديل الفعالية' : 'إضافة فعالية جديدة'}
             </h3>
@@ -7640,12 +7731,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">المكان</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">المكان / العنوان</label>
                   <input
                     type="text"
-                    placeholder="مقر الحزب أو القاعة..."
+                    placeholder="مقر الحزب أو العنوان التفصيلي..."
                     value={editingEvent.venue || ''}
                     onChange={e => setEditingEvent({ ...editingEvent, venue: e.target.value })}
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
@@ -7661,6 +7752,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">رابط اللوكيشن على الخريطة (Google Maps)</label>
+                <input
+                  type="url"
+                  dir="ltr"
+                  placeholder="https://maps.google.com/?q=..."
+                  value={editingEvent.locationUrl || ''}
+                  onChange={e => setEditingEvent({ ...editingEvent, locationUrl: e.target.value })}
+                  className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-left"
+                />
               </div>
 
               {/* Event Dual Attribution (Executor vs Media Publisher) */}
@@ -7699,6 +7802,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
+
+              <ImageFieldWithPicker
+                label="الصورة الرئيسية للفعالية (تظهر على بطاقة الفعالية)"
+                value={editingEvent.coverUrl || editingEvent.coverImage || ''}
+                onChange={url => setEditingEvent({ ...editingEvent, coverUrl: url, coverImage: url })}
+                media={media}
+                onMediaCreated={handleMediaCreated}
+                shape="banner"
+                helpText="اختر من صور المعرض أو ارفع من جهازك مباشرة لتظهر على البطاقة فوراً"
+                pickerTitle={`اختيار الصورة الرئيسية لفعالية: ${editingEvent.title || ''}`}
+              />
 
               <MultiImageGalleryField
                 label="ألبوم صور وتغطية الفعالية (إضافة أكثر من صورة)"

@@ -652,10 +652,12 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       title = `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
       canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
+      ogImage = resolvePublicImageUrl(init.coverUrl || init.galleryImages?.[0] || init.logoUrl, assetBaseUrl);
       mainHtml = `
         <article>
           <h1>${escapeHtml(init.title)}</h1>
           <p>${escapeHtml(init.description)}</p>
+          ${init.venue ? `<p>المكان: ${escapeHtml(init.venue)}</p>` : ''}
           ${(init.goals || []).length > 0 ? `<h2>أهداف المبادرة</h2><ul>${init.goals.map(g => `<li>${escapeHtml(g)}</li>`).join('')}</ul>` : ''}
           ${(init.activities || []).length > 0 ? `<h2>الأنشطة الميدانية</h2><ul>${init.activities.map(a => `<li>${escapeHtml(a.title)} (${escapeHtml(a.date)}): ${escapeHtml(a.description)}</li>`).join('')}</ul>` : ''}
           <p><a href="/initiatives">العودة إلى كافة المبادرات</a></p>
@@ -716,7 +718,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       title = `${ev.title} | فعاليات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (ev.description || HOME_SEO_DESCRIPTION).slice(0, 160);
       canonical = `${siteUrl}/events/${encodeURIComponent(ev.id)}`;
-      ogImage = resolvePublicImageUrl(ev.images?.[0] || ev.coverUrl || ev.coverImage, assetBaseUrl, 'events', ev.id);
+      ogImage = resolvePublicImageUrl(ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0], assetBaseUrl, 'events', ev.id);
       mainHtml = `
         <article>
           <h1>${escapeHtml(ev.title)}</h1>
@@ -2101,6 +2103,9 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
           title: String(a.title || '').trim(),
           date: String(a.date || '').trim(),
           description: String(a.description || '').trim(),
+          venue: typeof a.venue === 'string' ? a.venue.trim() : '',
+          locationUrl: typeof a.locationUrl === 'string' ? a.locationUrl.trim() : '',
+          imageUrl: a.imageUrl ? persistDataUrlIfAny(String(a.imageUrl), 'init_act') : '',
           authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
           authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
           authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
@@ -2117,6 +2122,8 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
     logoUrl: body.logoUrl ? persistDataUrlIfAny(body.logoUrl, 'init_logo') : '',
     coverUrl: body.coverUrl ? persistDataUrlIfAny(body.coverUrl, 'init_cover') : '',
     description: typeof body.description === 'string' ? body.description.trim() : '',
+    venue: typeof body.venue === 'string' ? body.venue.trim() : '',
+    locationUrl: typeof body.locationUrl === 'string' ? body.locationUrl.trim() : '',
     goals: Array.isArray(body.goals)
       ? body.goals.map((g: any) => String(g).trim()).filter(Boolean)
       : (body.goals ? String(body.goals).split('\n').map(s => s.trim()).filter(Boolean) : []),
@@ -2190,6 +2197,9 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
               title: String(a.title || '').trim(),
               date: String(a.date || '').trim(),
               description: String(a.description || '').trim(),
+              venue: typeof a.venue === 'string' ? a.venue.trim() : '',
+              locationUrl: typeof a.locationUrl === 'string' ? a.locationUrl.trim() : '',
+              imageUrl: a.imageUrl ? persistDataUrlIfAny(String(a.imageUrl), 'init_act') : '',
               authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
               authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
               authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
@@ -2220,6 +2230,8 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
     slug: body.slug !== undefined && String(body.slug).trim() ? String(body.slug).trim() : (existing.slug || nextTitle.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-')),
     title: nextTitle,
     description: body.description !== undefined ? String(body.description).trim() : (existing.description || ''),
+    venue: body.venue !== undefined ? String(body.venue || '').trim() : ((existing as any).venue || ''),
+    locationUrl: body.locationUrl !== undefined ? String(body.locationUrl || '').trim() : ((existing as any).locationUrl || ''),
     goals: nextGoals,
     activities: nextActivities,
     coverUrl: nextCoverUrl,
@@ -2431,6 +2443,7 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
     description: typeof body.description === 'string' ? body.description.trim() : '',
     dateTime,
     venue: (typeof body.venue === 'string' && body.venue.trim()) || 'مقر الحزب بقسم ثالث أكتوبر',
+    locationUrl: typeof body.locationUrl === 'string' ? body.locationUrl.trim() : '',
     organizer: (typeof body.organizer === 'string' && body.organizer.trim()) || 'أمانة قسم ثالث أكتوبر',
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
@@ -2440,8 +2453,8 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
     publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
     images: persistedImages,
     galleryImages: persistedImages,
-    coverUrl: body.coverUrl ? persistDataUrlIfAny(body.coverUrl, 'event_cover') : '',
-    coverImage: body.coverImage ? persistDataUrlIfAny(body.coverImage, 'event_cover') : '',
+    coverUrl: body.coverUrl ? persistDataUrlIfAny(body.coverUrl, 'event_cover') : (persistedImages[0] || ''),
+    coverImage: body.coverImage ? persistDataUrlIfAny(body.coverImage, 'event_cover') : (persistedImages[0] || ''),
     videoUrl: body.videoUrl ? persistDataUrlIfAny(body.videoUrl, 'event_video') : '',
     status: body.status || 'upcoming',
     postReport: typeof body.postReport === 'string' ? body.postReport.trim() : '',
@@ -2506,6 +2519,7 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
     dateTime: nextDateTime,
     description: body.description !== undefined ? String(body.description || '').trim() : (existing.description || ''),
     venue: body.venue !== undefined ? (String(body.venue || '').trim() || 'مقر الحزب بقسم ثالث أكتوبر') : existing.venue,
+    locationUrl: body.locationUrl !== undefined ? String(body.locationUrl || '').trim() : ((existing as any).locationUrl || ''),
     organizer: body.organizer !== undefined ? (String(body.organizer || '').trim() || 'أمانة قسم ثالث أكتوبر') : existing.organizer,
     postReport: body.postReport !== undefined ? String(body.postReport || '').trim() : (existing.postReport || ''),
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
@@ -2516,8 +2530,8 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
     publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
     images: persistedImages,
     galleryImages: persistedImages,
-    coverUrl: body.coverUrl !== undefined ? (body.coverUrl ? persistDataUrlIfAny(String(body.coverUrl), 'event_cover') : '') : (existing.coverUrl ? persistDataUrlIfAny(existing.coverUrl, 'event_cover') : ''),
-    coverImage: body.coverImage !== undefined ? (body.coverImage ? persistDataUrlIfAny(String(body.coverImage), 'event_cover') : '') : (existing.coverImage ? persistDataUrlIfAny(existing.coverImage, 'event_cover') : ''),
+    coverUrl: body.coverUrl !== undefined ? (body.coverUrl ? persistDataUrlIfAny(String(body.coverUrl), 'event_cover') : (persistedImages[0] || '')) : (existing.coverUrl ? persistDataUrlIfAny(existing.coverUrl, 'event_cover') : (persistedImages[0] || '')),
+    coverImage: body.coverImage !== undefined ? (body.coverImage ? persistDataUrlIfAny(String(body.coverImage), 'event_cover') : (persistedImages[0] || '')) : (existing.coverImage ? persistDataUrlIfAny(existing.coverImage, 'event_cover') : (persistedImages[0] || '')),
     videoUrl: body.videoUrl !== undefined ? (body.videoUrl ? persistDataUrlIfAny(String(body.videoUrl), 'event_video') : '') : (existing.videoUrl ? persistDataUrlIfAny(existing.videoUrl, 'event_video') : ''),
     isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : (existing.isVisible !== false),
     updatedAt: new Date().toISOString()

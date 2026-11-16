@@ -14,6 +14,7 @@ import { PublicPortalData } from './types';
 import { Loader2 } from 'lucide-react';
 import { initGoogleAnalytics, trackPageView } from './utils/analytics';
 import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
+import { resolvePersonInSecretariats } from './utils/personSecretariat';
 
 import {
   getViewPath,
@@ -27,6 +28,7 @@ function MainApp() {
   const [selectedSlug, setSelectedSlug] = useState<string>(initialRoute.slug || 'about');
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(initialRoute.newsId || null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(initialRoute.eventId || null);
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(initialRoute.person || null);
   const [data, setData] = useState<PublicPortalData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -73,7 +75,8 @@ function MainApp() {
     const seo = getPageSeoMeta(currentView, data, {
       slug: selectedSlug,
       newsId: selectedNewsId,
-      eventId: selectedEventId
+      eventId: selectedEventId,
+      person: selectedPerson
     });
 
     document.title = seo.title;
@@ -92,7 +95,12 @@ function MainApp() {
     setMeta('meta[name="robots"]', 'name', 'robots', seo.robots);
     setMeta('meta[property="og:title"]', 'property', 'og:title', seo.title);
     setMeta('meta[property="og:description"]', 'property', 'og:description', seo.description);
-    setMeta('meta[property="og:url"]', 'property', 'og:url', seo.canonicalUrl);
+    setMeta(
+      'meta[property="og:url"]',
+      'property',
+      'og:url',
+      currentView === 'home' ? 'https://nfp-october3.cloud.run/' : seo.canonicalUrl
+    );
     setMeta('meta[name="twitter:title"]', 'name', 'twitter:title', seo.title);
     setMeta('meta[name="twitter:description"]', 'name', 'twitter:description', seo.description);
 
@@ -107,10 +115,11 @@ function MainApp() {
     const path = getViewPath(currentView, {
       slug: selectedSlug,
       newsId: selectedNewsId,
-      eventId: selectedEventId
+      eventId: selectedEventId,
+      person: selectedPerson
     });
     trackPageView(path, seo.title);
-  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, data]);
+  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, selectedPerson, data]);
 
   // Sync view from browser history (popstate) and legacy hash links (hashchange)
   useEffect(() => {
@@ -120,6 +129,7 @@ function MainApp() {
       if (parsed.slug) setSelectedSlug(parsed.slug);
       setSelectedNewsId(parsed.newsId || null);
       setSelectedEventId(parsed.eventId || null);
+      setSelectedPerson(parsed.person || null);
     };
 
     window.addEventListener('popstate', syncRoute);
@@ -133,27 +143,30 @@ function MainApp() {
   // Unified SPA navigation updating clean crawlable URL via pushState
   const navigateTo = (
     view: string,
-    options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
   ) => {
     if (view === 'gallery') view = 'home';
 
     const nextSlug = options?.slug ?? selectedSlug;
     const nextNewsId = options && 'newsId' in options ? options.newsId : null;
     const nextEventId = options && 'eventId' in options ? options.eventId : null;
+    const nextPerson = options && 'person' in options ? options.person : null;
 
     if (options?.slug) setSelectedSlug(options.slug);
     setSelectedNewsId(nextNewsId || null);
     setSelectedEventId(nextEventId || null);
+    setSelectedPerson(nextPerson || null);
     setCurrentView(view);
 
     const targetUrl = getViewPath(view, {
       slug: nextSlug,
       newsId: nextNewsId,
-      eventId: nextEventId
+      eventId: nextEventId,
+      person: nextPerson
     });
 
     if (typeof window !== 'undefined') {
-      const currentFull = window.location.pathname + window.location.hash;
+      const currentFull = window.location.pathname + window.location.search + window.location.hash;
       if (currentFull !== targetUrl) {
         window.history.pushState(null, '', targetUrl);
       }
@@ -176,7 +189,22 @@ function MainApp() {
     } else if (res.type === 'secretariat') {
       navigateTo('secretariat-detail', { slug: res.rawItem.slug || res.rawItem.id });
     } else if (res.type === 'leader') {
-      if (res.typeLabel.includes('أكتوبر') || res.rawItem.secretariatName) {
+      const matched = data
+        ? resolvePersonInSecretariats({
+            name: res.rawItem?.name,
+            personKey: res.rawItem?.id || res.rawItem?.name,
+            explicitSecretariatId: res.rawItem?.specializedSecretariatId,
+            specializedSecretariats: data.specializedSecretariats,
+            secretariatMembers: data.secretariatMembers,
+            secretariatLeaders: data.secretariatLeaders
+          })
+        : null;
+      if (matched) {
+        navigateTo('secretariat-detail', {
+          slug: matched.secretariat.slug,
+          person: matched.personKey
+        });
+      } else if (res.typeLabel.includes('أكتوبر') || res.rawItem.secretariatName) {
         navigateTo('secretariat-leaders');
       } else {
         navigateTo('party-leaders');
@@ -240,6 +268,9 @@ function MainApp() {
         officialLogo={data.settings.officialLogo}
         slogan={data.settings.slogan}
         onOpenSearch={() => setSearchOpen(true)}
+        urgentNews={data.news.filter(n => n.isUrgent)}
+        liveStream={data.liveStream}
+        onSelectNews={(item) => navigateTo('news', { newsId: item.id })}
       />
 
       <main className="flex-1 w-full max-w-full overflow-x-hidden">
@@ -253,6 +284,7 @@ function MainApp() {
           setSelectedSlug={setSelectedSlug}
           selectedNewsId={selectedNewsId}
           selectedEventId={selectedEventId}
+          selectedPerson={selectedPerson}
           onClearSelectedNewsId={() => {
             setSelectedNewsId(null);
             if (typeof window !== 'undefined' && window.location.pathname.startsWith('/news/')) {

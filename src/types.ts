@@ -85,8 +85,10 @@ export interface Initiative {
   startDate: string;
   endDate?: string;
   status: 'active' | 'paused' | 'completed';
-  activities: Array<{ title: string; date: string; description: string }>;
+  activities: Array<{ title: string; date: string; description: string; authorName?: string; authorPosition?: string }>;
   galleryImages?: string[];
+  authorName?: string;
+  authorPosition?: string;
   isVisible: boolean;
   createdAt: string;
 }
@@ -118,6 +120,8 @@ export interface EventItem {
   dateTime: string;
   venue: string;
   organizer: string;
+  authorName?: string;
+  authorPosition?: string;
   images: string[];
   galleryImages?: string[];
   coverUrl?: string;
@@ -346,7 +350,7 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-XXXXXXXXXX)
-  officialSiteUrl?: string; // Free published URL for Google Search Console (e.g. https://nfp-october3.ai.studio)
+  officialSiteUrl?: string; // Published custom or official URL for Google Search Console (e.g. https://www.algabhaalwataniya-oct3.org)
   googleSiteVerification?: string; // Google Search Console HTML tag verification token
   googleVerificationFile?: string; // Optional Google Search Console HTML filename (e.g. googleXXXX.html)
   customTexts?: SiteCustomTexts;
@@ -392,6 +396,43 @@ export interface PublicPortalData {
   pages: CMSPage[];
 }
 
+export interface EmailSubscriber {
+  id: string;
+  email: string;
+  name?: string;
+  status: 'active' | 'unsubscribed';
+  topics: {
+    news: boolean;
+    events: boolean;
+    initiatives: boolean;
+  };
+  unsubscribeToken: string;
+  subscribedAt: string;
+  updatedAt?: string;
+}
+
+export interface EmailDispatchLog {
+  id: string;
+  itemType: 'news' | 'event' | 'initiative';
+  itemId: string;
+  title: string;
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  mode: 'smtp' | 'unconfigured' | 'no_subscribers' | 'error';
+  errorMessage?: string;
+  dispatchedAt: string;
+}
+
+export interface NotificationDispatchResult {
+  attempted: boolean;
+  mode: 'smtp' | 'unconfigured' | 'no_subscribers' | 'error';
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  errorMessage?: string;
+}
+
 export interface AdminStats {
   partyLeadersCount: number;
   secretariatLeadersCount: number;
@@ -409,4 +450,6 @@ export interface AdminStats {
   mediaCount: number;
   pagesCount: number;
   rolesCount: number;
+  subscribersCount: number;
 }
+

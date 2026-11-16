@@ -44,17 +44,20 @@ export function initGoogleAnalytics(measurementId?: string): boolean {
     };
   }
 
-  // Inject or update the Google Analytics script tag
-  const scriptId = 'google-analytics-gtag';
-  let script = document.getElementById(scriptId) as HTMLScriptElement | null;
-  if (!script) {
-    script = document.createElement('script');
-    script.id = scriptId;
-    script.async = true;
-    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
-    document.head.appendChild(script);
-  } else {
-    script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
+  // Avoid adding duplicate tag script if already present in index.html <head>
+  const existingHeadTag = document.querySelector(`script[src*="id=${encodeURIComponent(id)}"]`);
+  if (!existingHeadTag) {
+    const scriptId = 'google-analytics-gtag';
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.async = true;
+      script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
+      document.head.appendChild(script);
+    } else {
+      script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}`;
+    }
   }
 
   window.gtag('js', new Date());

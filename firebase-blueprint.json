@@ -207,6 +207,14 @@
       "schema": { "$ref": "#/entities/PrivateVaultRecord" },
       "description": "Administrative audit trail (admin-protected)"
     },
+    "/subscribers/{subscriberId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Email newsletter subscribers (admin-protected PII)"
+    },
+    "/email_dispatch_logs/{logId}": {
+      "schema": { "$ref": "#/entities/PrivateVaultRecord" },
+      "description": "Automated email notification dispatch logs (admin-protected)"
+    },
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRegistry" },
       "description": "Verified Firebase UIDs granted admin access"

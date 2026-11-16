@@ -186,7 +186,19 @@ function isAuthorizedCloudAdmin(verified: VerifiedFirebaseUser | null): boolean 
 const cloudHashes = new Map<string, string>();
 let cloudInitialized = false;
 let lastPublicPullAt = 0;
+let lastLocalMutationAt = 0;
+let hasUnpushedCloudChanges = false;
 let pullPromise: Promise<boolean> | null = null;
+
+export function markLocalMutation(): void {
+  lastLocalMutationAt = Date.now();
+  lastPublicPullAt = Date.now();
+  hasUnpushedCloudChanges = true;
+}
+
+export function hasPendingLocalChanges(): boolean {
+  return hasUnpushedCloudChanges;
+}
 
 function hashObj(obj: any): string {
   return crypto.createHash('sha1').update(JSON.stringify(obj)).digest('hex');
@@ -233,7 +245,9 @@ const COLLECTION_MAPPINGS: CollectionMapping[] = [
   { dbKey: 'members', collectionName: 'members', isPublicCollection: false },
   { dbKey: 'roles', collectionName: 'roles', isPublicCollection: false },
   { dbKey: 'admins', collectionName: 'admin_users', isPublicCollection: false },
-  { dbKey: 'auditLogs', collectionName: 'audit_logs', isPublicCollection: false }
+  { dbKey: 'auditLogs', collectionName: 'audit_logs', isPublicCollection: false },
+  { dbKey: 'subscribers', collectionName: 'subscribers', isPublicCollection: false },
+  { dbKey: 'emailDispatchLogs', collectionName: 'email_dispatch_logs', isPublicCollection: false }
 ];
 
 function buildDesiredDocEntries(dbObj: AppDatabase): Array<{ pathKey: string; collectionName: string; docId: string; payload: Record<string, any> }> {
@@ -271,17 +285,19 @@ function buildDesiredDocEntries(dbObj: AppDatabase): Array<{ pathKey: string; co
       if (!item || !item.id) continue;
       const docId = sanitizeFirestoreId(item.id);
       const pathKey = `${mapping.collectionName}/${docId}`;
+      const rawUpdatedAt = String(item.updatedAt || item.timestamp || item.createdAt || now).trim();
+      const safeUpdatedAt = rawUpdatedAt.length >= 4 && rawUpdatedAt.length <= 64 ? rawUpdatedAt : now;
       const payload = mapping.isPublicCollection
         ? {
             id: docId,
             isPublic: computeIsPublic(mapping.collectionName, item),
             data: item,
-            updatedAt: item.updatedAt || item.createdAt || now
+            updatedAt: safeUpdatedAt
           }
         : {
             id: docId,
             data: item,
-            updatedAt: item.updatedAt || item.timestamp || item.createdAt || now
+            updatedAt: safeUpdatedAt
           };
       entries.push({ pathKey, collectionName: mapping.collectionName, docId, payload });
     }
@@ -362,6 +378,7 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
   }
 
   if (writes.length === 0) {
+    hasUnpushedCloudChanges = false;
     return true;
   }
 
@@ -377,6 +394,7 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
       cloudHashes.set(k, v);
     }
     cloudInitialized = true;
+    hasUnpushedCloudChanges = false;
   }
   return ok;
 }
@@ -505,6 +523,10 @@ function sortCollectionItems(collectionName: string, items: any[]): any[] {
       return copy.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     case 'audit_logs':
       return copy.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+    case 'subscribers':
+      return copy.sort((a, b) => new Date(b.subscribedAt || 0).getTime() - new Date(a.subscribedAt || 0).getTime());
+    case 'email_dispatch_logs':
+      return copy.sort((a, b) => new Date(b.dispatchedAt || 0).getTime() - new Date(a.dispatchedAt || 0).getTime());
     default:
       return copy;
   }
@@ -580,6 +602,7 @@ export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<A
 
 export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: (next: AppDatabase) => void): Promise<void> {
   if (!serverFirestore) return;
+  if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) return;
   if (Date.now() - lastPublicPullAt < 5000) return;
   if (pullPromise) {
     await pullPromise;
@@ -587,7 +610,7 @@ export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: 
   }
   pullPromise = (async () => {
     const next = await pullPublicFromFirestore(currentDb);
-    if (next) {
+    if (next && !hasUnpushedCloudChanges && Date.now() - lastLocalMutationAt >= 30000) {
       applyUpdate(next);
       return true;
     }
@@ -610,9 +633,20 @@ export async function syncAdminFullWithFirestore(
 
   const verified = await verifyFirebaseIdToken(idToken);
   if (!isAuthorizedCloudAdmin(verified)) {
+    if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) {
+      return { db: currentDb, seeded: false, pulled: false };
+    }
     // Cached Firebase session does not hold cloud admin privileges — sync public collections silently without 403s
     const publicDb = await pullPublicFromFirestore(currentDb);
     return { db: publicDb || currentDb, seeded: false, pulled: Boolean(publicDb) };
+  }
+
+  // If there are pending local writes made before this request, flush them to Firestore BEFORE pulling
+  if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 15000) {
+    const pushed = await pushDatabaseDiffToFirestore(currentDb, idToken, false);
+    if (pushed) {
+      return { db: currentDb, seeded: false, pulled: false };
+    }
   }
 
   // Check if site_config/public already exists in Firestore
@@ -675,12 +709,30 @@ export async function syncAdminFullWithFirestore(
           }
         }
 
-        // Preserve any newly submitted local public applications that haven't been synced to Firestore yet
+        // Preserve any newly submitted local public applications/subscribers/logs that haven't been synced to Firestore yet
         if (m.collectionName === 'applications') {
           const localApps = currentDb.applications || [];
           for (const appItem of localApps) {
             if (appItem?.id && !cloudIds.has(sanitizeFirestoreId(appItem.id))) {
               items.unshift(appItem);
+              hasPendingLocalApps = true;
+            }
+          }
+        }
+        if (m.collectionName === 'subscribers') {
+          const localSubs = currentDb.subscribers || [];
+          for (const subItem of localSubs) {
+            if (subItem?.id && !cloudIds.has(sanitizeFirestoreId(subItem.id))) {
+              items.unshift(subItem);
+              hasPendingLocalApps = true;
+            }
+          }
+        }
+        if (m.collectionName === 'email_dispatch_logs') {
+          const localLogs = currentDb.emailDispatchLogs || [];
+          for (const logItem of localLogs) {
+            if (logItem?.id && !cloudIds.has(sanitizeFirestoreId(logItem.id))) {
+              items.unshift(logItem);
               hasPendingLocalApps = true;
             }
           }

@@ -16,7 +16,10 @@ import {
   AuditLog,
   AdminStats,
   AdminRole,
-  CMSPage
+  CMSPage,
+  EmailSubscriber,
+  EmailDispatchLog,
+  NotificationDispatchResult
 } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
@@ -76,7 +79,9 @@ import {
   Type,
   Play,
   HeartHandshake,
-  Globe
+  Globe,
+  Mail,
+  Send
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 
@@ -133,6 +138,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     | 'events'
     | 'media'
     | 'livestream'
+    | 'subscribers'
     | 'roles'
     | 'users'
     | 'settings'
@@ -157,6 +163,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [settings, setSettings] = useState<SiteSettings | null>(null);
+  const [subscribers, setSubscribers] = useState<EmailSubscriber[]>([]);
+  const [emailDispatchLogs, setEmailDispatchLogs] = useState<EmailDispatchLog[]>([]);
+  const [smtpConfigured, setSmtpConfigured] = useState<boolean>(false);
+  const [dispatchingTestItem, setDispatchingTestItem] = useState<string | null>(null);
   const [gaTestStatus, setGaTestStatus] = useState<string | null>(null);
   const [copiedSiteUrl, setCopiedSiteUrl] = useState(false);
   const [copiedSitemapUrl, setCopiedSitemapUrl] = useState(false);
@@ -226,6 +236,61 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [showAdvancedMapSettings, setShowAdvancedMapSettings] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [adminMediaFilter, setAdminMediaFilter] = useState<'all' | 'special' | 'photo' | 'video'>('all');
+  const [actionBanner, setActionBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSavingModal, setIsSavingModal] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
+
+  const showBanner = (type: 'success' | 'error', text: string) => {
+    setActionBanner({ type, text });
+    window.setTimeout(() => {
+      setActionBanner(prev => (prev && prev.text === text ? null : prev));
+    }, 5500);
+  };
+
+  const formatDispatchSummary = (res?: NotificationDispatchResult | null) => {
+    if (!res) return '';
+    if (res.mode === 'smtp') {
+      return ` — تم إرسال تنبيه بالبريد إلى ${res.sentCount} مشترك${res.failedCount ? ` (فشل: ${res.failedCount})` : ''}`;
+    }
+    if (res.mode === 'no_subscribers') {
+      return ' — لا يوجد مشتركون نشطون حالياً لإرسال التنبيه';
+    }
+    if (res.mode === 'unconfigured') {
+      return ' — مسجل بسجل التنبيهات (يتطلب تفعيل SMTP على الخادم للإرسال البريدي الفعلي)';
+    }
+    return ' — تعذر إرسال التنبيه البريدي، راجع سجل التنبيهات';
+  };
+
+  const formatDateTimeLocal = (val?: string) => {
+    if (!val) return '';
+    const trimmed = String(val).trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(trimmed)) {
+      return trimmed.slice(0, 16);
+    }
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+    }
+    return trimmed.slice(0, 16);
+  };
+
+  useEffect(() => {
+    setModalError(null);
+    setIsSavingModal(false);
+  }, [
+    showPartyLeaderModal,
+    showSecLeaderModal,
+    showSecretariatModal,
+    showSecMemberModal,
+    showInitiativeModal,
+    showNewsModal,
+    showEventModal,
+    showMediaModal,
+    showUserModal,
+    showPageModal,
+    showRoleModal
+  ]);
 
   // Handle new media created via picker or upload
   const handleMediaCreated = (newMedia: MediaItem) => {
@@ -254,6 +319,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       setAdminUsers(full.admins || []);
       setAuditLogs(full.auditLogs || []);
       setSettings(full.settings || null);
+      setSubscribers(full.subscribers || []);
+      setEmailDispatchLogs(full.emailDispatchLogs || []);
+      setSmtpConfigured(Boolean(full.smtpStatus?.configured));
 
       const st = await api.getAdminStats();
       setStats(st);
@@ -292,6 +360,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
         return hasPermission('media');
       case 'livestream':
         return hasPermission('livestream');
+      case 'subscribers':
+        return hasPermission('news') || hasPermission('settings');
       case 'roles':
         return hasPermission('roles');
       case 'users':
@@ -452,6 +522,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+        {actionBanner && (
+          <div
+            className={`mb-6 p-4 rounded-2xl border flex items-center justify-between gap-3 text-xs font-bold shadow-sm ${
+              actionBanner.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className={`w-4 h-4 shrink-0 ${actionBanner.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`} />
+              <span>{actionBanner.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionBanner(null)}
+              className="text-stone-400 hover:text-stone-700 cursor-pointer p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
           {/* Navigation Sidebar (3 columns) with Strict RBAC Filtering */}
@@ -677,6 +768,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${liveStream?.isActive ? 'bg-emerald-600 text-white' : 'bg-stone-200 text-stone-600'}`}>
                       {liveStream?.isActive ? 'نشط' : 'متوقف'}
+                    </span>
+                  </button>
+                )}
+
+                {isTabPermitted('subscribers') && (
+                  <button
+                    onClick={() => setActiveTab('subscribers')}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                      activeTab === 'subscribers' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-700 hover:bg-stone-100'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Mail className="w-4 h-4" />
+                      <span>المشتركون بالبريد</span>
+                    </span>
+                    <span className="text-[10px] bg-stone-200 text-stone-800 px-1.5 py-0.5 rounded-full">
+                      {subscribers.filter(s => s.status === 'active').length}
                     </span>
                   </button>
                 )}
@@ -950,9 +1058,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة بيانات قيادات الحزب بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة بيانات قيادات الحزب بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ القيادات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ القيادات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -1087,9 +1195,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد قيادات أمانة قسم ثالث أكتوبر بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد قيادات أمانة قسم ثالث أكتوبر بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ القيادات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ القيادات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -1429,9 +1537,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                     await api.deleteSecretariat(sec.id);
                                     await loadAdminData();
                                     onRefreshPublicData();
-                                    alert(`تم شيل أمانة "${sec.name}" بنجاح!`);
+                                    showBanner('success', `تم حذف أمانة "${sec.name}" بنجاح`);
                                   } catch (err: any) {
-                                    alert(err.message || 'تعذر شيل الأمانة');
+                                    showBanner('error', err.message || 'تعذر حذف الأمانة');
                                   }
                                 }
                               }}
@@ -1485,9 +1593,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           await api.saveAllSecretariats(secretariats);
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ كافة بيانات وتعديلات الأمانات بنجاح!');
+                          showBanner('success', 'تم حفظ كافة بيانات وتعديلات الأمانات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الأمانات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأمانات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -1689,9 +1797,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة تكليفات وأعضاء الأمانات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة تكليفات وأعضاء الأمانات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الأعضاء');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأعضاء');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -2155,6 +2263,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <h3 className="font-extrabold text-stone-900 text-base">{init.title}</h3>
                         </div>
                         <p className="text-xs text-stone-600 line-clamp-2 max-w-xl">{init.description}</p>
+                        {(init.authorName || init.authorPosition) && (
+                          <p className="text-[11px] font-bold text-amber-800 pt-0.5">
+                            {init.authorName || 'أمانة قسم ثالث أكتوبر'}{init.authorPosition ? ` — ${init.authorPosition}` : ''}
+                          </p>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
@@ -2215,9 +2328,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة المبادرات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة المبادرات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ المبادرات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المبادرات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -2271,6 +2384,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             <span className="text-[11px] text-stone-400 font-mono">{item.publishDate}</span>
                           </div>
                           <h3 className="font-bold text-stone-900 text-sm mt-0.5 line-clamp-1">{item.title}</h3>
+                          {(item.authorName || item.authorPosition) && (
+                            <p className="text-[11px] font-bold text-amber-800 mt-0.5">
+                              {item.authorName || 'المكتب الإعلامي'}{item.authorPosition ? ` — ${item.authorPosition}` : ''}
+                            </p>
+                          )}
                         </div>
                       </div>
 
@@ -2279,10 +2397,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         <button
                           type="button"
                           onClick={async () => {
-                            const newUrgent = !item.isUrgent;
-                            await api.updateNews(item.id, { ...item, isUrgent: newUrgent });
-                            loadAdminData();
-                            onRefreshPublicData();
+                            try {
+                              const newUrgent = !item.isUrgent;
+                              await api.updateNews(item.id, { ...item, isUrgent: newUrgent });
+                              await loadAdminData();
+                              onRefreshPublicData();
+                              showBanner('success', newUrgent ? 'تم تعيين الخبر كعاجل' : 'تم إلغاء وسم الخبر العاجل');
+                            } catch (err: any) {
+                              showBanner('error', err.message || 'تعذر تحديث حالة الخبر');
+                            }
                           }}
                           className={`px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors border ${
                             item.isUrgent
@@ -2351,9 +2474,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة الأخبار والبيانات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة الأخبار والبيانات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الأخبار');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأخبار');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -2402,12 +2525,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         </div>
                         <h3 className="font-bold text-stone-900 text-sm mt-1">{ev.title}</h3>
                         <p className="text-xs text-stone-500 mt-0.5">المكان: {ev.venue} · المنظم: {ev.organizer}</p>
+                        {(ev.authorName || ev.authorPosition) && (
+                          <p className="text-[11px] font-bold text-amber-800 mt-0.5">
+                            القائم بالفعالية: {ev.authorName || 'أمانة قسم ثالث أكتوبر'}{ev.authorPosition ? ` — ${ev.authorPosition}` : ''}
+                          </p>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => {
-                            setEditingEvent(ev);
+                            setEditingEvent({
+                              ...ev,
+                              dateTime: formatDateTimeLocal(ev.dateTime),
+                              images: ev.images || ev.galleryImages || [],
+                              galleryImages: ev.galleryImages || ev.images || []
+                            });
                             setShowEventModal(true);
                           }}
                           className="bg-stone-200 hover:bg-stone-300 text-stone-800 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
@@ -2462,9 +2595,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة الفعاليات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة الفعاليات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الفعاليات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الفعاليات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -2641,9 +2774,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة وسائط المعرض بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة وسائط المعرض بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ المعرض');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المعرض');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -2671,10 +2804,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <form
                   onSubmit={async e => {
                     e.preventDefault();
-                    await api.updateLiveStream(liveStream);
-                    loadAdminData();
-                    onRefreshPublicData();
-                    alert('تم حفظ إعدادات البث المباشر بنجاح');
+                    try {
+                      await api.updateLiveStream(liveStream);
+                      await loadAdminData();
+                      onRefreshPublicData();
+                      showBanner('success', 'تم حفظ إعدادات البث المباشر بنجاح');
+                    } catch (err: any) {
+                      showBanner('error', err.message || 'تعذر حفظ إعدادات البث المباشر');
+                    }
                   }}
                   className="space-y-4 max-w-xl"
                 >
@@ -2912,9 +3049,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          alert('تم حفظ واعتماد كافة الصفحات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة الصفحات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الصفحات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الصفحات');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -3074,9 +3211,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       onClick={async () => {
                         try {
                           await loadAdminData();
-                          alert('تم حفظ واعتماد كافة الأدوار والصلاحيات بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة الأدوار والصلاحيات بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ الأدوار');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأدوار');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -3210,9 +3347,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       onClick={async () => {
                         try {
                           await loadAdminData();
-                          alert('تم حفظ واعتماد كافة حسابات المشرفين بنجاح!');
+                          showBanner('success', 'تم حفظ واعتماد كافة حسابات المشرفين بنجاح');
                         } catch (err: any) {
-                          alert(err.message || 'حدث خطأ أثناء حفظ المشرفين');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المشرفين');
                         }
                       }}
                       className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
@@ -3250,10 +3387,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       await api.updateSettings(updated);
                       await loadAdminData();
                       onRefreshPublicData();
-                      alert('تم حفظ وتثبيت إعدادات وهوية المنصة والفيديو والصور بنجاح ✅');
+                      showBanner('success', 'تم حفظ وتثبيت إعدادات وهوية المنصة والفيديو والصور بنجاح');
                     } catch (err: any) {
                       console.error('Save settings error:', err);
-                      alert(`حدث خطأ أثناء حفظ الإعدادات: ${err.message || 'يرجى المحاولة مجدداً'}`);
+                      showBanner('error', `حدث خطأ أثناء حفظ الإعدادات: ${err.message || 'يرجى المحاولة مجدداً'}`);
                     } finally {
                       setIsSavingSettings(false);
                     }
@@ -4637,7 +4774,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
 
                     {(() => {
-                      const activeOfficialUrl = (settings.officialSiteUrl || 'https://nfp-october3.ai.studio').trim().replace(/\/+$/, '');
+                      const rawOfficial = (settings.officialSiteUrl || '').trim().replace(/\/+$/, '');
+                      const activeOfficialUrl =
+                        rawOfficial &&
+                        rawOfficial !== 'https://nfp-october3.ai.studio' &&
+                        rawOfficial !== 'https://algabhaalwataniya-oct3.org'
+                          ? rawOfficial
+                          : 'https://www.algabhaalwataniya-oct3.org';
                       const sitemapFullUrl = `${activeOfficialUrl}/sitemap.xml`;
                       const robotsFullUrl = `${activeOfficialUrl}/robots.txt`;
                       return (
@@ -4645,13 +4788,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                               <label className="block text-xs font-bold text-stone-800 mb-1">
-                                رابط الموقع المجاني المعتمد في جوجل (Canonical & Sitemap URL)
+                                رابط الموقع المعتمد في جوجل (Canonical & Sitemap URL)
                               </label>
                               <div className="flex gap-2">
                                 <input
                                   type="url"
-                                  placeholder="https://nfp-october3.ai.studio"
-                                  value={settings.officialSiteUrl ?? 'https://nfp-october3.ai.studio'}
+                                  placeholder="https://www.algabhaalwataniya-oct3.org"
+                                  value={activeOfficialUrl}
                                   onChange={e => setSettings({ ...settings, officialSiteUrl: e.target.value.trim() })}
                                   className="flex-1 border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono text-left bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
                                   dir="ltr"
@@ -4919,6 +5062,211 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
                 </form>
+              </div>
+            )}
+
+            {/* TAB: EMAIL SUBSCRIBERS & DISPATCH LOGS */}
+            {activeTab === 'subscribers' && (
+              <div className="space-y-6">
+                <div className="border-b border-stone-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-black text-stone-900">
+                      المشتركون في النشرة البريدية وإشعارات النشر الفوري
+                    </h2>
+                    <p className="text-xs text-stone-500 mt-0.5">
+                      يتم إرسال بريد إلكتروني تلقائياً للمشتركين النشطين فور نشر أي خبر أو فعالية أو مبادرة جديدة.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`text-xs font-bold px-3 py-1.5 rounded-xl border ${
+                        smtpConfigured
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}
+                    >
+                      {smtpConfigured
+                        ? 'خادم البريد (SMTP) مفعل وجاهز للإرسال'
+                        : 'خادم البريد (SMTP) غير مضبوط في متغيرات البيئة بالخادم'}
+                    </span>
+
+                    {news.filter(n => !n.isDraft).length > 0 && (
+                      <button
+                        type="button"
+                        disabled={Boolean(dispatchingTestItem)}
+                        onClick={async () => {
+                          const latestNews = news.find(n => !n.isDraft);
+                          if (!latestNews) return;
+                          setDispatchingTestItem(latestNews.id);
+                          try {
+                            const res = await api.dispatchSubscriberItem('news', latestNews.id);
+                            await loadAdminData();
+                            showBanner(
+                              res.result.mode === 'smtp' ? 'success' : 'error',
+                              `إرسال تنبيه "${latestNews.title}"${formatDispatchSummary(res.result)}`
+                            );
+                          } catch (err: any) {
+                            showBanner('error', err?.message || 'تعذر إرسال التنبيه');
+                          } finally {
+                            setDispatchingTestItem(null);
+                          }
+                        }}
+                        className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white text-xs font-bold px-4 py-2 rounded-xl cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{dispatchingTestItem ? 'جاري الإرسال...' : 'إرسال تنبيه لأحدث خبر'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Stats Summary */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
+                    <div className="text-xs text-stone-500 font-bold">إجمالي المشتركين</div>
+                    <div className="text-2xl font-black text-stone-900 mt-1">{subscribers.length}</div>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                    <div className="text-xs text-emerald-700 font-bold">المشتركون النشطون</div>
+                    <div className="text-2xl font-black text-emerald-900 mt-1">
+                      {subscribers.filter(s => s.status === 'active').length}
+                    </div>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                    <div className="text-xs text-amber-800 font-bold">سجلات الإرسال الفوري</div>
+                    <div className="text-2xl font-black text-amber-950 mt-1">{emailDispatchLogs.length}</div>
+                  </div>
+                </div>
+
+                {/* Subscribers List */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-black text-stone-800">قائمة عناوين البريد المشتركة</h3>
+                  {subscribers.length === 0 ? (
+                    <div className="p-8 bg-stone-50 border border-dashed border-stone-300 rounded-2xl text-center text-xs text-stone-500">
+                      لا يوجد مشتركون بالبريد الإلكتروني حتى الآن. يمكن للزوار الاشتراك عبر النموذج الموجود في نهاية صفحات الموقع.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {subscribers.map(sub => (
+                        <div
+                          key={sub.id}
+                          className="p-4 bg-stone-50 rounded-2xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono font-bold text-stone-900 text-sm" dir="ltr">
+                                {sub.email}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                  sub.status === 'active'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-stone-200 text-stone-600'
+                                }`}
+                              >
+                                {sub.status === 'active' ? 'مشترك نشط' : 'ملغى الاشتراك'}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-500">
+                              <span>
+                                الاهتمامات:{' '}
+                                {[
+                                  sub.topics?.news !== false ? 'الأخبار' : null,
+                                  sub.topics?.events !== false ? 'الفعاليات' : null,
+                                  sub.topics?.initiatives !== false ? 'المبادرات' : null
+                                ]
+                                  .filter(Boolean)
+                                  .join('، ')}
+                              </span>
+                              <span>•</span>
+                              <span className="font-mono">{(sub.subscribedAt || '').slice(0, 10)}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await api.toggleSubscriber(sub.id);
+                                await loadAdminData();
+                                showBanner('success', 'تم تحديث حالة المشترك');
+                              }}
+                              className="bg-white border border-stone-300 hover:border-amber-500 text-stone-800 font-bold px-3 py-1.5 rounded-xl cursor-pointer"
+                            >
+                              {sub.status === 'active' ? 'إيقاف مؤقت' : 'تفعيل'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await api.deleteSubscriber(sub.id);
+                                await loadAdminData();
+                                showBanner('success', 'تم حذف البريد من القائمة');
+                              }}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-xl border border-red-200 cursor-pointer"
+                              title="حذف المشترك"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Dispatch Logs */}
+                <div className="space-y-3 pt-4 border-t border-stone-100">
+                  <h3 className="text-sm font-black text-stone-800">سجل الإرسال الفوري عند النشر</h3>
+                  {emailDispatchLogs.length === 0 ? (
+                    <div className="p-6 bg-stone-50 border border-dashed border-stone-200 rounded-2xl text-center text-xs text-stone-500">
+                      لم يتم تسجيل أي عمليات إرسال بريدي بعد.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {emailDispatchLogs.map(log => (
+                        <div
+                          key={log.id}
+                          className="p-3 bg-white rounded-xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-stone-900">{log.title}</span>
+                              <span className="bg-stone-100 text-stone-700 text-[10px] px-2 py-0.5 rounded font-bold">
+                                {log.itemType === 'news' ? 'خبر' : log.itemType === 'event' ? 'فعالية' : 'مبادرة'}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                  log.mode === 'smtp' && log.failedCount === 0
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : log.mode === 'unconfigured' || log.mode === 'no_subscribers'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-red-100 text-red-700'
+                                }`}
+                              >
+                                {log.mode === 'smtp' && log.failedCount === 0
+                                  ? `تم الإرسال (${log.sentCount}/${log.recipientCount})`
+                                  : log.mode === 'smtp'
+                                  ? `جزئي (${log.sentCount} نجح / ${log.failedCount} فشل)`
+                                  : log.mode === 'unconfigured'
+                                  ? 'SMTP غير مضبوط'
+                                  : log.mode === 'no_subscribers'
+                                  ? 'لا يوجد مشتركون'
+                                  : 'خطأ في الإرسال'}
+                              </span>
+                            </div>
+                            {log.errorMessage && (
+                              <p className="text-[11px] text-red-600 mt-1">{log.errorMessage}</p>
+                            )}
+                          </div>
+                          <span className="text-stone-400 font-mono text-[11px] shrink-0">
+                            {(log.dispatchedAt || '').replace('T', ' ').slice(0, 19)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -5498,29 +5846,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingPartyLeader.name || !editingPartyLeader.position) {
-                    alert('يرجى إدخال الاسم والمنصب القيادي');
+                  if (!editingPartyLeader.name?.trim() || !editingPartyLeader.position?.trim()) {
+                    setModalError('يرجى إدخال الاسم والمنصب القيادي');
                     return;
                   }
-                  if (editingPartyLeader.id) {
-                    await api.updatePartyLeader(editingPartyLeader.id, editingPartyLeader);
-                  } else {
-                    await api.createPartyLeader(editingPartyLeader);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    if (editingPartyLeader.id) {
+                      await api.updatePartyLeader(editingPartyLeader.id, editingPartyLeader);
+                    } else {
+                      await api.createPartyLeader(editingPartyLeader);
+                    }
+                    setShowPartyLeaderModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner('success', 'تم حفظ بيانات القيادة الحزبية بنجاح');
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ بيانات القيادة');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowPartyLeaderModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ بيانات القيادة
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ بيانات القيادة'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowPartyLeaderModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -5559,6 +5926,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   onChange={e => setEditingSecLeader({ ...editingSecLeader, title: e.target.value })}
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  الأمانة التخصصية المقيد بها{' '}
+                  <span className="text-[10px] font-medium text-stone-400">
+                    (عند الضغط على الشخص في الموقع يفتح ملفه داخل هذه الأمانة)
+                  </span>
+                </label>
+                <select
+                  value={editingSecLeader.specializedSecretariatId || ''}
+                  onChange={e => setEditingSecLeader({ ...editingSecLeader, specializedSecretariatId: e.target.value })}
+                  className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs bg-white"
+                >
+                  <option value="">تحديد تلقائي بالاسم أو قيادة عامة للأمانة</option>
+                  {secretariats.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -5628,29 +6016,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingSecLeader.name || !editingSecLeader.title) {
-                    alert('يرجى إدخال الاسم والمسمى الوظيفي');
+                  if (!editingSecLeader.name?.trim() || !editingSecLeader.title?.trim()) {
+                    setModalError('يرجى إدخال الاسم والمسمى الوظيفي');
                     return;
                   }
-                  if (editingSecLeader.id) {
-                    await api.updateSecretariatLeader(editingSecLeader.id, editingSecLeader);
-                  } else {
-                    await api.createSecretariatLeader(editingSecLeader);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    if (editingSecLeader.id) {
+                      await api.updateSecretariatLeader(editingSecLeader.id, editingSecLeader);
+                    } else {
+                      await api.createSecretariatLeader(editingSecLeader);
+                    }
+                    setShowSecLeaderModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner('success', 'تم حفظ بيانات قيادة أمانة أكتوبر بنجاح');
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ بيانات القيادة');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowSecLeaderModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
                 }}
-                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ بيانات القيادة
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ بيانات القيادة'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowSecLeaderModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -6103,15 +6510,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 border-t border-stone-100">
               <div className="flex items-center gap-2 flex-1">
                 <button
                   type="button"
+                  disabled={isSavingModal}
                   onClick={async () => {
                     if (!editingSecretariat.name || !editingSecretariat.name.trim()) {
-                      alert('يرجى إدخال اسم الأمانة');
+                      setModalError('يرجى إدخال اسم الأمانة');
                       return;
                     }
+                    setModalError(null);
+                    setIsSavingModal(true);
                     try {
                       if (editingSecretariat.id) {
                         await api.updateSecretariat(editingSecretariat.id, editingSecretariat);
@@ -6120,22 +6536,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         await api.createSecretariat({ ...editingSecretariat, slug: autoSlug });
                       }
                       setShowSecretariatModal(false);
-                      loadAdminData();
+                      await loadAdminData();
                       onRefreshPublicData();
-                      alert('تم حفظ الأمانة بنجاح!');
+                      showBanner('success', 'تم حفظ الأمانة بنجاح');
                     } catch (err: any) {
-                      alert(err.message || 'حدث خطأ أثناء حفظ الأمانة');
+                      setModalError(err?.message || 'حدث خطأ أثناء حفظ الأمانة');
+                    } finally {
+                      setIsSavingModal(false);
                     }
                   }}
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
+                  className="bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
                 >
                   <Save className="w-4 h-4" />
-                  <span>{editingSecretariat.id ? 'حفظ تعديلات الأمانة' : 'حفظ وإضافة الأمانة الآن'}</span>
+                  <span>{isSavingModal ? 'جاري الحفظ...' : (editingSecretariat.id ? 'حفظ تعديلات الأمانة' : 'حفظ وإضافة الأمانة الآن')}</span>
                 </button>
                 <button
                   type="button"
+                  disabled={isSavingModal}
                   onClick={() => setShowSecretariatModal(false)}
-                  className="bg-stone-200 hover:bg-stone-300 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
+                  className="bg-stone-200 hover:bg-stone-300 disabled:opacity-60 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer transition-colors"
                 >
                   إلغاء
                 </button>
@@ -6144,21 +6563,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               {editingSecretariat.id && (
                 <button
                   type="button"
+                  disabled={isSavingModal}
                   onClick={async () => {
                     const secId = editingSecretariat.id;
                     if (!secId) return;
                     if (confirm(`هل أنت متأكد من حذف أمانة "${editingSecretariat.name}" نهائياً من الموقع؟`)) {
+                      setIsSavingModal(true);
                       try {
                         await api.deleteSecretariat(secId);
                         setShowSecretariatModal(false);
-                        loadAdminData();
+                        await loadAdminData();
                         onRefreshPublicData();
+                        showBanner('success', `تم حذف أمانة "${editingSecretariat.name}" بنجاح`);
                       } catch (err: any) {
-                        alert(err.message || 'حدث خطأ أثناء حذف الأمانة');
+                        setModalError(err?.message || 'حدث خطأ أثناء حذف الأمانة');
+                      } finally {
+                        setIsSavingModal(false);
                       }
                     }
                   }}
-                  className="bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 border border-red-200 text-xs font-bold px-3.5 py-2.5 rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
+                  className="bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 border border-red-200 text-xs font-bold px-3.5 py-2.5 rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60"
                   title="حذف هذه الأمانة نهائياً"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -6343,31 +6767,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3 border-t border-stone-100">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingSecMember.name || !editingSecMember.secretariatId || !editingSecMember.role) {
-                    alert('يرجى اختيار الأمانة وكتابة الاسم والمسمى التنظيمي');
+                  if (!editingSecMember.name?.trim() || !editingSecMember.secretariatId || !editingSecMember.role?.trim()) {
+                    setModalError('يرجى اختيار الأمانة وكتابة الاسم والمسمى التنظيمي');
                     return;
                   }
-                  if (editingSecMember.id) {
-                    await api.updateSecretariatMember(editingSecMember.id, editingSecMember);
-                  } else {
-                    await api.createSecretariatMember(editingSecMember);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    if (editingSecMember.id) {
+                      await api.updateSecretariatMember(editingSecMember.id, editingSecMember);
+                    } else {
+                      await api.createSecretariatMember(editingSecMember);
+                    }
+                    setShowSecMemberModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner('success', 'تم حفظ بيانات العضو / كادر الأمانة بنجاح');
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ بيانات العضو');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowSecMemberModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
-                  alert('تم حفظ بيانات العضو / كادر الأمانة بنجاح');
                 }}
-                className="bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
+                className="bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 transition-colors shadow-xs flex items-center justify-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                <span>حفظ بيانات كادر الأمانة</span>
+                <span>{isSavingModal ? 'جاري الحفظ...' : 'حفظ بيانات كادر الأمانة'}</span>
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowSecMemberModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -6587,9 +7029,158 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <textarea
                   rows={2}
                   value={Array.isArray(editingInitiative.goals) ? editingInitiative.goals.join('\n') : ''}
-                  onChange={e => setEditingInitiative({ ...editingInitiative, goals: e.target.value.split('\n').filter(Boolean) })}
+                  onChange={e => setEditingInitiative({ ...editingInitiative, goals: e.target.value.split('\n') })}
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                 />
+              </div>
+
+              {/* Initiative Author / Coordinator Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    اسم القائم بالمبادرة / الناشر
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أ. فلان الفلاني"
+                    value={editingInitiative.authorName || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, authorName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    المنصب أو الصفة الحزبية
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أمين قسم ثالث أكتوبر / أمين المبادرات"
+                    value={editingInitiative.authorPosition || ''}
+                    onChange={e => setEditingInitiative({ ...editingInitiative, authorPosition: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
+                  />
+                </div>
+              </div>
+
+              {/* Initiative Activities Editor */}
+              <div className="bg-stone-50 border border-stone-200 p-3 rounded-2xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-stone-900">
+                    أنشطة المبادرة الميدانية ({(editingInitiative.activities || []).length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const current = editingInitiative.activities || [];
+                      setEditingInitiative({
+                        ...editingInitiative,
+                        activities: [
+                          ...current,
+                          {
+                            title: '',
+                            date: new Date().toISOString().split('T')[0],
+                            description: '',
+                            authorName: editingInitiative.authorName || '',
+                            authorPosition: editingInitiative.authorPosition || ''
+                          }
+                        ]
+                      });
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة نشاط</span>
+                  </button>
+                </div>
+
+                {(editingInitiative.activities || []).length === 0 ? (
+                  <p className="text-[11px] text-stone-400 text-center py-1">
+                    لا توجد أنشطة مضافة بعد لهذه المبادرة.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {(editingInitiative.activities || []).map((act, idx) => (
+                      <div key={idx} className="bg-white border border-stone-200 rounded-xl p-2.5 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black text-amber-800">نشاط #{idx + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const current = editingInitiative.activities || [];
+                              setEditingInitiative({
+                                ...editingInitiative,
+                                activities: current.filter((_, i) => i !== idx)
+                              });
+                            }}
+                            className="text-red-600 hover:text-red-800 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>حذف</span>
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            placeholder="عنوان النشاط"
+                            value={act.title || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], title: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                          />
+                          <input
+                            type="date"
+                            value={act.date || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], date: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                          />
+                        </div>
+                        <textarea
+                          rows={2}
+                          placeholder="تفاصيل النشاط..."
+                          value={act.description || ''}
+                          onChange={e => {
+                            const updated = [...(editingInitiative.activities || [])];
+                            updated[idx] = { ...updated[idx], description: e.target.value };
+                            setEditingInitiative({ ...editingInitiative, activities: updated });
+                          }}
+                          className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                        />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            placeholder="القائم بالنشاط"
+                            value={act.authorName || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], authorName: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            placeholder="المنصب / الصفة"
+                            value={act.authorPosition || ''}
+                            onChange={e => {
+                              const updated = [...(editingInitiative.activities || [])];
+                              updated[idx] = { ...updated[idx], authorPosition: e.target.value };
+                              setEditingInitiative({ ...editingInitiative, activities: updated });
+                            }}
+                            className="w-full border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <ImageFieldWithPicker
@@ -6613,29 +7204,63 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               />
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingInitiative.title) {
-                    alert('يرجى إدخال اسم المبادرة');
+                  const trimmedTitle = editingInitiative.title?.trim() || '';
+                  if (!trimmedTitle) {
+                    setModalError('يرجى إدخال اسم المبادرة');
                     return;
                   }
-                  if (editingInitiative.id) {
-                    await api.updateInitiative(editingInitiative.id, editingInitiative);
-                  } else {
-                    await api.createInitiative(editingInitiative);
+                  const payload: Partial<Initiative> = {
+                    ...editingInitiative,
+                    title: trimmedTitle,
+                    goals: Array.isArray(editingInitiative.goals)
+                      ? editingInitiative.goals.map(g => g.trim()).filter(Boolean)
+                      : [],
+                    activities: (editingInitiative.activities || []).filter(a => a.title?.trim() || a.description?.trim())
+                  };
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    let notifRes: NotificationDispatchResult | null | undefined = null;
+                    if (editingInitiative.id) {
+                      await api.updateInitiative(editingInitiative.id, payload);
+                    } else {
+                      const created = await api.createInitiative(payload);
+                      notifRes = created.notificationResult;
+                    }
+                    setShowInitiativeModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner(
+                      'success',
+                      (editingInitiative.id ? 'تم حفظ تعديل المبادرة بنجاح' : 'تمت إضافة المبادرة بنجاح') +
+                        formatDispatchSummary(notifRes)
+                    );
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ المبادرة');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowInitiativeModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ المبادرة
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ المبادرة'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowInitiativeModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -6793,29 +7418,62 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingNews.title || !editingNews.content) {
-                    alert('يرجى إدخال العنوان والمحتوى');
+                  const trimmedTitle = editingNews.title?.trim() || '';
+                  const trimmedContent = editingNews.content?.trim() || '';
+                  if (!trimmedTitle || !trimmedContent) {
+                    setModalError('يرجى إدخال العنوان والمحتوى');
                     return;
                   }
-                  if (editingNews.id) {
-                    await api.updateNews(editingNews.id, editingNews);
-                  } else {
-                    await api.createNews(editingNews);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    const payload: Partial<NewsItem> = {
+                      ...editingNews,
+                      title: trimmedTitle,
+                      content: trimmedContent
+                    };
+                    let notifRes: NotificationDispatchResult | null | undefined = null;
+                    if (editingNews.id) {
+                      const updated = await api.updateNews(editingNews.id, payload);
+                      notifRes = updated.notificationResult;
+                    } else {
+                      const created = await api.createNews(payload);
+                      notifRes = created.notificationResult;
+                    }
+                    setShowNewsModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner(
+                      'success',
+                      (editingNews.id ? 'تم حفظ تعديل الخبر بنجاح' : 'تم نشر الخبر بنجاح') +
+                        formatDispatchSummary(notifRes)
+                    );
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ الخبر');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowNewsModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                نشر وحفظ الخبر
+                {isSavingModal ? 'جاري الحفظ...' : 'نشر وحفظ الخبر'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowNewsModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -6849,7 +7507,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <input
                   type="datetime-local"
                   required
-                  value={editingEvent.dateTime || ''}
+                  value={formatDateTimeLocal(editingEvent.dateTime)}
                   onChange={e => setEditingEvent({ ...editingEvent, dateTime: e.target.value })}
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
                 />
@@ -6874,6 +7532,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     value={editingEvent.organizer || ''}
                     onChange={e => setEditingEvent({ ...editingEvent, organizer: e.target.value })}
                     className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Event Author / Responsible Person Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    اسم القائم بالفعالية أو النشاط / الناشر
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أ. فلان الفلاني"
+                    value={editingEvent.authorName || ''}
+                    onChange={e => setEditingEvent({ ...editingEvent, authorName: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-800 mb-1">
+                    المنصب أو الصفة الحزبية
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: أمين التنظيم / أمين الشباب"
+                    value={editingEvent.authorPosition || ''}
+                    onChange={e => setEditingEvent({ ...editingEvent, authorPosition: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white text-stone-900"
                   />
                 </div>
               </div>
@@ -6915,29 +7602,61 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               />
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingEvent.title || !editingEvent.dateTime) {
-                    alert('يرجى إدخال اسم الفعالية وموعدها');
+                  const trimmedTitle = editingEvent.title?.trim() || '';
+                  const trimmedDateTime = formatDateTimeLocal(editingEvent.dateTime).trim();
+                  if (!trimmedTitle || !trimmedDateTime) {
+                    setModalError('يرجى إدخال اسم الفعالية وموعدها');
                     return;
                   }
-                  if (editingEvent.id) {
-                    await api.updateEvent(editingEvent.id, editingEvent);
-                  } else {
-                    await api.createEvent(editingEvent);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    const payload: Partial<EventItem> = {
+                      ...editingEvent,
+                      title: trimmedTitle,
+                      dateTime: trimmedDateTime
+                    };
+                    let notifRes: NotificationDispatchResult | null | undefined = null;
+                    if (editingEvent.id) {
+                      await api.updateEvent(editingEvent.id, payload);
+                    } else {
+                      const created = await api.createEvent(payload);
+                      notifRes = created.notificationResult;
+                    }
+                    setShowEventModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner(
+                      'success',
+                      (editingEvent.id ? 'تم حفظ تعديل الفعالية بنجاح' : 'تمت إضافة الفعالية بنجاح') +
+                        formatDispatchSummary(notifRes)
+                    );
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ الفعالية');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowEventModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ الفعالية
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ الفعالية'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowEventModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -7152,30 +7871,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3 border-t border-stone-100">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingMedia.title || !editingMedia.url) {
-                    alert('يرجى إدخال العنوان ورفع الصورة أو إدخال الرابط');
+                  if (!editingMedia.title?.trim() || !editingMedia.url?.trim()) {
+                    setModalError('يرجى إدخال العنوان ورفع الصورة أو إدخال الرابط');
                     return;
                   }
-                  if (editingMedia.id) {
-                    await api.updateMedia(editingMedia.id, editingMedia);
-                  } else {
-                    await api.createMedia(editingMedia);
+                  setModalError(null);
+                  setIsSavingModal(true);
+                  try {
+                    if (editingMedia.id) {
+                      await api.updateMedia(editingMedia.id, editingMedia);
+                    } else {
+                      await api.createMedia(editingMedia);
+                    }
+                    setShowMediaModal(false);
+                    await loadAdminData();
+                    onRefreshPublicData();
+                    showBanner('success', 'تم حفظ الوسيط في المعرض بنجاح');
+                  } catch (err: any) {
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ الوسيط');
+                  } finally {
+                    setIsSavingModal(false);
                   }
-                  setShowMediaModal(false);
-                  loadAdminData();
-                  onRefreshPublicData();
-                  alert('تم حفظ الوسيط في المعرض بنجاح');
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 shadow-xs"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1 shadow-xs"
               >
-                حفظ الوسيط بالمعرض
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ الوسيط بالمعرض'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowMediaModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -7386,9 +8123,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3 border-t border-stone-100">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
+                  setModalError(null);
+                  setIsSavingModal(true);
                   try {
                     if (editingUser.id) {
                       await api.updateAdminUser(editingUser.id, editingUser);
@@ -7396,18 +8143,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       await api.createAdminUser(editingUser);
                     }
                     setShowUserModal(false);
-                    loadAdminData();
+                    await loadAdminData();
+                    showBanner('success', 'تم حفظ بيانات المشرف بنجاح');
                   } catch (err: any) {
-                    alert(err.message || 'حدث خطأ أثناء حفظ المشرف');
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ المشرف');
+                  } finally {
+                    setIsSavingModal(false);
                   }
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ بيانات المشرف
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ بيانات المشرف'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowUserModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -7610,13 +8362,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3 border-t border-stone-100">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingPage.title || !editingPage.slug || !editingPage.content) {
-                    alert('يرجى ملء عنوان الصفحة ورابطها ومحتواها');
+                  if (!editingPage.title?.trim() || !editingPage.slug?.trim() || !editingPage.content?.trim()) {
+                    setModalError('يرجى ملء عنوان الصفحة ورابطها ومحتواها');
                     return;
                   }
+                  setModalError(null);
+                  setIsSavingModal(true);
                   try {
                     if (editingPage.id) {
                       await api.updateCMSPage(editingPage.id, editingPage);
@@ -7624,19 +8386,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       await api.createCMSPage(editingPage);
                     }
                     setShowPageModal(false);
-                    loadAdminData();
+                    await loadAdminData();
                     onRefreshPublicData();
+                    showBanner('success', 'تم حفظ ونشر الصفحة بنجاح');
                   } catch (err: any) {
-                    alert(err.message || 'حدث خطأ أثناء حفظ الصفحة');
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ الصفحة');
+                  } finally {
+                    setIsSavingModal(false);
                   }
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ ونشر الصفحة
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ ونشر الصفحة'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowPageModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>
@@ -7867,13 +8634,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             </div>
 
+            {modalError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pt-3 border-t border-stone-100">
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={async () => {
-                  if (!editingRole.name) {
-                    alert('يرجى كتابة اسم الدور الإداري');
+                  if (!editingRole.name?.trim()) {
+                    setModalError('يرجى كتابة اسم الدور الإداري');
                     return;
                   }
+                  setModalError(null);
+                  setIsSavingModal(true);
                   try {
                     if (editingRole.id) {
                       await api.updateRole(editingRole.id, editingRole);
@@ -7881,18 +8658,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       await api.createRole(editingRole);
                     }
                     setShowRoleModal(false);
-                    loadAdminData();
+                    await loadAdminData();
+                    showBanner('success', 'تم حفظ الدور والصلاحيات بنجاح');
                   } catch (err: any) {
-                    alert(err.message || 'حدث خطأ أثناء حفظ الدور الإداري');
+                    setModalError(err?.message || 'حدث خطأ أثناء حفظ الدور الإداري');
+                  } finally {
+                    setIsSavingModal(false);
                   }
                 }}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
+                className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
-                حفظ الدور والصلاحيات
+                {isSavingModal ? 'جاري الحفظ...' : 'حفظ الدور والصلاحيات'}
               </button>
               <button
+                type="button"
+                disabled={isSavingModal}
                 onClick={() => setShowRoleModal(false)}
-                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                className="bg-stone-200 text-stone-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer disabled:opacity-60"
               >
                 إلغاء
               </button>

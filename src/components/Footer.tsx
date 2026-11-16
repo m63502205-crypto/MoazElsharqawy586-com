@@ -1,6 +1,7 @@
-import React from 'react';
-import { Phone, Mail, MapPin, MessageCircle, ExternalLink, ShieldCheck } from 'lucide-react';
+import React, { useState } from 'react';
+import { Mail, CheckCircle2, AlertCircle, Send } from 'lucide-react';
 import { SiteSettings } from '../types';
+import { api } from '../api';
 
 interface FooterProps {
   settings: SiteSettings;
@@ -8,10 +9,134 @@ interface FooterProps {
 }
 
 export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
+  const [email, setEmail] = useState('');
+  const [topicNews, setTopicNews] = useState(true);
+  const [topicEvents, setTopicEvents] = useState(true);
+  const [topicInitiatives, setTopicInitiatives] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleSubscribe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = email.trim();
+    if (!cleaned || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleaned)) {
+      setFeedback({ type: 'error', text: 'يرجى إدخال بريد إلكتروني صحيح.' });
+      return;
+    }
+
+    setSubmitting(true);
+    setFeedback(null);
+    try {
+      const res = await api.subscribeNewsletter({
+        email: cleaned,
+        topics: {
+          news: topicNews,
+          events: topicEvents,
+          initiatives: topicInitiatives
+        }
+      });
+      setFeedback({ type: 'success', text: res.message });
+      setEmail('');
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        text: err?.message || 'تعذر تسجيل البريد الإلكتروني، يرجى المحاولة مجدداً.'
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <footer className="bg-stone-900 text-stone-300 border-t-4 border-amber-600 no-print">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center flex flex-col items-center">
-        
+        {/* Newsletter Email Subscription Box (اشترك لتصلك الأخبار والفعاليات فور النشر) */}
+        <div className="w-full max-w-2xl mb-10 bg-stone-950/80 border border-amber-500/30 rounded-3xl p-6 sm:p-8 text-right shadow-xl">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-11 h-11 rounded-2xl bg-red-700/90 text-amber-300 flex items-center justify-center shrink-0 shadow-md">
+              <Mail className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-white">
+                اشترك في نشرة الأخبار والفعاليات الفورية
+              </h3>
+              <p className="text-xs text-stone-400 mt-0.5 leading-relaxed">
+                سجّل بريدك الإلكتروني لتصلك الأخبار والفعاليات والمبادرات فور نشرها مباشرة.
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubscribe} className="space-y-3">
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <input
+                type="email"
+                dir="ltr"
+                required
+                placeholder="example@domain.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                aria-label="البريد الإلكتروني للاشتراك في الأخبار والفعاليات"
+                className="flex-1 bg-stone-900 border border-stone-700 focus:border-amber-400 rounded-xl px-4 py-3 text-sm text-white placeholder:text-stone-500 focus:outline-hidden text-left"
+              />
+              <button
+                type="submit"
+                disabled={submitting}
+                className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-60 text-stone-950 font-black text-xs sm:text-sm px-6 py-3 rounded-xl cursor-pointer flex items-center justify-center gap-2 shrink-0 transition-all shadow-md"
+              >
+                <Send className="w-4 h-4" />
+                <span>{submitting ? 'جاري التسجيل...' : 'اشتراك فوري'}</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs text-stone-300 pt-1">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={topicNews}
+                  onChange={e => setTopicNews(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-amber-500 rounded"
+                />
+                <span>الأخبار والبيانات</span>
+              </label>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={topicEvents}
+                  onChange={e => setTopicEvents(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-amber-500 rounded"
+                />
+                <span>الفعاليات والأنشطة</span>
+              </label>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={topicInitiatives}
+                  onChange={e => setTopicInitiatives(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-amber-500 rounded"
+                />
+                <span>المبادرات المجتمعية</span>
+              </label>
+            </div>
+
+            {feedback && (
+              <div
+                className={`p-3 rounded-xl text-xs font-bold flex items-center gap-2 ${
+                  feedback.type === 'success'
+                    ? 'bg-emerald-950/70 border border-emerald-600/50 text-emerald-300'
+                    : 'bg-red-950/70 border border-red-600/50 text-red-300'
+                }`}
+              >
+                {feedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                )}
+                <span>{feedback.text}</span>
+              </div>
+            )}
+          </form>
+        </div>
+
         {/* Centered Golden Emblem */}
         <div className="mb-6 relative group">
           <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-white border border-amber-500/40 p-2 shadow-2xl flex items-center justify-center">
@@ -32,7 +157,7 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
           أمانة قسم ثالث أكتوبر – محافظة الجيزة
         </p>
 
-        {/* Official Facebook Link Only (Per user instruction) */}
+        {/* Official Facebook Link Only */}
         <div className="flex items-center justify-center my-6">
           <a
             href={settings.facebookUrl || 'https://www.facebook.com/fational.front.party'}
@@ -56,53 +181,30 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
         {/* Separator */}
         <div className="w-24 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent my-6" />
 
-        {/* Copyright & Secondary Links */}
-        <div className="flex flex-col sm:flex-row items-center justify-between w-full text-xs text-stone-500 gap-3 border-t border-stone-900 pt-6">
+        {/* Copyright */}
+        <div className="flex items-center justify-center w-full text-xs text-stone-500 border-t border-stone-900 pt-6">
           <p className="tracking-wide">
-            © 2026 All Rights Reserved.
-          </p>
-          <div className="flex items-center gap-4 text-xs">
-            <a
-              href="/contact"
-              onClick={(e) => {
-                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                  e.preventDefault();
-                  setCurrentView('contact');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }
-              }}
-              className="text-stone-400 hover:text-amber-400 transition-colors cursor-pointer"
-            >
-              تواصل معنا
-            </a>
-            <span>•</span>
-            <a
-              href="/join"
-              onClick={(e) => {
-                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                  e.preventDefault();
-                  setCurrentView('join');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }
-              }}
-              className="text-stone-400 hover:text-amber-400 transition-colors cursor-pointer"
-            >
-              استمارة العضوية
-            </a>
-            <span>•</span>
+            © 2026{' '}
             <button
               type="button"
               onClick={() => {
                 setCurrentView('admin');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="text-stone-400 hover:text-amber-400 transition-colors cursor-pointer font-bold"
+              className="inline p-0 m-0 bg-transparent border-0 text-inherit hover:text-stone-300 transition-colors cursor-pointer"
+              aria-label="All Rights Reserved"
             >
-              لوحة الإدارة
+              All Rights Reserved.
             </button>
-          </div>
+          </p>
         </div>
 
+        {/* Developer Credit */}
+        <div className="w-full pt-4 mt-4 border-t border-stone-800/70 text-center">
+          <p className="text-xs font-semibold text-stone-400 tracking-wide" dir="ltr">
+            Development <span className="text-amber-400">Eng.Moaz Elsharqawy</span>
+          </p>
+        </div>
       </div>
     </footer>
   );

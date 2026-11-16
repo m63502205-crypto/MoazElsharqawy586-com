@@ -16,7 +16,10 @@ import {
   AuditLog,
   CMSPage,
   AdminRole,
-  ApplicationInquiryResult
+  ApplicationInquiryResult,
+  EmailSubscriber,
+  EmailDispatchLog,
+  NotificationDispatchResult
 } from './types';
 import { getFirebaseIdToken } from './firebase';
 
@@ -57,9 +60,24 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     headers
   });
 
-  const data = await res.json().catch(() => ({}));
+  let data: any = {};
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    data = await res.json().catch(() => ({}));
+  } else {
+    const rawText = await res.text().catch(() => '');
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      data = {};
+    }
+  }
+
   if (!res.ok) {
-    throw new Error(data.error || 'حدث خطأ أثناء معالجة الطلب');
+    if (res.status === 413) {
+      throw new Error('حجم الصورة أو البيانات المرسلة كبير جداً، يرجى تقليل حجم الصور ثم المحاولة مجدداً');
+    }
+    throw new Error(data.error || `حدث خطأ أثناء معالجة الطلب (${res.status})`);
   }
 
   return data as T;
@@ -95,6 +113,16 @@ export const api = {
     apiFetch<ApplicationInquiryResult>('/api/public/inquire', {
       method: 'POST',
       body: JSON.stringify({ query })
+    }),
+
+  subscribeNewsletter: (payload: {
+    email: string;
+    name?: string;
+    topics?: { news?: boolean; events?: boolean; initiatives?: boolean };
+  }) =>
+    apiFetch<{ success: boolean; alreadySubscribed?: boolean; message: string }>('/api/public/subscribe', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     }),
 
   // Admin Auth
@@ -151,6 +179,9 @@ export const api = {
       settings: SiteSettings;
       pages: CMSPage[];
       roles: AdminRole[];
+      subscribers: EmailSubscriber[];
+      emailDispatchLogs: EmailDispatchLog[];
+      smtpStatus?: { configured: boolean };
     }>('/api/admin/full-db'),
 
   // Party Leaders
@@ -221,7 +252,7 @@ export const api = {
 
   // Initiatives
   createInitiative: (init: Partial<Initiative>) =>
-    apiFetch<{ success: boolean; initiative: Initiative }>('/api/admin/initiatives', {
+    apiFetch<{ success: boolean; initiative: Initiative; notificationResult?: NotificationDispatchResult | null }>('/api/admin/initiatives', {
       method: 'POST',
       body: JSON.stringify(init)
     }),
@@ -235,12 +266,12 @@ export const api = {
 
   // News
   createNews: (news: Partial<NewsItem>) =>
-    apiFetch<{ success: boolean; news: NewsItem }>('/api/admin/news', {
+    apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/news', {
       method: 'POST',
       body: JSON.stringify(news)
     }),
   updateNews: (id: string, news: Partial<NewsItem>) =>
-    apiFetch<{ success: boolean; news: NewsItem }>(`/api/admin/news/${id}`, {
+    apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>(`/api/admin/news/${id}`, {
       method: 'PUT',
       body: JSON.stringify(news)
     }),
@@ -249,7 +280,7 @@ export const api = {
 
   // Events
   createEvent: (event: Partial<EventItem>) =>
-    apiFetch<{ success: boolean; event: EventItem }>('/api/admin/events', {
+    apiFetch<{ success: boolean; event: EventItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/events', {
       method: 'POST',
       body: JSON.stringify(event)
     }),
@@ -378,5 +409,24 @@ export const api = {
       body: JSON.stringify(role)
     }),
   deleteRole: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/roles/${id}`, { method: 'DELETE' })
+    apiFetch<{ success: boolean }>(`/api/admin/roles/${id}`, { method: 'DELETE' }),
+
+  // Email Subscribers & Instant Notifications
+  getSubscribers: () =>
+    apiFetch<{
+      subscribers: EmailSubscriber[];
+      dispatchLogs: EmailDispatchLog[];
+      smtpStatus: { configured: boolean };
+    }>('/api/admin/subscribers'),
+  toggleSubscriber: (id: string) =>
+    apiFetch<{ success: boolean; subscriber: EmailSubscriber }>(`/api/admin/subscribers/${id}/toggle`, {
+      method: 'POST'
+    }),
+  deleteSubscriber: (id: string) =>
+    apiFetch<{ success: boolean }>(`/api/admin/subscribers/${id}`, { method: 'DELETE' }),
+  dispatchSubscriberItem: (itemType: 'news' | 'event' | 'initiative', itemId: string) =>
+    apiFetch<{ success: boolean; result: NotificationDispatchResult }>('/api/admin/subscribers/dispatch-item', {
+      method: 'POST',
+      body: JSON.stringify({ itemType, itemId })
+    })
 };

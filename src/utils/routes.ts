@@ -1,20 +1,20 @@
 import { PublicPortalData } from '../types';
 
-export const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
+export const OFFICIAL_SITE_URL = 'https://www.algabhaalwataniya-oct3.org';
 export const HOME_TITLE = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-export const HOME_DESCRIPTION =
-  'الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+export const HOME_DESCRIPTION = 'الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
 
 export interface ParsedRoute {
   view: string;
   slug?: string;
   newsId?: string | null;
   eventId?: string | null;
+  person?: string | null;
 }
 
 export function getViewPath(
   view: string,
-  options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
 ): string {
   switch (view) {
     case 'home':
@@ -28,8 +28,11 @@ export function getViewPath(
       return '/secretariat-leaders';
     case 'secretariats':
       return '/secretariats';
-    case 'secretariat-detail':
-      return options?.slug ? `/secretariat/${encodeURIComponent(options.slug)}` : '/secretariats';
+    case 'secretariat-detail': {
+      if (!options?.slug) return '/secretariats';
+      const base = `/secretariat/${encodeURIComponent(options.slug)}`;
+      return options?.person ? `${base}?person=${encodeURIComponent(options.person)}` : base;
+    }
     case 'initiatives':
       return '/initiatives';
     case 'initiative-detail':
@@ -38,6 +41,8 @@ export function getViewPath(
       return options?.newsId ? `/news/${encodeURIComponent(options.newsId)}` : '/news';
     case 'events':
       return options?.eventId ? `/events/${encodeURIComponent(options.eventId)}` : '/events';
+    case 'live':
+      return '/live';
     case 'join':
       return '/join';
     case 'contact':
@@ -88,9 +93,13 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
       return { view: 'events', eventId: eId ? decodeURIComponent(eId) : null };
     }
     if (fullHash.startsWith('secretariat/')) {
+      const rest = fullHash.replace('secretariat/', '');
+      const [rawSlug, rawQuery] = rest.split('?');
+      const hashPerson = rawQuery ? new URLSearchParams(rawQuery).get('person') : null;
       return {
         view: 'secretariat-detail',
-        slug: decodeURIComponent(fullHash.replace('secretariat/', ''))
+        slug: decodeURIComponent(rawSlug),
+        person: hashPerson || searchParams.get('person') || null
       };
     }
     if (fullHash.startsWith('initiative/')) {
@@ -110,6 +119,7 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
         'initiatives',
         'news',
         'events',
+        'live',
         'join',
         'contact'
       ].includes(cleanView)
@@ -134,6 +144,7 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
       '/initiatives',
       '/news',
       '/events',
+      '/live',
       '/join',
       '/contact'
     ].includes(pathname)
@@ -141,7 +152,11 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
     return { view: pathname.slice(1) };
   }
   if (pathname.startsWith('/secretariat/')) {
-    return { view: 'secretariat-detail', slug: pathname.slice('/secretariat/'.length) };
+    return {
+      view: 'secretariat-detail',
+      slug: pathname.slice('/secretariat/'.length),
+      person: searchParams.get('person') || null
+    };
   }
   if (pathname.startsWith('/initiative/')) {
     return { view: 'initiative-detail', slug: pathname.slice('/initiative/'.length) };
@@ -162,10 +177,16 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
 export function getPageSeoMeta(
   view: string,
   data: PublicPortalData | null,
-  options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
 ): { title: string; description: string; canonicalUrl: string; robots: string } {
-  const baseSiteUrl = (data?.settings?.officialSiteUrl || OFFICIAL_SITE_URL).trim().replace(/\/+$/, '') || OFFICIAL_SITE_URL;
-  const path = getViewPath(view, options);
+  const configuredUrl = (data?.settings?.officialSiteUrl || '').trim().replace(/\/+$/, '');
+  const baseSiteUrl =
+    configuredUrl &&
+    configuredUrl !== 'https://nfp-october3.ai.studio' &&
+    configuredUrl !== 'https://algabhaalwataniya-oct3.org'
+      ? configuredUrl
+      : OFFICIAL_SITE_URL;
+  const path = getViewPath(view, options).split('?')[0];
   const canonicalUrl = `${baseSiteUrl}${path === '/#admin' ? '/' : path}`;
   const robots =
     view === 'admin'
@@ -279,6 +300,14 @@ export function getPageSeoMeta(
     return {
       title: 'الفعاليات والأنشطة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
       description: 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      canonicalUrl,
+      robots
+    };
+  }
+  if (view === 'live') {
+    return {
+      title: 'البث المباشر | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      description: 'تابع البث المباشر لفعاليات ومؤتمرات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       canonicalUrl,
       robots
     };

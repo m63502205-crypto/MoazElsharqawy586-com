@@ -250,6 +250,24 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(docId);
     }
 
+    match /subscribers/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /email_dispatch_logs/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId);
+      allow update: if isAdmin() && isValidId(docId) && isValidPrivateRecord(incoming(), docId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
     match /admins/{adminUid} {
       allow get: if isAdmin() && isValidId(adminUid);
       allow list: if isBootstrappedAdmin();

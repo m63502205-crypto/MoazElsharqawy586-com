@@ -46,13 +46,22 @@ import {
   Edit2,
   Sparkles,
   Maximize2,
-  X
+  X,
+  Radio,
+  LayoutGrid,
+  ShieldCheck
 } from 'lucide-react';
 import { api } from '../api';
 import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { VideoPlayer } from './VideoPlayer';
 import { syncHeroAudioState, stopHeroAudio, clearBrowserMediaSession } from '../utils/heroAudio';
+import {
+  resolvePersonInSecretariats,
+  getAllPeopleInSecretariat,
+  normalizeArabicPersonName
+} from '../utils/personSecretariat';
 
 function normalizeArabicDigits(val: string): string {
   return val
@@ -92,7 +101,7 @@ interface PublicPagesProps {
   setCurrentView: (view: string) => void;
   onNavigate?: (
     view: string,
-    options?: { slug?: string; newsId?: string | null; eventId?: string | null }
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
   ) => void;
   data: PublicPortalData;
   onRefreshData: () => void;
@@ -100,6 +109,7 @@ interface PublicPagesProps {
   setSelectedSlug?: (slug: string) => void;
   selectedNewsId?: string | null;
   selectedEventId?: string | null;
+  selectedPerson?: string | null;
   onClearSelectedNewsId?: () => void;
 }
 
@@ -113,6 +123,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   setSelectedSlug,
   selectedNewsId,
   selectedEventId,
+  selectedPerson,
   onClearSelectedNewsId
 }) => {
   const ct = data.settings.customTexts || {};
@@ -123,6 +134,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
+  const [focusedPersonKey, setFocusedPersonKey] = useState<string | null>(selectedPerson || null);
 
   // Lightbox Modal for high-resolution interactive viewing of images
   const [lightboxImages, setLightboxImages] = useState<string[]>([]);
@@ -299,6 +311,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       }
     }
   }, [selectedNewsId, data?.news]);
+
+  // Sync focused person from URL query (?person=...)
+  useEffect(() => {
+    setFocusedPersonKey(selectedPerson || null);
+  }, [selectedPerson, selectedSlug]);
 
   // Filter states
   const [partyLeaderLevelFilter, setPartyLeaderLevelFilter] = useState<string>(
@@ -542,15 +559,72 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     }
   };
 
-  // Helper to open secretariat details
-  const openSecretariat = (slug: string) => {
+  // Helper to open secretariat details (optionally focusing a specific person)
+  const openSecretariat = (slug: string, personKey?: string | null) => {
+    setFocusedPersonKey(personKey || null);
     if (onNavigate) {
-      onNavigate('secretariat-detail', { slug });
+      onNavigate('secretariat-detail', personKey ? { slug, person: personKey } : { slug });
       return;
     }
     if (setSelectedSlug) setSelectedSlug(slug);
     setCurrentView('secretariat-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Resolve clicked person across secretariats; falls back to leader bio modal if not in a specialized secretariat
+  const handlePersonClick = (
+    name?: string | null,
+    options?: {
+      explicitSecretariatId?: string | null;
+      personKey?: string | null;
+      fallbackPartyLeader?: PartyLeader | null;
+      fallbackSecLeader?: SecretariatLeader | null;
+    }
+  ) => {
+    const matched = resolvePersonInSecretariats({
+      name,
+      personKey: options?.personKey,
+      explicitSecretariatId: options?.explicitSecretariatId,
+      specializedSecretariats: data.specializedSecretariats || [],
+      secretariatMembers: data.secretariatMembers || [],
+      secretariatLeaders: data.secretariatLeaders || []
+    });
+
+    if (matched) {
+      setSelectedNews(null);
+      setSelectedPartyLeader(null);
+      setSelectedSecLeader(null);
+      openSecretariat(matched.secretariat.slug, matched.personKey);
+      return;
+    }
+
+    if (options?.fallbackSecLeader) {
+      setSelectedSecLeader(options.fallbackSecLeader);
+      return;
+    }
+    if (options?.fallbackPartyLeader) {
+      setSelectedPartyLeader(options.fallbackPartyLeader);
+      return;
+    }
+
+    const bySecLeader = name
+      ? (data.secretariatLeaders || []).find(
+          l => normalizeArabicPersonName(l.name) === normalizeArabicPersonName(name)
+        )
+      : undefined;
+    if (bySecLeader) {
+      setSelectedSecLeader(bySecLeader);
+      return;
+    }
+
+    const byPartyLeader = name
+      ? (data.partyLeaders || []).find(
+          l => normalizeArabicPersonName(l.name) === normalizeArabicPersonName(name)
+        )
+      : undefined;
+    if (byPartyLeader) {
+      setSelectedPartyLeader(byPartyLeader);
+    }
   };
 
   // Helper to open initiative details
@@ -564,6 +638,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const renderCurrentView = () => {
   // -------------------------------------------------------------
   // 1. HOME VIEW
   // -------------------------------------------------------------
@@ -697,80 +772,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
           </div>
         </section>
-
-        {/* Breaking News Ticker / Bar (شريط الأخبار العاجلة) */}
-        {data.news && data.news.some(n => n.isUrgent) && (
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 -mt-6 sm:-mt-8 relative z-20">
-            <div className="bg-gradient-to-r from-red-800 via-red-700 to-red-800 text-white rounded-2xl p-3 sm:p-4 shadow-xl border-2 border-red-500/80 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="flex items-center gap-3 w-full sm:w-auto">
-                <span className="bg-white text-red-700 text-xs font-black px-3 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1.5 shrink-0 shadow-xs animate-pulse">
-                  <span>⚡ عاجل</span>
-                </span>
-                <p className="text-xs sm:text-sm font-black text-white line-clamp-1">
-                  {data.news.find(n => n.isUrgent)?.title}
-                </p>
-              </div>
-
-              <a
-                href={(() => {
-                  const urgentItem = data.news.find(n => n.isUrgent);
-                  return urgentItem ? `/news/${encodeURIComponent(urgentItem.id)}` : '/news';
-                })()}
-                onClick={(e) => {
-                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
-                    e.preventDefault();
-                    const urgentItem = data.news.find(n => n.isUrgent);
-                    if (urgentItem) {
-                      setSelectedNews(urgentItem);
-                      if (onNavigate) {
-                        onNavigate('news', { newsId: urgentItem.id });
-                      } else {
-                        setCurrentView('news');
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }
-                    }
-                  }
-                }}
-                className="w-full sm:w-auto bg-black/40 hover:bg-black/60 text-white text-xs font-bold px-4 py-2 rounded-xl border border-white/20 transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
-              >
-                <span>تفاصيل الخبر الكاملة</span>
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          </div>
-        )}
-
-        {/* Live Stream alert if active */}
-        {data.liveStream && data.liveStream.isActive && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-6 relative z-20">
-            <div className="bg-red-700 text-white rounded-2xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 border-2 border-red-500">
-              <div className="flex items-center gap-4">
-                <span className="relative flex h-4 w-4">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
-                  <span className="relative inline-flex rounded-full h-4 w-4 bg-white" />
-                </span>
-                <div>
-                  <h3 className="font-extrabold text-lg text-white">
-                    {data.liveStream.title || 'بث مباشر لفعاليات الحزب'}
-                  </h3>
-                  <p className="text-xs text-red-100">
-                    {data.liveStream.description || 'تابع الآن البث المباشر لأمانة قسم ثالث أكتوبر'}
-                  </p>
-                </div>
-              </div>
-
-              <a
-                href={data.liveStream.streamUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-white text-red-700 hover:bg-stone-100 font-bold px-6 py-2.5 rounded-lg text-sm flex items-center gap-2 shadow-xs transition-colors shrink-0"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>مشاهدة البث الآن</span>
-              </a>
-            </div>
-          </div>
-        )}
 
         {/* Official Typography Section Directly Below Video (Exactly matching reference video) */}
         <section className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 pt-4">
@@ -918,7 +919,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {data.partyLeaders.map(leader => (
                     <div
                       key={leader.id}
-                      onClick={() => setSelectedPartyLeader(leader)}
+                      onClick={() =>
+                        handlePersonClick(leader.name, {
+                          personKey: leader.name,
+                          fallbackPartyLeader: leader
+                        })
+                      }
                       className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
                     >
                       <div className="aspect-square bg-stone-50 overflow-hidden relative">
@@ -964,10 +970,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {data.secretariatLeaders.map(leader => (
+                  {data.secretariatLeaders.map(leader => {
+                    const linkedSec = resolvePersonInSecretariats({
+                      name: leader.name,
+                      personKey: leader.id || leader.name,
+                      explicitSecretariatId: leader.specializedSecretariatId,
+                      specializedSecretariats: data.specializedSecretariats || [],
+                      secretariatMembers: data.secretariatMembers || [],
+                      secretariatLeaders: data.secretariatLeaders || []
+                    });
+                    return (
                     <div
                       key={leader.id}
-                      onClick={() => setSelectedSecLeader(leader)}
+                      onClick={() =>
+                        handlePersonClick(leader.name, {
+                          explicitSecretariatId: leader.specializedSecretariatId,
+                          personKey: leader.id || leader.name,
+                          fallbackSecLeader: leader
+                        })
+                      }
                       className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
                     >
                       <div className="aspect-square bg-stone-50 overflow-hidden relative">
@@ -979,8 +1000,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           }`}
                           referrerPolicy="no-referrer"
                         />
-                        <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                          أمانة قسم ثالث أكتوبر
+                        <div className="absolute top-2 right-2 bg-red-700 text-white text-[10px] font-bold px-2 py-0.5 rounded max-w-[85%] truncate">
+                          {linkedSec ? linkedSec.secretariat.name : 'أمانة قسم ثالث أكتوبر'}
                         </div>
                       </div>
                       <div className="p-4 text-right">
@@ -990,6 +1011,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <p className="text-xs font-semibold text-amber-700 mt-0.5 leading-relaxed">
                           {leader.title}
                         </p>
+                        {linkedSec && (
+                          <p className="text-[11px] font-bold text-red-700 mt-1 flex items-center gap-1">
+                            <Building2 className="w-3 h-3 shrink-0" />
+                            <span>عرض ملف الأمانة والتفاصيل</span>
+                          </p>
+                        )}
                         {leader.bio && (
                           <p className="text-[11px] text-stone-500 mt-2 line-clamp-2">
                             {leader.bio}
@@ -997,7 +1024,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1080,14 +1108,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 {featuredPeople.length > 0 && (
                   <div className="mb-4 flex flex-wrap items-center gap-3">
                     {featuredPeople.map((person, pIdx) => (
-                      <div key={pIdx} className="relative shrink-0">
+                      <button
+                        type="button"
+                        key={pIdx}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openSecretariat(sec.slug, person.name);
+                        }}
+                        title={`عرض بيانات ${person.name} في ${sec.name}`}
+                        className="relative shrink-0 cursor-pointer text-right group/person"
+                      >
                         <img
                           src={person.photoUrl}
                           alt={person.name}
-                          className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover:scale-[1.03] transition-transform"
+                          className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover/person:scale-[1.04] group-hover/person:border-red-600 transition-all"
                           referrerPolicy="no-referrer"
                         />
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -1096,9 +1133,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <div className="space-y-0.5 text-stone-500 min-w-0">
                     <div className="truncate">
                       <span className="font-medium">أمين الأمانة: </span>
-                      <span className="font-bold text-stone-800">
-                        {sec.secretaryName || 'قيد التعيين'}
-                      </span>
+                      {sec.secretaryName ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSecretariat(sec.slug, sec.secretaryName);
+                          }}
+                          className="font-bold text-stone-800 hover:text-red-700 hover:underline cursor-pointer"
+                        >
+                          {sec.secretaryName}
+                        </button>
+                      ) : (
+                        <span className="font-bold text-stone-800">قيد التعيين</span>
+                      )}
                     </div>
                     {allAssts.length > 0 && (
                       <div className="text-[11px] text-stone-500 line-clamp-2 leading-relaxed">
@@ -1106,7 +1154,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
                         </span>
                         <span className="font-semibold text-stone-700">
-                          {allAssts.map(a => a.name).join('، ')}
+                          {allAssts.map((a, aIdx) => (
+                            <React.Fragment key={a.id || aIdx}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openSecretariat(sec.slug, a.id || a.name);
+                                }}
+                                className="hover:text-red-700 hover:underline cursor-pointer"
+                              >
+                                {a.name}
+                              </button>
+                              {aIdx < allAssts.length - 1 ? '، ' : ''}
+                            </React.Fragment>
+                          ))}
                         </span>
                       </div>
                     )}
@@ -1119,6 +1181,118 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
               );
             })}
+          </div>
+        </section>
+
+        {/* Section 3.5: الأقسام ومنصة البث المباشر (Relocated into Sections per user request) */}
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+            <div>
+              <span className="text-xs font-bold text-red-700 uppercase tracking-widest flex items-center gap-1.5">
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>أقسام البوابة الرسمية</span>
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black text-stone-900 mt-1">
+                الأقسام والخدمات التفاعلية
+              </h2>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* قسم البث المباشر */}
+            <div
+              onClick={() => {
+                if (onNavigate) onNavigate('live');
+                else setCurrentView('live');
+              }}
+              className={`rounded-2xl p-6 border-2 transition-all cursor-pointer group flex flex-col justify-between shadow-sm hover:shadow-lg ${
+                data.liveStream?.isActive
+                  ? 'bg-gradient-to-br from-red-800 via-red-700 to-stone-900 text-white border-red-500'
+                  : 'bg-white text-stone-900 border-stone-200 hover:border-red-600'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${
+                    data.liveStream?.isActive ? 'bg-white/20 text-white' : 'bg-red-50 text-red-700'
+                  }`}>
+                    <Radio className="w-5 h-5" />
+                  </span>
+                  {data.liveStream?.isActive ? (
+                    <span className="inline-flex items-center gap-1.5 bg-white text-red-700 text-[11px] font-black px-2.5 py-1 rounded-lg">
+                      <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+                      <span>بث حي نشط الآن</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-bold text-stone-400">قسم البث المباشر</span>
+                  )}
+                </div>
+                <h3 className={`font-black text-lg mb-1.5 ${data.liveStream?.isActive ? 'text-white' : 'text-stone-900 group-hover:text-red-700'}`}>
+                  {data.liveStream?.isActive && data.liveStream?.title
+                    ? data.liveStream.title
+                    : 'قسم البث المباشر'}
+                </h3>
+                <p className={`text-xs leading-relaxed line-clamp-2 ${data.liveStream?.isActive ? 'text-red-100' : 'text-stone-500'}`}>
+                  {data.liveStream?.description || 'متابعة البث المباشر لفعاليات ومؤتمرات أمانة قسم ثالث أكتوبر بمحافظة الجيزة.'}
+                </p>
+              </div>
+              <div className={`mt-4 pt-3 border-t flex items-center justify-between text-xs font-bold ${
+                data.liveStream?.isActive ? 'border-white/15 text-amber-300' : 'border-stone-100 text-red-700'
+              }`}>
+                <span>دخول قسم البث المباشر</span>
+                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+              </div>
+            </div>
+
+            {/* قسم الأمانات التخصصية */}
+            <div
+              onClick={() => (onNavigate ? onNavigate('secretariats') : setCurrentView('secretariats'))}
+              className="bg-white rounded-2xl p-6 border border-stone-200 hover:border-amber-500 transition-all cursor-pointer group flex flex-col justify-between shadow-xs hover:shadow-md"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="w-11 h-11 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center group-hover:bg-amber-500 group-hover:text-stone-950 transition-colors">
+                    <Building2 className="w-5 h-5" />
+                  </span>
+                  <span className="text-[11px] font-bold text-stone-400">{data.specializedSecretariats.length} أمانة</span>
+                </div>
+                <h3 className="font-black text-lg text-stone-900 group-hover:text-red-700 mb-1.5">
+                  قسم الأمانات التخصصية
+                </h3>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  استعرض كافة الأمانات والقيادات والأمناء المساعدين وأعضاء هيئة المكتب المقيدين بكل أمانة.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-amber-700">
+                <span>استعراض الأمانات</span>
+                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+              </div>
+            </div>
+
+            {/* قسم الأخبار والفعاليات */}
+            <div
+              onClick={() => (onNavigate ? onNavigate('news') : setCurrentView('news'))}
+              className="bg-white rounded-2xl p-6 border border-stone-200 hover:border-red-600 transition-all cursor-pointer group flex flex-col justify-between shadow-xs hover:shadow-md"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="w-11 h-11 rounded-xl bg-stone-100 text-stone-800 flex items-center justify-center group-hover:bg-red-700 group-hover:text-white transition-colors">
+                    <Newspaper className="w-5 h-5" />
+                  </span>
+                  <span className="text-[11px] font-bold text-stone-400">{data.news.length} خبر وبيان</span>
+                </div>
+                <h3 className="font-black text-lg text-stone-900 group-hover:text-red-700 mb-1.5">
+                  المركز الإعلامي والأخبار
+                </h3>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  أحدث البيانات الرسمية والتغطيات الميدانية والفعاليات المشتركة لأمانة قسم ثالث أكتوبر.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between text-xs font-bold text-red-700">
+                <span>تصفح الأخبار والبيانات</span>
+                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1173,6 +1347,30 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <p className="text-xs text-stone-300 leading-relaxed line-clamp-3 mb-4">
                       {init.description}
                     </p>
+
+                    {(init.authorName || init.authorPosition) && (
+                      <div className="mb-3 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        {init.authorName ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePersonClick(init.authorName);
+                            }}
+                            className="font-bold text-amber-300 hover:underline cursor-pointer text-right"
+                          >
+                            {`إعداد وتنفيذ: ${init.authorName}`}
+                          </button>
+                        ) : (
+                          <span className="font-bold text-amber-300">أمانة قسم ثالث أكتوبر</span>
+                        )}
+                        {init.authorPosition && (
+                          <span className="text-stone-200 text-[11px] bg-white/10 px-2.5 py-0.5 rounded-lg">
+                            {init.authorPosition}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
                       <span>استعراض أنشطة وفعاليات المبادرة</span>
@@ -1257,23 +1455,43 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <p className="text-xs text-stone-500 line-clamp-2 mt-1">
                           {item.excerpt}
                         </p>
+                      </div>
+
+                      <div className="space-y-2 mt-2">
                         {(item.authorName || item.authorPosition) && (
-                          <div className="text-[10px] text-amber-900 font-bold mt-1.5 flex items-center gap-1.5">
-                            <span>{item.authorName ? `بقلم: ${item.authorName}` : 'المكتب الإعلامي'}</span>
+                          <div className="pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                            {item.authorName ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handlePersonClick(item.authorName, {
+                                    explicitSecretariatId: item.linkedSecretariatId
+                                  });
+                                }}
+                                className="font-bold text-amber-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                              >
+                                {`نشر / إعداد: ${item.authorName}`}
+                              </button>
+                            ) : (
+                              <span className="font-bold text-amber-900">المكتب الإعلامي</span>
+                            )}
                             {item.authorPosition && (
-                              <span className="text-stone-500 font-normal text-[9px]">({item.authorPosition})</span>
+                              <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[10px] px-2 py-0.5 rounded-md">
+                                {item.authorPosition}
+                              </span>
                             )}
                           </div>
                         )}
-                      </div>
 
-                      <SocialShareButtons
-                        title={item.title}
-                        summary={item.excerpt}
-                        itemType="news"
-                        itemId={item.id}
-                        compact
-                      />
+                        <SocialShareButtons
+                          title={item.title}
+                          summary={item.excerpt}
+                          itemType="news"
+                          itemId={item.id}
+                          compact
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1334,6 +1552,27 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       </span>
                       <span className="font-medium text-stone-700">{event.organizer}</span>
                     </div>
+
+                    {(event.authorName || event.authorPosition) && (
+                      <div className="mt-2 pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                        {event.authorName ? (
+                          <button
+                            type="button"
+                            onClick={() => handlePersonClick(event.authorName)}
+                            className="font-bold text-amber-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                          >
+                            {`القائم بالفعالية: ${event.authorName}`}
+                          </button>
+                        ) : (
+                          <span className="font-bold text-amber-900">أمانة قسم ثالث أكتوبر</span>
+                        )}
+                        {event.authorPosition && (
+                          <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[10px] px-2 py-0.5 rounded-md">
+                            {event.authorPosition}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     <SocialShareButtons
                       title={event.title}
@@ -1669,7 +1908,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             {filteredPartyLeaders.map(leader => (
               <div
                 key={leader.id}
-                onClick={() => setSelectedPartyLeader(leader)}
+                onClick={() =>
+                  handlePersonClick(leader.name, {
+                    personKey: leader.name,
+                    fallbackPartyLeader: leader
+                  })
+                }
                 className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:-translate-y-1 flex flex-col justify-between"
               >
                 <div>
@@ -1703,17 +1947,32 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="p-4 pt-0 text-left">
                   <span className="text-xs text-amber-700 font-bold flex items-center gap-1 hover:underline">
-                    <span>عرض السيرة الذاتية</span>
+                    <span>عرض التفاصيل والأمانة</span>
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </span>
                 </div>
               </div>
             ))}
 
-            {filteredSecLeaders.map(leader => (
+            {filteredSecLeaders.map(leader => {
+              const linkedSec = resolvePersonInSecretariats({
+                name: leader.name,
+                personKey: leader.id || leader.name,
+                explicitSecretariatId: leader.specializedSecretariatId,
+                specializedSecretariats: data.specializedSecretariats || [],
+                secretariatMembers: data.secretariatMembers || [],
+                secretariatLeaders: data.secretariatLeaders || []
+              });
+              return (
               <div
                 key={leader.id}
-                onClick={() => setSelectedSecLeader(leader)}
+                onClick={() =>
+                  handlePersonClick(leader.name, {
+                    explicitSecretariatId: leader.specializedSecretariatId,
+                    personKey: leader.id || leader.name,
+                    fallbackSecLeader: leader
+                  })
+                }
                 className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-lg transition-all cursor-pointer group hover:-translate-y-1 flex flex-col justify-between"
               >
                 <div>
@@ -1726,8 +1985,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       }`}
                       referrerPolicy="no-referrer"
                     />
-                    <div className="absolute top-2.5 right-2.5 bg-red-700 text-white text-[11px] font-bold px-2.5 py-1 rounded-md">
-                      أمانة قسم ثالث أكتوبر
+                    <div className="absolute top-2.5 right-2.5 bg-red-700 text-white text-[11px] font-bold px-2.5 py-1 rounded-md max-w-[85%] truncate">
+                      {linkedSec ? linkedSec.secretariat.name : 'أمانة قسم ثالث أكتوبر'}
                     </div>
                   </div>
                   <div className="p-4 text-right">
@@ -1747,103 +2006,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                 <div className="p-4 pt-0 text-left">
                   <span className="text-xs text-amber-700 font-bold flex items-center gap-1 hover:underline">
-                    <span>عرض التفاصيل</span>
+                    <span>{linkedSec ? `الانتقال إلى ${linkedSec.secretariat.name}` : 'عرض التفاصيل'}</span>
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </span>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Party Leader Details Modal */}
-        {selectedPartyLeader && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => setSelectedPartyLeader(null)}
-                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
-              >
-                ✕
-              </button>
-
-              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
-                <img
-                  src={selectedPartyLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                  alt={selectedPartyLeader.name}
-                  className="w-32 h-32 sm:w-40 sm:h-40 object-cover rounded-2xl border-2 border-red-700 shadow-md shrink-0 bg-stone-100"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="space-y-1 text-center sm:text-right">
-                  <span className="bg-red-50 text-red-700 text-xs font-bold px-2.5 py-1 rounded-full">
-                    {selectedPartyLeader.governorate ? `${selectedPartyLeader.level || 'قيادات المحافظات'} – ${selectedPartyLeader.governorate}` : (selectedPartyLeader.level || 'الهيئة العليا')}
-                  </span>
-                  <h3 className="text-2xl font-black text-stone-900 mt-2">
-                    {selectedPartyLeader.name}
-                  </h3>
-                  <p className="text-sm font-bold text-amber-700">
-                    {selectedPartyLeader.position}
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-stone-100 pt-4 space-y-3">
-                <h4 className="font-bold text-stone-800 text-sm">
-                  نبذة تعريفية:
-                </h4>
-                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
-                  {selectedPartyLeader.bio || 'لا توجد نبذة مسجلة لهذه القيادة.'}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Secretariat Leader Modal */}
-        {selectedSecLeader && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => setSelectedSecLeader(null)}
-                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
-              >
-                ✕
-              </button>
-
-              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
-                <img
-                  src={selectedSecLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-                  alt={selectedSecLeader.name}
-                  className="w-32 h-32 sm:w-40 sm:h-40 object-cover rounded-2xl border-2 border-amber-600 shadow-md shrink-0 bg-stone-100"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="space-y-1 text-center sm:text-right">
-                  <span className="bg-amber-100 text-amber-900 text-xs font-bold px-2.5 py-1 rounded-full">
-                    أمانة قسم ثالث أكتوبر – محافظة الجيزة
-                  </span>
-                  <h3 className="text-2xl font-black text-stone-900 mt-2">
-                    {selectedSecLeader.name}
-                  </h3>
-                  <p className="text-sm font-bold text-red-700">
-                    {selectedSecLeader.title}
-                  </p>
-                  {selectedSecLeader.appointmentDate && (
-                    <p className="text-xs text-stone-400">
-                      تاريخ تولي المسؤولية: {selectedSecLeader.appointmentDate}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="border-t border-stone-100 pt-4 space-y-3">
-                <h4 className="font-bold text-stone-800 text-sm">
-                  النبذة التعريفية والتكليف:
-                </h4>
-                <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
-                  {selectedSecLeader.bio || 'لا توجد نبذة مسجلة.'}
-                </p>
-              </div>
-            </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1928,14 +2097,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {featuredPeople.length > 0 && (
                     <div className="mb-5 flex flex-wrap items-center gap-3">
                       {featuredPeople.map((person, pIdx) => (
-                        <div key={pIdx} className="relative shrink-0">
+                        <button
+                          type="button"
+                          key={pIdx}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSecretariat(sec.slug, person.name);
+                          }}
+                          title={`عرض بيانات ${person.name} في ${sec.name}`}
+                          className="relative shrink-0 cursor-pointer text-right group/person"
+                        >
                           <img
                             src={person.photoUrl}
                             alt={person.name}
-                            className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover:scale-[1.03] transition-transform"
+                            className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover/person:scale-[1.04] group-hover/person:border-red-600 transition-all"
                             referrerPolicy="no-referrer"
                           />
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -1956,7 +2134,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <div className="space-y-0.5 min-w-0">
                     <div className="text-[11px] text-stone-600 truncate">
                       <span className="text-stone-400 font-medium">أمين الأمانة: </span>
-                      <span className="font-bold text-stone-900">{sec.secretaryName || 'قيد التكليف'}</span>
+                      {sec.secretaryName ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openSecretariat(sec.slug, sec.secretaryName);
+                          }}
+                          className="font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer"
+                        >
+                          {sec.secretaryName}
+                        </button>
+                      ) : (
+                        <span className="font-bold text-stone-900">قيد التكليف</span>
+                      )}
                     </div>
                     {allAssts.length > 0 && (
                       <div className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
@@ -1964,7 +2155,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           {allAssts.length > 1 ? `الأمناء المساعدون (${allAssts.length}): ` : 'الأمين المساعد: '}
                         </span>
                         <span className="font-semibold text-stone-800">
-                          {allAssts.map(a => a.name).join('، ')}
+                          {allAssts.map((a, aIdx) => (
+                            <React.Fragment key={a.id || aIdx}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openSecretariat(sec.slug, a.id || a.name);
+                                }}
+                                className="hover:text-red-700 hover:underline cursor-pointer"
+                              >
+                                {a.name}
+                              </button>
+                              {aIdx < allAssts.length - 1 ? '، ' : ''}
+                            </React.Fragment>
+                          ))}
                         </span>
                       </div>
                     )}
@@ -1990,8 +2195,36 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   if (currentView === 'secretariat-detail') {
     const sec = data.specializedSecretariats.find(s => s.slug === selectedSlug || s.id === selectedSlug) || data.specializedSecretariats[0];
     const relatedNews = data.news.filter(n => n.linkedSecretariatId === sec?.id);
-    const relatedEvents = data.events.filter(e => e.organizer.includes(sec?.name || ''));
-    const relatedMedia = data.media.filter(m => m.linkedSecretariatId === sec?.id);
+    const allSecPeople = sec
+      ? getAllPeopleInSecretariat(sec, data.secretariatMembers || [], data.secretariatLeaders || [])
+      : [];
+    const activePersonKey = focusedPersonKey || selectedPerson || null;
+    const activePersonProfile = activePersonKey
+      ? allSecPeople.find(
+          p =>
+            p.personKey === activePersonKey ||
+            normalizeArabicPersonName(p.name) === normalizeArabicPersonName(activePersonKey)
+        ) || null
+      : null;
+
+    const isMatchedPerson = (candidateName?: string | null, candidateKey?: string | null) => {
+      if (!activePersonProfile) return false;
+      if (candidateKey && candidateKey === activePersonProfile.personKey) return true;
+      if (candidateName && normalizeArabicPersonName(candidateName) === normalizeArabicPersonName(activePersonProfile.name)) {
+        return true;
+      }
+      return false;
+    };
+
+    const linkedOnlyLeaders = (data.secretariatLeaders || []).filter(
+      ldr =>
+        ldr.specializedSecretariatId === sec?.id &&
+        !allSecPeople.some(
+          p =>
+            p.personKey === ldr.id &&
+            p.tierLabel !== 'قيادة مقيدة بالأمانة'
+        )
+    );
 
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-12">
@@ -2021,6 +2254,103 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           </div>
         </div>
 
+        {/* Highlighted Person Profile Card inside their Registered Secretariat */}
+        {activePersonProfile && (
+          <div className="bg-gradient-to-br from-amber-50 via-white to-stone-50 rounded-3xl border-2 border-amber-500 p-6 sm:p-8 shadow-xl relative text-right">
+            <div className="flex items-center justify-between gap-3 border-b border-amber-200/70 pb-3 mb-5">
+              <div className="flex items-center gap-2 text-red-700 font-black text-sm">
+                <ShieldCheck className="w-5 h-5 text-red-700" />
+                <span>بطاقة بيانات العضو / القيادي المقيد في {sec.name}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => openSecretariat(sec.slug, null)}
+                className="text-xs font-bold text-stone-500 hover:text-red-700 cursor-pointer flex items-center gap-1"
+              >
+                <X className="w-4 h-4" />
+                <span>إغلاق التحديد</span>
+              </button>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-6 items-center md:items-start">
+              <div
+                onClick={() =>
+                  activePersonProfile.photoUrl &&
+                  openLightbox([activePersonProfile.photoUrl], 0, activePersonProfile.name)
+                }
+                className={`w-44 h-52 sm:w-48 sm:h-56 rounded-2xl overflow-hidden border-2 border-amber-500 shadow-lg bg-stone-100 shrink-0 ${
+                  activePersonProfile.photoUrl ? 'cursor-zoom-in' : ''
+                }`}
+              >
+                {activePersonProfile.photoUrl ? (
+                  <img
+                    src={activePersonProfile.photoUrl}
+                    alt={activePersonProfile.name}
+                    className="w-full h-full object-cover object-top"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-stone-800 to-stone-950 flex items-center justify-center text-amber-300 font-black text-5xl">
+                    {activePersonProfile.name.charAt(0)}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 space-y-3 text-center md:text-right">
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+                  <span className="bg-red-700 text-white text-xs font-black px-3 py-1 rounded-lg">
+                    {activePersonProfile.tierLabel}
+                  </span>
+                  <span className="bg-amber-100 text-amber-900 text-xs font-bold px-3 py-1 rounded-lg">
+                    {sec.name}
+                  </span>
+                </div>
+
+                <h2 className="text-2xl sm:text-3xl font-black text-stone-950">
+                  {activePersonProfile.name}
+                </h2>
+                <p className="text-sm sm:text-base font-bold text-red-700">
+                  {activePersonProfile.role}
+                </p>
+
+                {activePersonProfile.bio && (
+                  <div className="bg-white/90 border border-stone-200 rounded-2xl p-4 text-xs sm:text-sm text-stone-700 leading-relaxed whitespace-pre-line">
+                    {activePersonProfile.bio}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 pt-1 text-xs">
+                  {activePersonProfile.phone && (
+                    <a
+                      href={`tel:${activePersonProfile.phone}`}
+                      className="inline-flex items-center gap-1.5 bg-white border border-stone-200 hover:border-red-600 px-3.5 py-2 rounded-xl font-mono font-bold text-stone-800 hover:text-red-700 transition-colors"
+                      dir="ltr"
+                    >
+                      <Phone className="w-3.5 h-3.5 text-red-700" />
+                      <span>{activePersonProfile.phone}</span>
+                    </a>
+                  )}
+                  {activePersonProfile.email && (
+                    <a
+                      href={`mailto:${activePersonProfile.email}`}
+                      className="inline-flex items-center gap-1.5 bg-white border border-stone-200 hover:border-red-600 px-3.5 py-2 rounded-xl font-mono font-bold text-stone-800 hover:text-red-700 transition-colors"
+                      dir="ltr"
+                    >
+                      <Mail className="w-3.5 h-3.5 text-amber-600" />
+                      <span>{activePersonProfile.email}</span>
+                    </a>
+                  )}
+                  {activePersonProfile.assignmentDate && (
+                    <span className="inline-flex items-center gap-1.5 bg-stone-100 px-3.5 py-2 rounded-xl text-stone-700 font-semibold">
+                      <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                      <span>تاريخ التكليف: {activePersonProfile.assignmentDate}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Leadership of the Secretariat */}
         <div className="space-y-4">
@@ -2031,10 +2361,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Secretary */}
-            <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group">
+            <div
+              onClick={() => sec.secretaryName && openSecretariat(sec.slug, sec.secretaryName)}
+              className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group ${
+                sec.secretaryName ? 'cursor-pointer' : ''
+              } ${
+                isMatchedPerson(sec.secretaryName, sec.secretaryName)
+                  ? 'border-amber-500 ring-2 ring-amber-400/60 shadow-lg'
+                  : 'border-stone-200'
+              }`}
+            >
               <div>
                 <div
-                  onClick={() => sec.secretaryPhotoUrl && openLightbox([sec.secretaryPhotoUrl], 0, sec.secretaryName || 'أمين الأمانة')}
+                  onClick={(e) => {
+                    if (sec.secretaryPhotoUrl) {
+                      e.stopPropagation();
+                      openLightbox([sec.secretaryPhotoUrl], 0, sec.secretaryName || 'أمين الأمانة');
+                    }
+                  }}
                   className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${sec.secretaryPhotoUrl ? 'cursor-zoom-in' : ''}`}
                 >
                   <img
@@ -2051,7 +2395,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
 
                 <div className="p-5 text-right space-y-1.5">
-                  <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug">
+                  <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug group-hover:text-red-700 transition-colors">
                     {sec.secretaryName || 'قيد التكليف الرسمي'}
                   </h3>
                   <p className="text-xs text-stone-500">
@@ -2068,7 +2412,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {sec.secretaryPhone && (
                     <div className="flex items-center gap-2 text-stone-700 font-medium pt-1">
                       <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <a href={`tel:${sec.secretaryPhone}`} className="hover:text-red-700 font-mono" dir="ltr">
+                      <a
+                        href={`tel:${sec.secretaryPhone}`}
+                        onClick={e => e.stopPropagation()}
+                        className="hover:text-red-700 font-mono"
+                        dir="ltr"
+                      >
                         {sec.secretaryPhone}
                       </a>
                     </div>
@@ -2136,10 +2485,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               }
 
               return allAssistants.map((asst, idx) => (
-                <div key={asst.id || idx} className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group">
+                <div
+                  key={asst.id || idx}
+                  onClick={() => asst.name && openSecretariat(sec.slug, asst.id || asst.name)}
+                  className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group cursor-pointer ${
+                    isMatchedPerson(asst.name, asst.id)
+                      ? 'border-amber-500 ring-2 ring-amber-400/60 shadow-lg'
+                      : 'border-stone-200'
+                  }`}
+                >
                   <div>
                     <div
-                      onClick={() => asst.photoUrl && openLightbox([asst.photoUrl], 0, asst.name || 'الأمين المساعد')}
+                      onClick={(e) => {
+                        if (asst.photoUrl) {
+                          e.stopPropagation();
+                          openLightbox([asst.photoUrl], 0, asst.name || 'الأمين المساعد');
+                        }
+                      }}
                       className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${asst.photoUrl ? 'cursor-zoom-in' : ''}`}
                     >
                       <img
@@ -2156,7 +2518,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </div>
 
                     <div className="p-5 text-right space-y-1.5">
-                      <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug">
+                      <h3 className="font-black text-stone-900 text-lg sm:text-xl leading-snug group-hover:text-red-700 transition-colors">
                         {asst.name || 'قيد التكليف الرسمي'}
                       </h3>
                       <p className="text-xs text-stone-500">
@@ -2173,7 +2535,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       {asst.phone && (
                         <div className="flex items-center gap-2 text-stone-700 font-medium pt-1">
                           <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <a href={`tel:${asst.phone}`} className="hover:text-amber-700 font-mono" dir="ltr">
+                          <a
+                            href={`tel:${asst.phone}`}
+                            onClick={e => e.stopPropagation()}
+                            className="hover:text-amber-700 font-mono"
+                            dir="ltr"
+                          >
                             {asst.phone}
                           </a>
                         </div>
@@ -2202,11 +2569,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </h2>
                 </div>
                 <span className="text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-0.5 rounded-full">
-                  {bureauMembers.length} كادر معتمد
+                  {bureauMembers.length + linkedOnlyLeaders.length} كادر معتمد
                 </span>
               </div>
 
-              {bureauMembers.length === 0 ? (
+              {bureauMembers.length === 0 && linkedOnlyLeaders.length === 0 ? (
                 <div className="bg-stone-50 rounded-2xl border border-dashed border-stone-300 p-8 text-center text-stone-500 space-y-2">
                   <Users className="w-10 h-10 text-stone-400 mx-auto opacity-70" />
                   <p className="font-bold text-sm text-stone-700">هيئة مكتب الأمانة قيد الاستكمال والاعتماد الرسمي</p>
@@ -2219,11 +2586,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {bureauMembers.map(member => (
                     <div
                       key={member.id}
-                      className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group"
+                      onClick={() => openSecretariat(sec.slug, member.id || member.name)}
+                      className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group cursor-pointer ${
+                        isMatchedPerson(member.name, member.id)
+                          ? 'border-amber-500 ring-2 ring-amber-400/60 shadow-lg'
+                          : 'border-stone-200'
+                      }`}
                     >
                       <div>
                         <div
-                          onClick={() => member.photoUrl && openLightbox([member.photoUrl], 0, member.name)}
+                          onClick={(e) => {
+                            if (member.photoUrl) {
+                              e.stopPropagation();
+                              openLightbox([member.photoUrl], 0, member.name);
+                            }
+                          }}
                           className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${member.photoUrl ? 'cursor-zoom-in' : ''}`}
                         >
                           {member.photoUrl ? (
@@ -2246,7 +2623,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         </div>
 
                         <div className="p-5 text-right space-y-1.5">
-                          <h4 className="font-black text-stone-900 text-lg leading-snug">
+                          <h4 className="font-black text-stone-900 text-lg leading-snug group-hover:text-red-700 transition-colors">
                             {member.name}
                           </h4>
                           {member.assignmentDate && (
@@ -2270,6 +2647,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                               <span className="text-stone-400 text-[11px]">الاتصال المباشر:</span>
                               <a
                                 href={`tel:${member.phone}`}
+                                onClick={e => e.stopPropagation()}
                                 className="font-mono font-bold text-red-700 hover:underline flex items-center gap-1"
                                 dir="ltr"
                               >
@@ -2278,6 +2656,59 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                               </a>
                             </div>
                           )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {linkedOnlyLeaders.map(ldr => (
+                    <div
+                      key={ldr.id}
+                      onClick={() => openSecretariat(sec.slug, ldr.id || ldr.name)}
+                      className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all flex flex-col justify-between group cursor-pointer ${
+                        isMatchedPerson(ldr.name, ldr.id)
+                          ? 'border-amber-500 ring-2 ring-amber-400/60 shadow-lg'
+                          : 'border-stone-200'
+                      }`}
+                    >
+                      <div>
+                        <div
+                          onClick={(e) => {
+                            if (ldr.photoUrl) {
+                              e.stopPropagation();
+                              openLightbox([ldr.photoUrl], 0, ldr.name);
+                            }
+                          }}
+                          className={`aspect-[4/5] bg-stone-50 overflow-hidden relative ${ldr.photoUrl ? 'cursor-zoom-in' : ''}`}
+                        >
+                          <img
+                            src={ldr.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                            alt={ldr.name}
+                            className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
+                              ldr.photoUrl ? 'object-cover object-top' : 'object-contain p-8 bg-white'
+                            }`}
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute top-3 right-3 bg-stone-900/85 backdrop-blur-xs text-amber-300 text-[11px] font-black px-3 py-1 rounded-lg max-w-[85%] truncate">
+                            {ldr.title}
+                          </div>
+                        </div>
+                        <div className="p-5 text-right space-y-1.5">
+                          <h4 className="font-black text-stone-900 text-lg leading-snug group-hover:text-red-700 transition-colors">
+                            {ldr.name}
+                          </h4>
+                          {ldr.appointmentDate && (
+                            <p className="text-[11px] text-stone-400 font-mono">
+                              تاريخ التكليف: {ldr.appointmentDate}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {ldr.bio && (
+                        <div className="px-5 pb-5 text-right">
+                          <p className="text-xs text-stone-600 leading-relaxed bg-stone-50 p-3 rounded-xl border border-stone-100">
+                            {ldr.bio}
+                          </p>
                         </div>
                       )}
                     </div>
@@ -2459,9 +2890,35 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 )}
               </div>
 
-              <div className="p-6 pt-0 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold">
-                <span>استعراض أنشطة وفعاليات المبادرة كاملة</span>
-                <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+              <div className="p-6 pt-0 space-y-3">
+                {(init.authorName || init.authorPosition) && (
+                  <div className="pt-3 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    {init.authorName ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePersonClick(init.authorName);
+                        }}
+                        className="font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                      >
+                        {`إعداد وتنفيذ: ${init.authorName}`}
+                      </button>
+                    ) : (
+                      <span className="font-bold text-stone-900">أمانة قسم ثالث أكتوبر</span>
+                    )}
+                    {init.authorPosition && (
+                      <span className="bg-amber-50 text-amber-900 border border-amber-200/70 font-semibold text-[11px] px-2.5 py-0.5 rounded-md">
+                        {init.authorPosition}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold">
+                  <span>استعراض أنشطة وفعاليات المبادرة كاملة</span>
+                  <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
+                </div>
               </div>
             </div>
           ))}
@@ -2574,16 +3031,33 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </div>
             );
           })()}
-        </div>
 
-        {/* Interactive Lightbox Modal */}
-        <ImageLightboxModal
-          isOpen={lightboxOpen}
-          onClose={() => setLightboxOpen(false)}
-          images={lightboxImages}
-          initialIndex={lightboxIndex}
-          title={lightboxTitle}
-        />
+          {(init.authorName || init.authorPosition) && (
+            <div className="pt-4 border-t border-stone-200 flex items-center gap-3 bg-stone-50 border p-4 rounded-2xl">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
+                {(init.authorName || 'ح').charAt(0)}
+              </div>
+              <div className="text-right">
+                {init.authorName ? (
+                  <button
+                    type="button"
+                    onClick={() => handlePersonClick(init.authorName)}
+                    className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                  >
+                    {`إعداد وتنفيذ: ${init.authorName}`}
+                  </button>
+                ) : (
+                  <div className="text-xs font-bold text-stone-900">أمانة قسم ثالث أكتوبر</div>
+                )}
+                {init.authorPosition && (
+                  <div className="text-[11px] font-semibold text-amber-800">
+                    {init.authorPosition}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -2676,7 +3150,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </p>
                   {(item.authorName || item.authorPosition) && (
                     <div className="pt-2 border-t border-stone-100 flex items-center gap-1.5 text-[11px] text-amber-900 font-bold">
-                      <span>{item.authorName ? `بقلم: ${item.authorName}` : 'المكتب الإعلامي'}</span>
+                      {item.authorName ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handlePersonClick(item.authorName, {
+                              explicitSecretariatId: item.linkedSecretariatId
+                            });
+                          }}
+                          className="hover:text-red-700 hover:underline cursor-pointer text-right"
+                        >
+                          {`بقلم: ${item.authorName}`}
+                        </button>
+                      ) : (
+                        <span>المكتب الإعلامي</span>
+                      )}
                       {item.authorPosition && (
                         <span className="text-stone-500 font-normal text-[10px]">({item.authorPosition})</span>
                       )}
@@ -2703,150 +3192,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           ))}
         </div>
-
-        {/* News Modal */}
-        {selectedNews && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => {
-                  setSelectedNews(null);
-                  if (onClearSelectedNewsId) onClearSelectedNewsId();
-                }}
-                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
-              >
-                ✕
-              </button>
-
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  {selectedNews.isUrgent && (
-                    <span className="bg-red-600 text-white text-xs font-black px-2.5 py-1 rounded-md animate-pulse flex items-center gap-1 shadow-xs">
-                      <span>⚡ خبر عاجل</span>
-                    </span>
-                  )}
-                  {selectedNews.isFeatured && !selectedNews.isUrgent && (
-                    <span className="bg-amber-600 text-white text-xs font-bold px-2 py-0.5 rounded">
-                      خبر مميز
-                    </span>
-                  )}
-                  <span className="text-xs text-stone-400 font-mono">{selectedNews.publishDate}</span>
-                </div>
-                <h2 className="text-2xl font-black text-stone-900">
-                  {selectedNews.title}
-                </h2>
-
-                {/* Author / Publisher Information */}
-                {(selectedNews.authorName || selectedNews.authorPosition) && (
-                  <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3 rounded-2xl">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
-                      {(selectedNews.authorName || 'ح').charAt(0)}
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs font-bold text-stone-900">
-                        {selectedNews.authorName ? `بقلم: ${selectedNews.authorName}` : 'المكتب الإعلامي للأمانة'}
-                      </div>
-                      {selectedNews.authorPosition && (
-                        <div className="text-[11px] font-semibold text-amber-800">
-                          {selectedNews.authorPosition}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {selectedNews.coverImage && (
-                  <div
-                    className="relative group cursor-pointer overflow-hidden rounded-xl bg-stone-100"
-                    onClick={() => {
-                      const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
-                      openLightbox(allImgs, 0, selectedNews.title);
-                    }}
-                  >
-                    <img
-                      src={selectedNews.coverImage}
-                      alt={selectedNews.title}
-                      className="w-full aspect-video object-cover rounded-xl group-hover:scale-102 transition-transform duration-200"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
-                      <Maximize2 className="w-5 h-5" />
-                      <span>عرض الصورة بحجم كامل</span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
-                  {selectedNews.content}
-                </div>
-
-                {/* Multiple Images Gallery */}
-                {selectedNews.galleryImages && selectedNews.galleryImages.length > 0 && (
-                  <div className="pt-3 border-t border-stone-100 space-y-2">
-                    <h4 className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
-                      <ImageIcon className="w-4 h-4 text-amber-600" />
-                      <span>معرض صور الخبر ({selectedNews.galleryImages.length} صورة)</span>
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                      {selectedNews.galleryImages.map((img, idx) => {
-                        const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
-                        const targetIdx = selectedNews.coverImage ? idx + 1 : idx;
-                        return (
-                          <div
-                            key={idx}
-                            className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
-                            onClick={() => openLightbox(allImgs, targetIdx, `${selectedNews.title} - صورة ${idx + 1}`)}
-                          >
-                            <img
-                              src={img}
-                              alt={`${selectedNews.title} - صورة ${idx + 1}`}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                              referrerPolicy="no-referrer"
-                            />
-                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                              <Maximize2 className="w-4 h-4" />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {selectedNews.videoUrl && (
-                  <div className="pt-4 border-t border-stone-100">
-                    <a
-                      href={selectedNews.videoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 px-4 py-2 rounded-lg"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>مشاهدة الفيديو المرفق</span>
-                    </a>
-                  </div>
-                )}
-
-                {/* Social Share Buttons inside Modal */}
-                <SocialShareButtons
-                  title={selectedNews.title}
-                  summary={selectedNews.excerpt}
-                  itemType="news"
-                  itemId={selectedNews.id}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Interactive Lightbox Modal */}
-        <ImageLightboxModal
-          isOpen={lightboxOpen}
-          onClose={() => setLightboxOpen(false)}
-          images={lightboxImages}
-          initialIndex={lightboxIndex}
-          title={lightboxTitle}
-        />
       </div>
     );
   }
@@ -2992,6 +3337,32 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 );
               })()}
 
+              {(event.authorName || event.authorPosition) && (
+                <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
+                    {(event.authorName || 'ح').charAt(0)}
+                  </div>
+                  <div className="text-right">
+                    {event.authorName ? (
+                      <button
+                        type="button"
+                        onClick={() => handlePersonClick(event.authorName)}
+                        className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                      >
+                        {`القائم بالفعالية: ${event.authorName}`}
+                      </button>
+                    ) : (
+                      <div className="text-xs font-bold text-stone-900">أمانة قسم ثالث أكتوبر</div>
+                    )}
+                    {event.authorPosition && (
+                      <div className="text-[11px] font-semibold text-amber-800">
+                        {event.authorPosition}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Share Buttons for Event */}
               <SocialShareButtons
                 title={event.title}
@@ -3002,15 +3373,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           ))}
         </div>
-
-        {/* Interactive Lightbox Modal */}
-        <ImageLightboxModal
-          isOpen={lightboxOpen}
-          onClose={() => setLightboxOpen(false)}
-          images={lightboxImages}
-          initialIndex={lightboxIndex}
-          title={lightboxTitle}
-        />
       </div>
     );
   }
@@ -4282,5 +4644,339 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     );
   }
 
+  // -------------------------------------------------------------
+  // 15. LIVE STREAM DEDICATED SECTION (/live)
+  // -------------------------------------------------------------
+  if (currentView === 'live') {
+    const stream = data.liveStream;
+    return (
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8 text-right">
+        <div className="text-center space-y-3">
+          <div className="inline-flex items-center gap-2 text-xs font-bold text-red-700 uppercase tracking-widest">
+            <Radio className="w-4 h-4" />
+            <span>قسم البث المباشر</span>
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
+            {stream?.title || 'البث المباشر لأمانة قسم ثالث أكتوبر'}
+          </h1>
+          <p className="text-xs sm:text-sm text-stone-500 max-w-2xl mx-auto">
+            {stream?.description || 'تابع الآن النقل الحي والمباشر للمؤتمرات واللقاءات الجماهيرية وفعاليات حزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر.'}
+          </p>
+        </div>
+
+        {stream?.isActive && stream?.streamUrl ? (
+          <div className="bg-stone-950 rounded-3xl border-2 border-red-600/60 p-4 sm:p-6 shadow-2xl space-y-5 text-white">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex items-center gap-2 bg-red-600 text-white text-xs font-black px-3.5 py-1.5 rounded-xl">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
+                </span>
+                <span>بث مباشر نشط الآن</span>
+              </div>
+
+              <a
+                href={stream.streamUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-bold bg-white/10 hover:bg-white/20 text-amber-300 px-4 py-2 rounded-xl transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>فتح البث في نافذة خارجية</span>
+              </a>
+            </div>
+
+            <VideoPlayer
+              url={stream.streamUrl}
+              title={stream.title || 'البث المباشر'}
+              className="w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-xl"
+            />
+          </div>
+        ) : (
+          <div className="bg-white rounded-3xl border border-stone-200 p-10 sm:p-14 text-center space-y-4 shadow-xs">
+            <div className="w-16 h-16 rounded-2xl bg-red-50 text-red-700 flex items-center justify-center mx-auto">
+              <Radio className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black text-stone-900">
+              لا يوجد بث مباشر جارٍ في اللحظة الحالية
+            </h2>
+            <p className="text-xs sm:text-sm text-stone-500 max-w-lg mx-auto leading-relaxed">
+              سيتم تفعيل البث المباشر هنا فور انطلاق الندوات أو المؤتمرات والفعاليات الميدانية للأمانة. يمكنك متابعة أحدث الأخبار والفعاليات القادمة في الأقسام.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => (onNavigate ? onNavigate('events') : setCurrentView('events'))}
+                className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer"
+              >
+                استعراض جدول الفعاليات
+              </button>
+              <button
+                type="button"
+                onClick={() => (onNavigate ? onNavigate('news') : setCurrentView('news'))}
+                className="bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer"
+              >
+                تصفح أحدث الأخبار
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return null;
+  };
+
+  return (
+    <>
+      {renderCurrentView()}
+
+      {/* Global Fallback Party Leader Modal (when not registered inside a specialized secretariat) */}
+      {selectedPartyLeader && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setSelectedPartyLeader(null)}
+              className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
+              <img
+                src={selectedPartyLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                alt={selectedPartyLeader.name}
+                className="w-32 h-32 sm:w-40 sm:h-40 object-cover object-top rounded-2xl border-2 border-red-700 shadow-md shrink-0 bg-stone-100"
+                referrerPolicy="no-referrer"
+              />
+              <div className="space-y-1 text-center sm:text-right">
+                <span className="bg-red-50 text-red-700 text-xs font-bold px-2.5 py-1 rounded-full">
+                  {selectedPartyLeader.governorate
+                    ? `${selectedPartyLeader.level || 'قيادات المحافظات'} – ${selectedPartyLeader.governorate}`
+                    : selectedPartyLeader.level || 'الهيئة العليا'}
+                </span>
+                <h3 className="text-2xl font-black text-stone-900 mt-2">
+                  {selectedPartyLeader.name}
+                </h3>
+                <p className="text-sm font-bold text-amber-700">
+                  {selectedPartyLeader.position}
+                </p>
+              </div>
+            </div>
+
+            <div className="border-t border-stone-100 pt-4 space-y-3">
+              <h4 className="font-bold text-stone-800 text-sm">
+                نبذة تعريفية:
+              </h4>
+              <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
+                {selectedPartyLeader.bio || 'لا توجد نبذة مسجلة لهذه القيادة.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Fallback Secretariat Leader Modal */}
+      {selectedSecLeader && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setSelectedSecLeader(null)}
+              className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start mb-6">
+              <img
+                src={selectedSecLeader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
+                alt={selectedSecLeader.name}
+                className="w-32 h-32 sm:w-40 sm:h-40 object-cover object-top rounded-2xl border-2 border-amber-600 shadow-md shrink-0 bg-stone-100"
+                referrerPolicy="no-referrer"
+              />
+              <div className="space-y-1 text-center sm:text-right">
+                <span className="bg-amber-100 text-amber-900 text-xs font-bold px-2.5 py-1 rounded-full">
+                  أمانة قسم ثالث أكتوبر – محافظة الجيزة
+                </span>
+                <h3 className="text-2xl font-black text-stone-900 mt-2">
+                  {selectedSecLeader.name}
+                </h3>
+                <p className="text-sm font-bold text-red-700">
+                  {selectedSecLeader.title}
+                </p>
+                {selectedSecLeader.appointmentDate && (
+                  <p className="text-xs text-stone-400">
+                    تاريخ تولي المسؤولية: {selectedSecLeader.appointmentDate}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="border-t border-stone-100 pt-4 space-y-3">
+              <h4 className="font-bold text-stone-800 text-sm">
+                النبذة التعريفية والتكليف:
+              </h4>
+              <p className="text-xs sm:text-sm text-stone-600 leading-relaxed whitespace-pre-line">
+                {selectedSecLeader.bio || 'لا توجد نبذة مسجلة.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global News Details Modal */}
+      {selectedNews && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => {
+                setSelectedNews(null);
+                if (onClearSelectedNewsId) onClearSelectedNewsId();
+              }}
+              className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                {selectedNews.isUrgent && (
+                  <span className="bg-red-600 text-white text-xs font-black px-2.5 py-1 rounded-md flex items-center gap-1 shadow-xs">
+                    <span>⚡ خبر عاجل</span>
+                  </span>
+                )}
+                {selectedNews.isFeatured && !selectedNews.isUrgent && (
+                  <span className="bg-amber-600 text-white text-xs font-bold px-2 py-0.5 rounded">
+                    خبر مميز
+                  </span>
+                )}
+                <span className="text-xs text-stone-400 font-mono">{selectedNews.publishDate}</span>
+              </div>
+              <h2 className="text-2xl font-black text-stone-900">
+                {selectedNews.title}
+              </h2>
+
+              {selectedNews.coverImage && (
+                <div
+                  className="relative group cursor-pointer overflow-hidden rounded-xl bg-stone-100"
+                  onClick={() => {
+                    const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
+                    openLightbox(allImgs, 0, selectedNews.title);
+                  }}
+                >
+                  <img
+                    src={selectedNews.coverImage}
+                    alt={selectedNews.title}
+                    className="w-full aspect-video object-cover rounded-xl group-hover:scale-102 transition-transform duration-200"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
+                    <Maximize2 className="w-5 h-5" />
+                    <span>عرض الصورة بحجم كامل</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
+                {selectedNews.content}
+              </div>
+
+              {selectedNews.galleryImages && selectedNews.galleryImages.length > 0 && (
+                <div className="pt-3 border-t border-stone-100 space-y-2">
+                  <h4 className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
+                    <ImageIcon className="w-4 h-4 text-amber-600" />
+                    <span>معرض صور الخبر ({selectedNews.galleryImages.length} صورة)</span>
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {selectedNews.galleryImages.map((img, idx) => {
+                      const allImgs = [selectedNews.coverImage, ...(selectedNews.galleryImages || [])].filter(Boolean) as string[];
+                      const targetIdx = selectedNews.coverImage ? idx + 1 : idx;
+                      return (
+                        <div
+                          key={idx}
+                          className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                          onClick={() => openLightbox(allImgs, targetIdx, `${selectedNews.title} - صورة ${idx + 1}`)}
+                        >
+                          <img
+                            src={img}
+                            alt={`${selectedNews.title} - صورة ${idx + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                            <Maximize2 className="w-4 h-4" />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {selectedNews.videoUrl && (
+                <div className="pt-4 border-t border-stone-100">
+                  <a
+                    href={selectedNews.videoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 px-4 py-2 rounded-lg"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>مشاهدة الفيديو المرفق</span>
+                  </a>
+                </div>
+              )}
+
+              {(selectedNews.authorName || selectedNews.authorPosition) && (
+                <div className="flex items-center gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-900 font-black flex items-center justify-center text-sm shrink-0">
+                    {(selectedNews.authorName || 'ح').charAt(0)}
+                  </div>
+                  <div className="text-right">
+                    {selectedNews.authorName ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handlePersonClick(selectedNews.authorName, {
+                            explicitSecretariatId: selectedNews.linkedSecretariatId
+                          })
+                        }
+                        className="text-xs font-bold text-stone-900 hover:text-red-700 hover:underline cursor-pointer text-right"
+                      >
+                        {`نشر / إعداد: ${selectedNews.authorName}`}
+                      </button>
+                    ) : (
+                      <div className="text-xs font-bold text-stone-900">المكتب الإعلامي للأمانة</div>
+                    )}
+                    {selectedNews.authorPosition && (
+                      <div className="text-[11px] font-semibold text-amber-800">
+                        {selectedNews.authorPosition}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <SocialShareButtons
+                title={selectedNews.title}
+                summary={selectedNews.excerpt}
+                itemType="news"
+                itemId={selectedNews.id}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Lightbox Modal */}
+      <ImageLightboxModal
+        isOpen={lightboxOpen}
+        onClose={() => setLightboxOpen(false)}
+        images={lightboxImages}
+        initialIndex={lightboxIndex}
+        title={lightboxTitle}
+      />
+    </>
+  );
 };

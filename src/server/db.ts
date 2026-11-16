@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
-import { pushDatabaseDiffToFirestore } from './firestoreSync.ts';
+import { pushDatabaseDiffToFirestore, markLocalMutation } from './firestoreSync.ts';
 
 const firebaseTokenStorage = new AsyncLocalStorage<string>();
 
@@ -99,8 +99,10 @@ export interface Initiative {
   startDate: string;
   endDate?: string;
   status: 'active' | 'paused' | 'completed';
-  activities: Array<{ title: string; date: string; description: string }>;
+  activities: Array<{ title: string; date: string; description: string; authorName?: string; authorPosition?: string }>;
   galleryImages?: string[];
+  authorName?: string;
+  authorPosition?: string;
   isVisible: boolean;
   createdAt: string;
 }
@@ -132,6 +134,8 @@ export interface EventItem {
   dateTime: string;
   venue: string;
   organizer: string;
+  authorName?: string;
+  authorPosition?: string;
   images: string[];
   galleryImages?: string[];
   coverUrl?: string;
@@ -327,6 +331,43 @@ export interface CMSPage {
   updatedAt: string;
 }
 
+export interface EmailSubscriber {
+  id: string;
+  email: string;
+  name?: string;
+  status: 'active' | 'unsubscribed';
+  topics: {
+    news: boolean;
+    events: boolean;
+    initiatives: boolean;
+  };
+  unsubscribeToken: string;
+  subscribedAt: string;
+  updatedAt?: string;
+}
+
+export interface EmailDispatchLog {
+  id: string;
+  itemType: 'news' | 'event' | 'initiative';
+  itemId: string;
+  title: string;
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  mode: 'smtp' | 'unconfigured' | 'no_subscribers' | 'error';
+  errorMessage?: string;
+  dispatchedAt: string;
+}
+
+export interface NotificationDispatchResult {
+  attempted: boolean;
+  mode: 'smtp' | 'unconfigured' | 'no_subscribers' | 'error';
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  errorMessage?: string;
+}
+
 export interface AppDatabase {
   partyLeaders: PartyLeader[];
   secretariatLeaders: SecretariatLeader[];
@@ -343,6 +384,8 @@ export interface AppDatabase {
   pages: CMSPage[];
   admins: AdminUser[];
   auditLogs: AuditLog[];
+  subscribers: EmailSubscriber[];
+  emailDispatchLogs: EmailDispatchLog[];
   settings: SiteSettings;
 }
 
@@ -1238,6 +1281,8 @@ function getInitialDatabase(): AppDatabase {
         timestamp: new Date().toISOString()
       }
     ],
+    subscribers: [],
+    emailDispatchLogs: [],
     settings: {
       partyName: 'حزب الجبهة الوطنية',
       secretariatName: 'أمانة قسم ثالث أكتوبر – محافظة الجيزة',
@@ -1281,8 +1326,9 @@ function getInitialDatabase(): AppDatabase {
       heroVideoUrl: '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4',
       heroMediaType: 'video',
       heroDefaultMuted: false,
+      officialSiteUrl: 'https://www.algabhaalwataniya-oct3.org',
       secretariatsVersion: 25,
-      rosterVersion: 2
+      rosterVersion: 3
     }
   };
 }
@@ -1342,7 +1388,9 @@ class DatabaseManager {
           roles: Array.isArray(parsed.roles) ? parsed.roles : initial.roles,
           pages: Array.isArray(parsed.pages) ? parsed.pages : initial.pages,
           admins: Array.isArray(parsed.admins) ? parsed.admins : initial.admins,
-          auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : initial.auditLogs
+          auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : initial.auditLogs,
+          subscribers: Array.isArray(parsed.subscribers) ? parsed.subscribers : [],
+          emailDispatchLogs: Array.isArray(parsed.emailDispatchLogs) ? parsed.emailDispatchLogs : []
         };
 
         const migrated = this.migrateSecretariatsIfNeeded(assembled);
@@ -1651,11 +1699,26 @@ class DatabaseManager {
       changed = true;
     }
 
+    // Migrate officialSiteUrl to https://www.algabhaalwataniya-oct3.org
+    if ((dbObj.settings.rosterVersion || 0) < 3) {
+      const currentSiteUrl = (dbObj.settings.officialSiteUrl || '').trim().replace(/\/+$/, '');
+      if (
+        !currentSiteUrl ||
+        currentSiteUrl === 'https://nfp-october3.ai.studio' ||
+        currentSiteUrl === 'https://algabhaalwataniya-oct3.org'
+      ) {
+        dbObj.settings.officialSiteUrl = 'https://www.algabhaalwataniya-oct3.org';
+      }
+      dbObj.settings.rosterVersion = 3;
+      changed = true;
+    }
+
     return changed;
   }
 
   private pendingCloudPushTimer: ReturnType<typeof setTimeout> | null = null;
   private latestCloudToken: string | null = null;
+  private activeCloudPushPromise: Promise<boolean> | null = null;
 
   public setFromCloud(cloudData: AppDatabase): void {
     this.migrateSecretariatsIfNeeded(cloudData);
@@ -1686,6 +1749,7 @@ class DatabaseManager {
     if (dataToSave) {
       this.data = dataToSave;
     }
+    markLocalMutation();
     this.writeLocalFileOnly();
 
     const activeToken = getCurrentFirebaseToken();
@@ -1698,11 +1762,35 @@ class DatabaseManager {
         this.pendingCloudPushTimer = null;
         const tok = this.latestCloudToken;
         if (tok) {
-          pushDatabaseDiffToFirestore(this.data, tok).catch(err => {
-            console.error('[DB] Background Firestore sync error:', err);
-          });
+          this.activeCloudPushPromise = pushDatabaseDiffToFirestore(this.data, tok)
+            .catch(err => {
+              console.error('[DB] Background Firestore sync error:', err);
+              return false;
+            })
+            .finally(() => {
+              this.activeCloudPushPromise = null;
+            });
         }
       }, 25);
+    }
+  }
+
+  public async flushCloudSync(explicitToken?: string): Promise<boolean> {
+    const tok = explicitToken || getCurrentFirebaseToken() || this.latestCloudToken;
+    if (!tok) return false;
+    this.latestCloudToken = tok;
+    if (this.pendingCloudPushTimer) {
+      clearTimeout(this.pendingCloudPushTimer);
+      this.pendingCloudPushTimer = null;
+    }
+    if (this.activeCloudPushPromise) {
+      await this.activeCloudPushPromise.catch(() => false);
+    }
+    try {
+      return await pushDatabaseDiffToFirestore(this.data, tok);
+    } catch (err) {
+      console.error('[DB] Flush Firestore sync error:', err);
+      return false;
     }
   }
 

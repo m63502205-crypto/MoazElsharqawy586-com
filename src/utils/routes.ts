@@ -10,11 +10,12 @@ export interface ParsedRoute {
   newsId?: string | null;
   eventId?: string | null;
   person?: string | null;
+  activity?: number | null;
 }
 
 export function getViewPath(
   view: string,
-  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
+  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null; activity?: number | null }
 ): string {
   switch (view) {
     case 'home':
@@ -35,8 +36,13 @@ export function getViewPath(
     }
     case 'initiatives':
       return '/initiatives';
-    case 'initiative-detail':
-      return options?.slug ? `/initiative/${encodeURIComponent(options.slug)}` : '/initiatives';
+    case 'initiative-detail': {
+      if (!options?.slug) return '/initiatives';
+      const base = `/initiative/${encodeURIComponent(options.slug)}`;
+      return typeof options?.activity === 'number' && options.activity >= 0
+        ? `${base}?activity=${options.activity}`
+        : base;
+    }
     case 'news':
       return options?.newsId ? `/news/${encodeURIComponent(options.newsId)}` : '/news';
     case 'events':
@@ -103,9 +109,14 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
       };
     }
     if (fullHash.startsWith('initiative/')) {
+      const rest = fullHash.replace('initiative/', '');
+      const [rawSlug, rawQuery] = rest.split('?');
+      const hashActivity = rawQuery ? new URLSearchParams(rawQuery).get('activity') : searchParams.get('activity');
+      const actNum = hashActivity !== null && /^\d+$/.test(hashActivity) ? Number(hashActivity) : null;
       return {
         view: 'initiative-detail',
-        slug: decodeURIComponent(fullHash.replace('initiative/', ''))
+        slug: decodeURIComponent(rawSlug),
+        activity: actNum
       };
     }
     const cleanView = fullHash.split('?')[0].split('/')[0];
@@ -159,7 +170,13 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
     };
   }
   if (pathname.startsWith('/initiative/')) {
-    return { view: 'initiative-detail', slug: pathname.slice('/initiative/'.length) };
+    const rawActivity = searchParams.get('activity');
+    const actNum = rawActivity !== null && /^\d+$/.test(rawActivity) ? Number(rawActivity) : null;
+    return {
+      view: 'initiative-detail',
+      slug: pathname.slice('/initiative/'.length),
+      activity: actNum
+    };
   }
   if (pathname.startsWith('/news/')) {
     return { view: 'news', newsId: pathname.slice('/news/'.length) };
@@ -177,7 +194,7 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
 export function getPageSeoMeta(
   view: string,
   data: PublicPortalData | null,
-  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
+  options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null; activity?: number | null }
 ): { title: string; description: string; canonicalUrl: string; robots: string } {
   const configuredUrl = (data?.settings?.officialSiteUrl || '').trim().replace(/\/+$/, '');
   const baseSiteUrl =
@@ -255,6 +272,18 @@ export function getPageSeoMeta(
     const init = data?.initiatives?.find(
       i => i.slug === options?.slug || i.id === options?.slug
     );
+    const act =
+      init && typeof options?.activity === 'number' && options.activity >= 0
+        ? init.activities?.[options.activity]
+        : null;
+    if (act && init) {
+      return {
+        title: `${act.title || 'نشاط ميداني'} – ${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`,
+        description: (act.description || init.description || HOME_DESCRIPTION).slice(0, 160),
+        canonicalUrl: `${canonicalUrl}?activity=${options?.activity}`,
+        robots
+      };
+    }
     return {
       title: init
         ? `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`

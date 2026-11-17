@@ -16,10 +16,7 @@ import {
   AuditLog,
   AdminStats,
   AdminRole,
-  CMSPage,
-  EmailSubscriber,
-  EmailDispatchLog,
-  NotificationDispatchResult
+  CMSPage
 } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
@@ -81,8 +78,6 @@ import {
   Play,
   HeartHandshake,
   Globe,
-  Mail,
-  Send,
   Volume2,
   VolumeX,
   PenTool
@@ -142,7 +137,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     | 'events'
     | 'media'
     | 'livestream'
-    | 'subscribers'
     | 'roles'
     | 'users'
     | 'settings'
@@ -167,10 +161,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [settings, setSettings] = useState<SiteSettings | null>(null);
-  const [subscribers, setSubscribers] = useState<EmailSubscriber[]>([]);
-  const [emailDispatchLogs, setEmailDispatchLogs] = useState<EmailDispatchLog[]>([]);
-  const [smtpConfigured, setSmtpConfigured] = useState<boolean>(false);
-  const [dispatchingTestItem, setDispatchingTestItem] = useState<string | null>(null);
   const [gaTestStatus, setGaTestStatus] = useState<string | null>(null);
   const [copiedSiteUrl, setCopiedSiteUrl] = useState(false);
   const [copiedSitemapUrl, setCopiedSitemapUrl] = useState(false);
@@ -251,20 +241,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     }, 5500);
   };
 
-  const formatDispatchSummary = (res?: NotificationDispatchResult | null) => {
-    if (!res) return '';
-    if (res.mode === 'smtp') {
-      return ` — تم إرسال تنبيه بالبريد إلى ${res.sentCount} مشترك${res.failedCount ? ` (فشل: ${res.failedCount})` : ''}`;
-    }
-    if (res.mode === 'no_subscribers') {
-      return ' — لا يوجد مشتركون نشطون حالياً لإرسال التنبيه';
-    }
-    if (res.mode === 'unconfigured') {
-      return ' — مسجل بسجل التنبيهات (يتطلب تفعيل SMTP على الخادم للإرسال البريدي الفعلي)';
-    }
-    return ' — تعذر إرسال التنبيه البريدي، راجع سجل التنبيهات';
-  };
-
   const formatDateTimeLocal = (val?: string) => {
     if (!val) return '';
     const trimmed = String(val).trim();
@@ -323,9 +299,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       setAdminUsers(full.admins || []);
       setAuditLogs(full.auditLogs || []);
       setSettings(full.settings || null);
-      setSubscribers(full.subscribers || []);
-      setEmailDispatchLogs(full.emailDispatchLogs || []);
-      setSmtpConfigured(Boolean(full.smtpStatus?.configured));
 
       const st = await api.getAdminStats();
       setStats(st);
@@ -364,8 +337,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
         return hasPermission('media');
       case 'livestream':
         return hasPermission('livestream');
-      case 'subscribers':
-        return hasPermission('news') || hasPermission('settings');
       case 'roles':
         return hasPermission('roles');
       case 'users':
@@ -772,23 +743,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${liveStream?.isActive ? 'bg-emerald-600 text-white' : 'bg-stone-200 text-stone-600'}`}>
                       {liveStream?.isActive ? 'نشط' : 'متوقف'}
-                    </span>
-                  </button>
-                )}
-
-                {isTabPermitted('subscribers') && (
-                  <button
-                    onClick={() => setActiveTab('subscribers')}
-                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-                      activeTab === 'subscribers' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-700 hover:bg-stone-100'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Mail className="w-4 h-4" />
-                      <span>المشتركون بالبريد</span>
-                    </span>
-                    <span className="text-[10px] bg-stone-200 text-stone-800 px-1.5 py-0.5 rounded-full">
-                      {subscribers.filter(s => s.status === 'active').length}
                     </span>
                   </button>
                 )}
@@ -5223,211 +5177,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </div>
             )}
 
-            {/* TAB: EMAIL SUBSCRIBERS & DISPATCH LOGS */}
-            {activeTab === 'subscribers' && (
-              <div className="space-y-6">
-                <div className="border-b border-stone-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl font-black text-stone-900">
-                      المشتركون في النشرة البريدية وإشعارات النشر الفوري
-                    </h2>
-                    <p className="text-xs text-stone-500 mt-0.5">
-                      يتم إرسال بريد إلكتروني تلقائياً للمشتركين النشطين فور نشر أي خبر أو فعالية أو مبادرة جديدة.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`text-xs font-bold px-3 py-1.5 rounded-xl border ${
-                        smtpConfigured
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          : 'bg-amber-50 text-amber-800 border-amber-200'
-                      }`}
-                    >
-                      {smtpConfigured
-                        ? 'خادم البريد (SMTP) مفعل وجاهز للإرسال'
-                        : 'خادم البريد (SMTP) غير مضبوط في متغيرات البيئة بالخادم'}
-                    </span>
-
-                    {news.filter(n => !n.isDraft).length > 0 && (
-                      <button
-                        type="button"
-                        disabled={Boolean(dispatchingTestItem)}
-                        onClick={async () => {
-                          const latestNews = news.find(n => !n.isDraft);
-                          if (!latestNews) return;
-                          setDispatchingTestItem(latestNews.id);
-                          try {
-                            const res = await api.dispatchSubscriberItem('news', latestNews.id);
-                            await loadAdminData();
-                            showBanner(
-                              res.result.mode === 'smtp' ? 'success' : 'error',
-                              `إرسال تنبيه "${latestNews.title}"${formatDispatchSummary(res.result)}`
-                            );
-                          } catch (err: any) {
-                            showBanner('error', err?.message || 'تعذر إرسال التنبيه');
-                          } finally {
-                            setDispatchingTestItem(null);
-                          }
-                        }}
-                        className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white text-xs font-bold px-4 py-2 rounded-xl cursor-pointer flex items-center gap-1.5"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>{dispatchingTestItem ? 'جاري الإرسال...' : 'إرسال تنبيه لأحدث خبر'}</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Stats Summary */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-                    <div className="text-xs text-stone-500 font-bold">إجمالي المشتركين</div>
-                    <div className="text-2xl font-black text-stone-900 mt-1">{subscribers.length}</div>
-                  </div>
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-                    <div className="text-xs text-emerald-700 font-bold">المشتركون النشطون</div>
-                    <div className="text-2xl font-black text-emerald-900 mt-1">
-                      {subscribers.filter(s => s.status === 'active').length}
-                    </div>
-                  </div>
-                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                    <div className="text-xs text-amber-800 font-bold">سجلات الإرسال الفوري</div>
-                    <div className="text-2xl font-black text-amber-950 mt-1">{emailDispatchLogs.length}</div>
-                  </div>
-                </div>
-
-                {/* Subscribers List */}
-                <div className="space-y-3">
-                  <h3 className="text-sm font-black text-stone-800">قائمة عناوين البريد المشتركة</h3>
-                  {subscribers.length === 0 ? (
-                    <div className="p-8 bg-stone-50 border border-dashed border-stone-300 rounded-2xl text-center text-xs text-stone-500">
-                      لا يوجد مشتركون بالبريد الإلكتروني حتى الآن. يمكن للزوار الاشتراك عبر النموذج الموجود في نهاية صفحات الموقع.
-                    </div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {subscribers.map(sub => (
-                        <div
-                          key={sub.id}
-                          className="p-4 bg-stone-50 rounded-2xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                        >
-                          <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-mono font-bold text-stone-900 text-sm" dir="ltr">
-                                {sub.email}
-                              </span>
-                              <span
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                                  sub.status === 'active'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : 'bg-stone-200 text-stone-600'
-                                }`}
-                              >
-                                {sub.status === 'active' ? 'مشترك نشط' : 'ملغى الاشتراك'}
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-stone-500">
-                              <span>
-                                الاهتمامات:{' '}
-                                {[
-                                  sub.topics?.news !== false ? 'الأخبار' : null,
-                                  sub.topics?.events !== false ? 'الفعاليات' : null,
-                                  sub.topics?.initiatives !== false ? 'المبادرات' : null
-                                ]
-                                  .filter(Boolean)
-                                  .join('، ')}
-                              </span>
-                              <span>•</span>
-                              <span className="font-mono">{(sub.subscribedAt || '').slice(0, 10)}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                await api.toggleSubscriber(sub.id);
-                                await loadAdminData();
-                                showBanner('success', 'تم تحديث حالة المشترك');
-                              }}
-                              className="bg-white border border-stone-300 hover:border-amber-500 text-stone-800 font-bold px-3 py-1.5 rounded-xl cursor-pointer"
-                            >
-                              {sub.status === 'active' ? 'إيقاف مؤقت' : 'تفعيل'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                await api.deleteSubscriber(sub.id);
-                                await loadAdminData();
-                                showBanner('success', 'تم حذف البريد من القائمة');
-                              }}
-                              className="p-2 text-red-600 hover:bg-red-50 rounded-xl border border-red-200 cursor-pointer"
-                              title="حذف المشترك"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Dispatch Logs */}
-                <div className="space-y-3 pt-4 border-t border-stone-100">
-                  <h3 className="text-sm font-black text-stone-800">سجل الإرسال الفوري عند النشر</h3>
-                  {emailDispatchLogs.length === 0 ? (
-                    <div className="p-6 bg-stone-50 border border-dashed border-stone-200 rounded-2xl text-center text-xs text-stone-500">
-                      لم يتم تسجيل أي عمليات إرسال بريدي بعد.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {emailDispatchLogs.map(log => (
-                        <div
-                          key={log.id}
-                          className="p-3 bg-white rounded-xl border border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-                        >
-                          <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-bold text-stone-900">{log.title}</span>
-                              <span className="bg-stone-100 text-stone-700 text-[10px] px-2 py-0.5 rounded font-bold">
-                                {log.itemType === 'news' ? 'خبر' : log.itemType === 'event' ? 'فعالية' : 'مبادرة'}
-                              </span>
-                              <span
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                                  log.mode === 'smtp' && log.failedCount === 0
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : log.mode === 'unconfigured' || log.mode === 'no_subscribers'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-red-100 text-red-700'
-                                }`}
-                              >
-                                {log.mode === 'smtp' && log.failedCount === 0
-                                  ? `تم الإرسال (${log.sentCount}/${log.recipientCount})`
-                                  : log.mode === 'smtp'
-                                  ? `جزئي (${log.sentCount} نجح / ${log.failedCount} فشل)`
-                                  : log.mode === 'unconfigured'
-                                  ? 'SMTP غير مضبوط'
-                                  : log.mode === 'no_subscribers'
-                                  ? 'لا يوجد مشتركون'
-                                  : 'خطأ في الإرسال'}
-                              </span>
-                            </div>
-                            {log.errorMessage && (
-                              <p className="text-[11px] text-red-600 mt-1">{log.errorMessage}</p>
-                            )}
-                          </div>
-                          <span className="text-stone-400 font-mono text-[11px] shrink-0">
-                            {(log.dispatchedAt || '').replace('T', ' ').slice(0, 19)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
             {/* TAB: AUDIT LOG */}
             {activeTab === 'audit' && (
               <div className="space-y-6">
@@ -7460,20 +7209,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   setModalError(null);
                   setIsSavingModal(true);
                   try {
-                    let notifRes: NotificationDispatchResult | null | undefined = null;
                     if (editingInitiative.id) {
                       await api.updateInitiative(editingInitiative.id, payload);
                     } else {
-                      const created = await api.createInitiative(payload);
-                      notifRes = created.notificationResult;
+                      await api.createInitiative(payload);
                     }
                     setShowInitiativeModal(false);
                     await loadAdminData();
                     onRefreshPublicData();
                     showBanner(
                       'success',
-                      (editingInitiative.id ? 'تم حفظ تعديل المبادرة بنجاح' : 'تمت إضافة المبادرة بنجاح') +
-                        formatDispatchSummary(notifRes)
+                      editingInitiative.id ? 'تم حفظ تعديل المبادرة بنجاح' : 'تمت إضافة المبادرة بنجاح'
                     );
                   } catch (err: any) {
                     setModalError(err?.message || 'حدث خطأ أثناء حفظ المبادرة');
@@ -7661,21 +7407,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       title: trimmedTitle,
                       content: trimmedContent
                     };
-                    let notifRes: NotificationDispatchResult | null | undefined = null;
                     if (editingNews.id) {
-                      const updated = await api.updateNews(editingNews.id, payload);
-                      notifRes = updated.notificationResult;
+                      await api.updateNews(editingNews.id, payload);
                     } else {
-                      const created = await api.createNews(payload);
-                      notifRes = created.notificationResult;
+                      await api.createNews(payload);
                     }
                     setShowNewsModal(false);
                     await loadAdminData();
                     onRefreshPublicData();
                     showBanner(
                       'success',
-                      (editingNews.id ? 'تم حفظ تعديل الخبر بنجاح' : 'تم نشر الخبر بنجاح') +
-                        formatDispatchSummary(notifRes)
+                      editingNews.id ? 'تم حفظ تعديل الخبر بنجاح' : 'تم نشر الخبر بنجاح'
                     );
                   } catch (err: any) {
                     setModalError(err?.message || 'حدث خطأ أثناء حفظ الخبر');
@@ -7856,20 +7598,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       title: trimmedTitle,
                       dateTime: trimmedDateTime
                     };
-                    let notifRes: NotificationDispatchResult | null | undefined = null;
                     if (editingEvent.id) {
                       await api.updateEvent(editingEvent.id, payload);
                     } else {
-                      const created = await api.createEvent(payload);
-                      notifRes = created.notificationResult;
+                      await api.createEvent(payload);
                     }
                     setShowEventModal(false);
                     await loadAdminData();
                     onRefreshPublicData();
                     showBanner(
                       'success',
-                      (editingEvent.id ? 'تم حفظ تعديل الفعالية بنجاح' : 'تمت إضافة الفعالية بنجاح') +
-                        formatDispatchSummary(notifRes)
+                      editingEvent.id ? 'تم حفظ تعديل الفعالية بنجاح' : 'تمت إضافة الفعالية بنجاح'
                     );
                   } catch (err: any) {
                     setModalError(err?.message || 'حدث خطأ أثناء حفظ الفعالية');
@@ -8212,7 +7951,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">
-                  كلمة المرور {editingUser.id ? '(اتركها فارغة إذا كنت لا ترغب في تغييرها)' : '<span className="text-red-600">*</span>'}
+                  كلمة المرور {editingUser.id ? '(اتركها فارغة إذا كنت لا ترغب في تغييرها)' : <span className="text-red-600">*</span>}
                 </label>
                 <input
                   type="password"

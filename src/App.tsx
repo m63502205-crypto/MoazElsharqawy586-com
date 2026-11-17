@@ -29,6 +29,9 @@ function MainApp() {
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(initialRoute.newsId || null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(initialRoute.eventId || null);
   const [selectedPerson, setSelectedPerson] = useState<string | null>(initialRoute.person || null);
+  const [selectedActivityIndex, setSelectedActivityIndex] = useState<number | null>(
+    typeof initialRoute.activity === 'number' ? initialRoute.activity : null
+  );
   const [data, setData] = useState<PublicPortalData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -76,7 +79,8 @@ function MainApp() {
       slug: selectedSlug,
       newsId: selectedNewsId,
       eventId: selectedEventId,
-      person: selectedPerson
+      person: selectedPerson,
+      activity: selectedActivityIndex
     });
 
     document.title = seo.title;
@@ -116,10 +120,11 @@ function MainApp() {
       slug: selectedSlug,
       newsId: selectedNewsId,
       eventId: selectedEventId,
-      person: selectedPerson
+      person: selectedPerson,
+      activity: selectedActivityIndex
     });
     trackPageView(path, seo.title);
-  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, selectedPerson, data]);
+  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, selectedPerson, selectedActivityIndex, data]);
 
   // Sync view from browser history (popstate) and legacy hash links (hashchange)
   useEffect(() => {
@@ -130,6 +135,7 @@ function MainApp() {
       setSelectedNewsId(parsed.newsId || null);
       setSelectedEventId(parsed.eventId || null);
       setSelectedPerson(parsed.person || null);
+      setSelectedActivityIndex(typeof parsed.activity === 'number' ? parsed.activity : null);
     };
 
     window.addEventListener('popstate', syncRoute);
@@ -143,26 +149,30 @@ function MainApp() {
   // Unified SPA navigation updating clean crawlable URL via pushState
   const navigateTo = (
     view: string,
-    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null; activity?: number | null }
   ) => {
     if (view === 'gallery') view = 'home';
 
+    const prevView = currentView;
     const nextSlug = options?.slug ?? selectedSlug;
     const nextNewsId = options && 'newsId' in options ? options.newsId : null;
     const nextEventId = options && 'eventId' in options ? options.eventId : null;
     const nextPerson = options && 'person' in options ? options.person : null;
+    const nextActivity = options && 'activity' in options && typeof options.activity === 'number' ? options.activity : null;
 
     if (options?.slug) setSelectedSlug(options.slug);
     setSelectedNewsId(nextNewsId || null);
     setSelectedEventId(nextEventId || null);
     setSelectedPerson(nextPerson || null);
+    setSelectedActivityIndex(nextActivity);
     setCurrentView(view);
 
     const targetUrl = getViewPath(view, {
       slug: nextSlug,
       newsId: nextNewsId,
       eventId: nextEventId,
-      person: nextPerson
+      person: nextPerson,
+      activity: nextActivity
     });
 
     if (typeof window !== 'undefined') {
@@ -171,7 +181,9 @@ function MainApp() {
         window.history.pushState(null, '', targetUrl);
       }
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (prevView !== view) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleSetCurrentView = (view: string) => {
@@ -286,10 +298,23 @@ function MainApp() {
           selectedNewsId={selectedNewsId}
           selectedEventId={selectedEventId}
           selectedPerson={selectedPerson}
+          selectedActivityIndex={selectedActivityIndex}
           onClearSelectedNewsId={() => {
             setSelectedNewsId(null);
             if (typeof window !== 'undefined' && window.location.pathname.startsWith('/news/')) {
               window.history.pushState(null, '', '/news');
+            }
+          }}
+          onClearSelectedEventId={() => {
+            setSelectedEventId(null);
+            if (typeof window !== 'undefined' && window.location.pathname.startsWith('/events/')) {
+              window.history.pushState(null, '', '/events');
+            }
+          }}
+          onClearSelectedActivityIndex={() => {
+            setSelectedActivityIndex(null);
+            if (typeof window !== 'undefined' && window.location.pathname.startsWith('/initiative/') && window.location.search.includes('activity=')) {
+              window.history.pushState(null, '', window.location.pathname);
             }
           }}
         />

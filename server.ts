@@ -17,7 +17,8 @@ import {
   fetchUploadAssetFromFirestore,
   hasPendingLocalChanges,
   isCloudConfigured,
-  isCloudInitialized
+  isCloudInitialized,
+  markLocalDeletion
 } from './src/server/firestoreSync.ts';
 
 const app = express();
@@ -452,9 +453,15 @@ function getLogoMimeType(filePath: string): string {
   return 'image/jpeg';
 }
 
-function resolvePublicImageUrl(rawImage: string | undefined, assetBaseUrl: string, itemType?: 'news' | 'events', itemId?: string): string {
+function resolvePublicImageUrl(
+  rawImage: string | undefined,
+  assetBaseUrl: string,
+  itemType?: 'news' | 'events' | 'initiatives',
+  itemId?: string,
+  querySuffix = ''
+): string {
   if (rawImage && rawImage.startsWith('data:image/') && itemType && itemId) {
-    return `${assetBaseUrl}/api/${itemType}/${encodeURIComponent(itemId)}/image`;
+    return `${assetBaseUrl}/api/${itemType}/${encodeURIComponent(itemId)}/image${querySuffix}`;
   }
   if (rawImage && (rawImage.startsWith('http://') || rawImage.startsWith('https://'))) {
     return rawImage;
@@ -649,15 +656,39 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const slug = cleanPath.slice('/initiative/'.length);
     const init = visibleInitiatives.find(i => i.slug === slug || i.id === slug) || visibleInitiatives[0];
     if (init) {
-      title = `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-      description = (init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
-      canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
-      ogImage = resolvePublicImageUrl(init.coverUrl || init.galleryImages?.[0] || init.logoUrl, assetBaseUrl);
+      const rawAct = typeof req.query?.activity === 'string' ? req.query.activity : '';
+      const actIdx = rawAct !== '' && /^\d+$/.test(rawAct) ? Number(rawAct) : -1;
+      const act = actIdx >= 0 && init.activities?.[actIdx] ? init.activities[actIdx] : null;
+      const firstActImg = (init.activities || []).find((a: any) => a?.imageUrl)?.imageUrl;
+
+      ogType = 'article';
+      if (act) {
+        title = `${act.title || 'نشاط ميداني'} – ${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
+        description = (act.description || init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
+        canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}?activity=${actIdx}`;
+        ogImage = resolvePublicImageUrl(
+          act.imageUrl || init.coverUrl || init.galleryImages?.[0] || firstActImg || init.logoUrl,
+          assetBaseUrl,
+          'initiatives',
+          init.id,
+          act.imageUrl ? `?activity=${actIdx}` : ''
+        );
+      } else {
+        title = `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
+        description = (init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
+        canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
+        ogImage = resolvePublicImageUrl(
+          init.coverUrl || init.galleryImages?.[0] || firstActImg || init.logoUrl,
+          assetBaseUrl,
+          'initiatives',
+          init.id
+        );
+      }
       mainHtml = `
         <article>
-          <h1>${escapeHtml(init.title)}</h1>
-          <p>${escapeHtml(init.description)}</p>
-          ${init.venue ? `<p>المكان: ${escapeHtml(init.venue)}</p>` : ''}
+          <h1>${escapeHtml(act ? `${act.title} – ${init.title}` : init.title)}</h1>
+          <p>${escapeHtml(act?.description || init.description)}</p>
+          ${(act?.venue || init.venue) ? `<p>المكان: ${escapeHtml(act?.venue || init.venue || '')}</p>` : ''}
           ${(init.goals || []).length > 0 ? `<h2>أهداف المبادرة</h2><ul>${init.goals.map(g => `<li>${escapeHtml(g)}</li>`).join('')}</ul>` : ''}
           ${(init.activities || []).length > 0 ? `<h2>الأنشطة الميدانية</h2><ul>${init.activities.map(a => `<li>${escapeHtml(a.title)} (${escapeHtml(a.date)}): ${escapeHtml(a.description)}</li>`).join('')}</ul>` : ''}
           <p><a href="/initiatives">العودة إلى كافة المبادرات</a></p>
@@ -718,6 +749,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       title = `${ev.title} | فعاليات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
       description = (ev.description || HOME_SEO_DESCRIPTION).slice(0, 160);
       canonical = `${siteUrl}/events/${encodeURIComponent(ev.id)}`;
+      ogType = 'article';
       ogImage = resolvePublicImageUrl(ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0], assetBaseUrl, 'events', ev.id);
       mainHtml = `
         <article>
@@ -1030,7 +1062,7 @@ app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
 // Refresh public portal state from Firestore when stale (keeps Preview & Live synchronized)
 app.use('/api/public', async (_req: Request, _res: Response, next: NextFunction) => {
   try {
-    await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
+    await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
   } catch {
     // ignore transient network errors
   }
@@ -1685,6 +1717,7 @@ app.delete('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission(
   const data = db.get();
   const leader = data.partyLeaders.find(l => l.id === req.params.id);
   data.partyLeaders = data.partyLeaders.filter(l => l.id !== req.params.id);
+  markLocalDeletion('party_leaders', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف قيادة حزبية', 'PartyLeader', `تم حذف القيادة: ${leader?.name || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -1751,6 +1784,7 @@ app.delete('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermi
   const data = db.get();
   const leader = data.secretariatLeaders.find(l => l.id === req.params.id);
   data.secretariatLeaders = data.secretariatLeaders.filter(l => l.id !== req.params.id);
+  markLocalDeletion('secretariat_leaders', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف قيادة بأمانة قسم ثالث أكتوبر', 'SecretariatLeader', `تم حذف: ${leader?.name || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -1931,6 +1965,7 @@ app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('
 
   // Preserve members: keep secretariatMembers intact or set their secretariatId to unassigned, without deleting person records
   data.specializedSecretariats = data.specializedSecretariats.filter(s => s.id !== req.params.id);
+  markLocalDeletion('secretariats', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
   await db.flushCloudSync();
@@ -2077,6 +2112,7 @@ app.delete('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermi
   const data = db.get();
   const member = data.secretariatMembers.find(m => m.id === req.params.id);
   data.secretariatMembers = data.secretariatMembers.filter(m => m.id !== req.params.id);
+  markLocalDeletion('secretariat_members', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إزالة عضو من أمانة', 'SecretariatMember', `تم إخراج ${member?.name} من تشكيل الأمانة مع بقاء ملفه الشخصي`, req.params.id);
   await db.flushCloudSync();
@@ -2258,6 +2294,7 @@ app.delete('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('i
   const data = db.get();
   const init = data.initiatives.find(i => i.id === req.params.id);
   data.initiatives = data.initiatives.filter(i => i.id !== req.params.id);
+  markLocalDeletion('initiatives', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف مبادرة', 'Initiative', `تم حذف مبادرة: ${init?.title || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -2414,6 +2451,7 @@ app.delete('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), 
   const data = db.get();
   const news = data.news.find(n => n.id === req.params.id);
   data.news = data.news.filter(n => n.id !== req.params.id);
+  markLocalDeletion('news', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف خبر', 'News', `تم حذف خبر: ${news?.title || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -2547,6 +2585,7 @@ app.delete('/api/admin/events/:id', authenticateAdmin, requirePermission('events
   const data = db.get();
   const event = data.events.find(e => e.id === req.params.id);
   data.events = data.events.filter(e => e.id !== req.params.id);
+  markLocalDeletion('events', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف فعالية', 'Event', `تم حذف فعالية: ${event?.title || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -2631,6 +2670,7 @@ app.delete('/api/admin/media/:id', authenticateAdmin, requirePermission('media')
   const data = db.get();
   const media = data.media.find(m => m.id === req.params.id);
   data.media = data.media.filter(m => m.id !== req.params.id);
+  markLocalDeletion('media', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف وسيط من المعرض', 'Media', `تم حذف: ${media?.title || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -3084,6 +3124,7 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
   }
 
   data.admins = data.admins.filter(a => a.id !== req.params.id);
+  markLocalDeletion('admin_users', req.params.id);
   db.save();
   db.addAuditLog(currentAdmin.email, currentAdmin.name, 'حذف مشرف', 'AdminUser', `تم حذف حساب المشرف: ${target.name} (${target.email})`, req.params.id);
   await db.flushCloudSync();
@@ -3187,6 +3228,7 @@ app.delete('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages')
   if (!data.pages) data.pages = [];
   const page = data.pages.find(p => p.id === req.params.id);
   data.pages = data.pages.filter(p => p.id !== req.params.id);
+  markLocalDeletion('pages', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف صفحة CMS', 'CMSPage', `تم حذف صفحة: ${page?.title || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -3256,6 +3298,7 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
   }
 
   data.roles = data.roles.filter(r => r.id !== req.params.id);
+  markLocalDeletion('roles', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف دور إداري (RBAC)', 'AdminRole', `تم حذف دور: ${role?.name || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -3342,6 +3385,7 @@ app.delete('/api/admin/subscribers/:id', authenticateAdmin, async (req: Request,
   if (!data.subscribers) data.subscribers = [];
   const sub = data.subscribers.find(s => s.id === req.params.id);
   data.subscribers = data.subscribers.filter(s => s.id !== req.params.id);
+  markLocalDeletion('subscribers', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف مشترك من القائمة البريدية', 'Subscriber', `تم حذف البريد: ${sub?.email || req.params.id}`, req.params.id);
   await db.flushCloudSync();
@@ -3421,15 +3465,31 @@ function escapeHtml(str: string): string {
 // DYNAMIC SOCIAL SHARE PREVIEW ROUTES (WhatsApp, Facebook, Twitter, Telegram)
 // -------------------------------------------------------------
 // Direct image endpoint for WhatsApp and Open Graph previews
-app.get(['/api/news/:id/image', '/api/events/:id/image'], (req: Request, res: Response) => {
+app.get(['/api/news/:id/image', '/api/events/:id/image', '/api/initiatives/:id/image'], (req: Request, res: Response) => {
   const isNews = req.path.startsWith('/api/news');
+  const isInitiative = req.path.startsWith('/api/initiatives');
   const id = req.params.id;
   const data = db.get();
-  const item: any = isNews
-    ? (data.news || []).find((n: any) => n.id === id || n.slug === id)
-    : (data.events || []).find((e: any) => e.id === id || e.slug === id);
+  let rawImage: string | null = null;
 
-  const rawImage = item ? (isNews ? (item.coverImage || item.imageUrl) : (item.images?.[0] || item.coverUrl || item.imageUrl)) : null;
+  if (isNews) {
+    const item: any = (data.news || []).find((n: any) => n.id === id || n.slug === id);
+    rawImage = item ? (item.coverImage || item.galleryImages?.[0] || item.imageUrl || null) : null;
+  } else if (isInitiative) {
+    const item: any = (data.initiatives || []).find((i: any) => i.id === id || i.slug === id);
+    if (item) {
+      const rawAct = typeof req.query?.activity === 'string' ? req.query.activity : '';
+      const actIdx = rawAct !== '' && /^\d+$/.test(rawAct) ? Number(rawAct) : -1;
+      const actImg = actIdx >= 0 ? item.activities?.[actIdx]?.imageUrl : null;
+      const firstActImg = (item.activities || []).find((a: any) => a?.imageUrl)?.imageUrl;
+      rawImage = actImg || item.coverUrl || item.galleryImages?.[0] || firstActImg || item.logoUrl || item.imageUrl || null;
+    }
+  } else {
+    const item: any = (data.events || []).find((e: any) => e.id === id || e.slug === id);
+    rawImage = item
+      ? (item.coverUrl || item.coverImage || item.images?.[0] || item.galleryImages?.[0] || item.imageUrl || null)
+      : null;
+  }
 
   if (!rawImage) {
     return res.redirect('/og-logo.jpg');
@@ -3467,7 +3527,7 @@ async function startServer() {
     if (hasPendingLocalChanges()) {
       console.log('[NFP Platform] Skipped startup Firestore pull because local edits are pending cloud sync.');
     } else {
-      const cloudPublic = await pullPublicFromFirestore(db.get());
+      const cloudPublic = await pullPublicFromFirestore(db.get(), db.getDbFileMtimeMs());
       if (cloudPublic) {
         db.setFromCloud(cloudPublic);
         console.log('[NFP Platform] Hydrated public portal state from Firestore.');
@@ -3479,7 +3539,7 @@ async function startServer() {
 
   // Keep Preview & Live containers in sync with public Firestore updates
   setInterval(() => {
-    refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb)).catch(() => {});
+    refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs()).catch(() => {});
   }, 10000);
 
   const isProduction = process.env.NODE_ENV === 'production';
@@ -3514,7 +3574,7 @@ async function startServer() {
     // Serve Vite SPA with route-specific SEO tags & semantic SSR HTML inside #root
     app.get(spaPublicRoutes, async (req: Request, res: Response, next: NextFunction) => {
       try {
-        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
+        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
         const indexPath = path.resolve(process.cwd(), 'index.html');
         const rawHtml = fs.readFileSync(indexPath, 'utf-8');
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
@@ -3530,7 +3590,7 @@ async function startServer() {
     app.use(express.static(distPath, { index: false }));
     app.get('*', async (req: Request, res: Response) => {
       try {
-        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb));
+        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
       } catch {
         // ignore
       }

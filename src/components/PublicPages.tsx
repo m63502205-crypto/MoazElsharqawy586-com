@@ -84,7 +84,31 @@ function normalizeLocationHref(url?: string): string | null {
   return `https://${raw}`;
 }
 
-function extractDobFromNationalId(nid: string): string | null {
+const ARABIC_MONTH_NAMES = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'أبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر'
+];
+
+interface NationalIdDetails {
+  dateOfBirth: string;
+  day: number;
+  monthName: string;
+  year: number;
+  gender: 'ذكر' | 'أنثى' | null;
+  age: number;
+}
+
+function extractNationalIdDetails(nid: string): NationalIdDetails | null {
   const digits = normalizeArabicDigits(nid).replace(/\D/g, '');
   if (digits.length < 7) return null;
 
@@ -108,7 +132,29 @@ function extractDobFromNationalId(nid: string): string | null {
   }
   if (dt.getTime() > Date.now()) return null;
 
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  const monthDiff = (today.getMonth() + 1) - month;
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < day)) {
+    age--;
+  }
+
+  let gender: 'ذكر' | 'أنثى' | null = null;
+  if (digits.length >= 13) {
+    const genderDigit = parseInt(digits[12], 10);
+    if (!Number.isNaN(genderDigit)) {
+      gender = genderDigit % 2 === 1 ? 'ذكر' : 'أنثى';
+    }
+  }
+
+  return {
+    dateOfBirth: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    day,
+    monthName: ARABIC_MONTH_NAMES[month - 1] || '',
+    year,
+    gender,
+    age
+  };
 }
 
 interface PublicPagesProps {
@@ -116,7 +162,7 @@ interface PublicPagesProps {
   setCurrentView: (view: string) => void;
   onNavigate?: (
     view: string,
-    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null }
+    options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null; activity?: number | null }
   ) => void;
   data: PublicPortalData;
   onRefreshData: () => void;
@@ -125,7 +171,10 @@ interface PublicPagesProps {
   selectedNewsId?: string | null;
   selectedEventId?: string | null;
   selectedPerson?: string | null;
+  selectedActivityIndex?: number | null;
   onClearSelectedNewsId?: () => void;
+  onClearSelectedEventId?: () => void;
+  onClearSelectedActivityIndex?: () => void;
 }
 
 export const PublicPages: React.FC<PublicPagesProps> = ({
@@ -139,16 +188,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   selectedNewsId,
   selectedEventId,
   selectedPerson,
-  onClearSelectedNewsId
+  selectedActivityIndex,
+  onClearSelectedNewsId,
+  onClearSelectedEventId,
+  onClearSelectedActivityIndex
 }) => {
   const ct = data.settings.customTexts || {};
 
   // Public visitor view is strictly read-only; admin modifications are exclusively performed via the Admin Panel
 
-  // Modal states for leaders / news
+  // Modal states for leaders / news / events / activities
   const [selectedPartyLeader, setSelectedPartyLeader] = useState<PartyLeader | null>(null);
   const [selectedSecLeader, setSelectedSecLeader] = useState<SecretariatLeader | null>(null);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<{
+    init: Initiative;
+    act: Initiative['activities'][number];
+    index: number;
+  } | null>(null);
   const [selectedPersonFallback, setSelectedPersonFallback] = useState<{
     name: string;
     position?: string;
@@ -339,15 +397,53 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     return () => clearInterval(interval);
   }, [heroSlides.length, isHeroHovered]);
 
-  // Sync news selection from URL deep links (#news?id=xxx)
+  // Sync news selection from URL deep links (/news/:id or #news?id=xxx)
   useEffect(() => {
     if (selectedNewsId && data?.news?.length) {
       const match = data.news.find(n => n.id === selectedNewsId || (n as any).slug === selectedNewsId);
       if (match) {
         setSelectedNews(match);
       }
+    } else if (!selectedNewsId) {
+      setSelectedNews(null);
     }
   }, [selectedNewsId, data?.news]);
+
+  // Sync event selection from URL deep links (/events/:id or #events?id=xxx)
+  useEffect(() => {
+    if (selectedEventId && data?.events?.length) {
+      const match = data.events.find(e => e.id === selectedEventId || (e as any).slug === selectedEventId);
+      if (match) {
+        setSelectedEvent(match);
+      }
+    } else if (!selectedEventId) {
+      setSelectedEvent(null);
+    }
+  }, [selectedEventId, data?.events]);
+
+  // Sync initiative activity modal & highlight from URL deep link (/initiative/:slug?activity=i)
+  useEffect(() => {
+    if (
+      currentView === 'initiative-detail' &&
+      typeof selectedActivityIndex === 'number' &&
+      selectedActivityIndex >= 0 &&
+      data?.initiatives?.length
+    ) {
+      const init =
+        data.initiatives.find(i => i.slug === selectedSlug || i.id === selectedSlug) || data.initiatives[0];
+      const act = init?.activities?.[selectedActivityIndex];
+      if (init && act) {
+        setSelectedActivity({ init, act, index: selectedActivityIndex });
+        const timer = window.setTimeout(() => {
+          const el = document.getElementById(`initiative-activity-${selectedActivityIndex}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 140);
+        return () => window.clearTimeout(timer);
+      }
+    } else if (selectedActivityIndex === null || selectedActivityIndex === undefined) {
+      setSelectedActivity(null);
+    }
+  }, [currentView, selectedSlug, selectedActivityIndex, data?.initiatives]);
 
   // Sync focused person from URL query (?person=...) and scroll smoothly to profile card
   useEffect(() => {
@@ -476,12 +572,21 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       }
     }
 
-    if (isFieldReq('dateOfBirth') && !appForm.dateOfBirth) {
+    const nidExtracted = extractNationalIdDetails(appForm.nationalId);
+    const resolvedDob = nidExtracted?.dateOfBirth || appForm.dateOfBirth;
+    const resolvedGender = nidExtracted?.gender || appForm.gender;
+
+    if (appForm.nationalId.trim() && !nidExtracted) {
+      setAppError('الرقم القومي المدخل غير صحيح (يرجى التأكد من تاريخ الميلاد داخل الرقم القومي)');
+      return;
+    }
+
+    if (isFieldReq('dateOfBirth') && !resolvedDob) {
       setAppError('يرجى تحديد تاريخ الميلاد');
       return;
     }
 
-    if (isFieldReq('gender') && !appForm.gender) {
+    if (isFieldReq('gender') && !resolvedGender) {
       setAppError('يرجى تحديد النوع');
       return;
     }
@@ -568,7 +673,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
     setAppSubmitting(true);
     try {
-      const res = await api.submitApplication(appForm);
+      const res = await api.submitApplication({
+        ...appForm,
+        dateOfBirth: resolvedDob,
+        gender: resolvedGender
+      });
       setAppSuccessResult({ message: res.message, appNumber: res.applicationNumber });
       trackEvent('generate_lead', {
         category: 'membership',
@@ -611,10 +720,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   // Helper to close all open overlay modals before navigating directly to a person or secretariat
   const closeAllOverlayModals = () => {
     setSelectedNews(null);
+    setSelectedEvent(null);
+    setSelectedActivity(null);
     setSelectedPartyLeader(null);
     setSelectedSecLeader(null);
     setSelectedPersonFallback(null);
     if (onClearSelectedNewsId) onClearSelectedNewsId();
+    if (onClearSelectedEventId) onClearSelectedEventId();
+    if (onClearSelectedActivityIndex) onClearSelectedActivityIndex();
   };
 
   // Helper to open secretariat details (optionally focusing a specific person)
@@ -786,10 +899,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     );
   };
 
-  // Helper to open initiative details
-  const openInitiative = (slug: string) => {
+  // Helper to open initiative details (optionally opening a specific activity modal)
+  const openInitiative = (slug: string, activity?: number | null) => {
     if (onNavigate) {
-      onNavigate('initiative-detail', { slug });
+      onNavigate('initiative-detail', typeof activity === 'number' ? { slug, activity } : { slug });
       return;
     }
     if (setSelectedSlug) setSelectedSlug(slug);
@@ -1735,11 +1848,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <div
                         key={event.id}
                         onClick={() => {
+                          setSelectedEvent(event);
                           if (onNavigate) {
                             onNavigate('events', { eventId: event.id });
-                          } else {
-                            setCurrentView('events');
-                            window.scrollTo({ top: 0, behavior: 'smooth' });
                           }
                         }}
                         className="bg-stone-50/70 rounded-xl border border-stone-200/90 p-4 hover:bg-white hover:shadow-md transition-all flex flex-col justify-between cursor-pointer group"
@@ -3444,32 +3555,62 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   {init.activities.map((act, i) => {
                     const actLocHref = normalizeLocationHref(act.locationUrl);
                     const actLightboxIndex = act.imageUrl ? Math.max(0, allInitImgs.indexOf(act.imageUrl)) : 0;
+                    const actShareUrl =
+                      typeof window !== 'undefined'
+                        ? `${window.location.origin}/initiative/${encodeURIComponent(init.slug || init.id)}?activity=${i}`
+                        : '';
+                    const isFocusedAct = selectedActivityIndex === i;
 
                     return (
-                      <div key={i} className="border-r-4 border-amber-600 bg-stone-50/70 rounded-l-2xl p-4 sm:p-5 space-y-3">
+                      <div
+                        key={i}
+                        id={`initiative-activity-${i}`}
+                        onClick={() => {
+                          setSelectedActivity({ init, act, index: i });
+                          if (onNavigate) {
+                            onNavigate('initiative-detail', { slug: init.slug || init.id, activity: i });
+                          }
+                        }}
+                        className={`border-r-4 border-amber-600 rounded-l-2xl p-4 sm:p-5 space-y-3 cursor-pointer transition-all group border ${
+                          isFocusedAct
+                            ? 'bg-amber-50/70 border-amber-400 ring-2 ring-amber-400/30 shadow-sm'
+                            : 'bg-stone-50/70 border-stone-200/70 hover:bg-white hover:shadow-md'
+                        }`}
+                      >
                         <div className="flex flex-col md:flex-row gap-4 items-start">
                           {act.imageUrl && (
                             <div
-                              className="w-full md:w-56 aspect-video rounded-xl overflow-hidden border border-stone-200 shrink-0 cursor-pointer relative group bg-stone-100"
-                              onClick={() => openLightbox(allInitImgs.length > 0 ? allInitImgs : [act.imageUrl!], actLightboxIndex, `${act.title} - ${init.title}`)}
+                              className="w-full md:w-56 aspect-video rounded-xl overflow-hidden border border-stone-200 shrink-0 cursor-pointer relative group/img bg-stone-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openLightbox(allInitImgs.length > 0 ? allInitImgs : [act.imageUrl!], actLightboxIndex, `${act.title} - ${init.title}`);
+                              }}
                             >
                               <img
                                 src={act.imageUrl}
                                 alt={act.title || `نشاط ${i + 1}`}
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-200"
                                 referrerPolicy="no-referrer"
                               />
-                              <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                              <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center text-white">
                                 <Maximize2 className="w-4 h-4" />
                               </div>
                             </div>
                           )}
 
                           <div className="flex-1 space-y-2 min-w-0 w-full">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-sm font-extrabold text-stone-900">{act.title}</span>
-                              <span className="text-[11px] text-amber-800 font-semibold bg-amber-100/80 px-2.5 py-0.5 rounded-md">
-                                {act.date}
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-extrabold text-stone-900 group-hover:text-red-700 transition-colors">
+                                  {act.title}
+                                </span>
+                                <span className="text-[11px] text-amber-800 font-semibold bg-amber-100/80 px-2.5 py-0.5 rounded-md">
+                                  {act.date}
+                                </span>
+                              </div>
+                              <span className="text-[11px] font-bold text-red-700 inline-flex items-center gap-1 group-hover:underline">
+                                <span>تفاصيل النشاط</span>
+                                <ChevronLeft className="w-3.5 h-3.5" />
                               </span>
                             </div>
 
@@ -3488,6 +3629,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                                     href={actLocHref}
                                     target="_blank"
                                     rel="noopener noreferrer"
+                                    onClick={e => e.stopPropagation()}
                                     className="inline-flex items-center gap-1 text-amber-800 hover:text-amber-900 font-bold bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg transition-colors"
                                   >
                                     <MapPin className="w-3 h-3" />
@@ -3522,6 +3664,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                               summary={act.description}
                               itemType="initiative"
                               itemId={init.slug || init.id}
+                              url={actShareUrl}
                               imageUrl={act.imageUrl || initLeadImg}
                               compact
                             />
@@ -3794,7 +3937,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             return (
               <div
                 key={event.id}
-                className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-md transition-all text-right ${
+                id={`event-card-${event.id}`}
+                onClick={() => {
+                  setSelectedEvent(event);
+                  if (onNavigate) {
+                    onNavigate('events', { eventId: event.id });
+                  }
+                }}
+                className={`bg-white rounded-2xl border overflow-hidden shadow-xs hover:shadow-lg transition-all text-right cursor-pointer group ${
                   selectedEventId === event.id
                     ? 'border-amber-500 ring-2 ring-amber-400/30'
                     : 'border-stone-200'
@@ -3802,8 +3952,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               >
                 {leadEventImg && (
                   <div
-                    className="aspect-video max-h-[380px] w-full bg-stone-100 overflow-hidden relative cursor-pointer group"
-                    onClick={() => openLightbox(allEventImgs, 0, `${event.title} - تغطية مصورة`)}
+                    className="aspect-video max-h-[380px] w-full bg-stone-100 overflow-hidden relative cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openLightbox(allEventImgs, 0, `${event.title} - تغطية مصورة`);
+                    }}
                   >
                     <img
                       src={leadEventImg}
@@ -3830,7 +3983,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       }`}>
                         {event.status === 'upcoming' ? 'فعالية قادمة' : (event.status === 'completed' ? 'فعالية منتهية' : 'جارية')}
                       </span>
-                      <h3 className="text-xl sm:text-2xl font-black text-stone-900 mt-2">
+                      <h3 className="text-xl sm:text-2xl font-black text-stone-900 mt-2 group-hover:text-red-700 transition-colors">
                         {event.title}
                       </h3>
                     </div>
@@ -3866,6 +4019,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         href={eventLocationHref}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
                         className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs transition-colors shadow-xs"
                       >
                         <MapPin className="w-3.5 h-3.5" />
@@ -3893,16 +4047,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         {allEventImgs.map((img, i) => (
                           <div
                             key={i}
-                            className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
-                            onClick={() => openLightbox(allEventImgs, i, `${event.title} - تغطية مصورة`)}
+                            className="relative group/thumb cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openLightbox(allEventImgs, i, `${event.title} - تغطية مصورة`);
+                            }}
                           >
                             <img
                               src={img}
                               alt={`${event.title} - صورة ${i + 1}`}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                              className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
                               referrerPolicy="no-referrer"
                             />
-                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-white">
                               <Maximize2 className="w-4 h-4" />
                             </div>
                           </div>
@@ -3929,6 +4086,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       })}
                     </div>
                   )}
+
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-xs font-bold text-red-700 inline-flex items-center gap-1 group-hover:underline">
+                      <span>فتح صفحة وتفاصيل الفعالية</span>
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
 
                   {/* Share Buttons for Event */}
                   <SocialShareButtons
@@ -4248,7 +4412,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 <form onSubmit={handleApplicationSubmit} className="space-y-8">
               
               {/* Section A: Personal Information */}
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <h3 className="text-base font-extrabold text-stone-900 border-r-4 border-red-700 pr-3">
                   1. البيانات الشخصية الأساسية
                 </h3>
@@ -4274,98 +4438,156 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
-                      <span>الرقم القومي (14 رقماً)</span>
-                      {isFieldReq('nationalId') ? (
+                      <span>الحالة الاجتماعية</span>
+                      {isFieldReq('maritalStatus') ? (
                         <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
                       ) : (
                         <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
                       )}
                     </label>
-                    <input
-                      type="text"
-                      required={isFieldReq('nationalId')}
-                      maxLength={14}
-                      inputMode="numeric"
-                      value={appForm.nationalId}
-                      onChange={e => {
-                        const cleanedNid = normalizeArabicDigits(e.target.value).replace(/\D/g, '').slice(0, 14);
-                        const extractedDob = extractDobFromNationalId(cleanedNid);
-                        setAppForm(prev => ({
-                          ...prev,
-                          nationalId: cleanedNid,
-                          dateOfBirth: extractedDob ?? prev.dateOfBirth
-                        }));
-                      }}
-                      className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-stone-900 focus:outline-hidden focus:border-red-700"
-                      dir="ltr"
-                    />
+                    <select
+                      required={isFieldReq('maritalStatus')}
+                      value={appForm.maritalStatus}
+                      onChange={e => setAppForm({ ...appForm, maritalStatus: e.target.value as any })}
+                      className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
+                    >
+                      <option value="أعزب">أعزب</option>
+                      <option value="متزوج">متزوج</option>
+                      <option value="أخرى">أخرى</option>
+                    </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
-                      <span>تاريخ الميلاد</span>
-                      {isFieldReq('dateOfBirth') ? (
-                        <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
-                      ) : (
-                        <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
-                      )}
-                    </label>
-                    <input
-                      type="date"
-                      required={isFieldReq('dateOfBirth')}
-                      value={appForm.dateOfBirth}
-                      onChange={e => setAppForm({ ...appForm, dateOfBirth: e.target.value })}
-                      className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
-                    />
-                    {extractDobFromNationalId(appForm.nationalId) && (
-                      <p className="text-[10px] font-semibold text-emerald-700 mt-1">
-                        تم تحديد تاريخ الميلاد تلقائياً من الرقم القومي
-                      </p>
-                    )}
-                  </div>
+                  {/* National ID + Automatic Extraction Card matching reference design */}
+                  {(() => {
+                    const nidDetails = extractNationalIdDetails(appForm.nationalId);
+                    const digitCount = appForm.nationalId.length;
+                    return (
+                      <div className="sm:col-span-2 space-y-3">
+                        <div>
+                          <label className="block text-sm font-bold text-stone-800 mb-1.5 flex items-center justify-between">
+                            <span className="flex items-center gap-1">
+                              <span>الرقم القومي</span>
+                              {isFieldReq('nationalId') && <span className="text-red-600">*</span>}
+                            </span>
+                            {!isFieldReq('nationalId') && (
+                              <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">
+                                اختياري
+                              </span>
+                            )}
+                          </label>
+                          <input
+                            type="text"
+                            required={isFieldReq('nationalId')}
+                            maxLength={14}
+                            inputMode="numeric"
+                            placeholder="أدخل 14 رقماً من بطاقة الرقم القومي"
+                            value={appForm.nationalId}
+                            onChange={e => {
+                              const cleanedNid = normalizeArabicDigits(e.target.value).replace(/\D/g, '').slice(0, 14);
+                              const details = extractNationalIdDetails(cleanedNid);
+                              setAppForm(prev => ({
+                                ...prev,
+                                nationalId: cleanedNid,
+                                dateOfBirth: details?.dateOfBirth ?? (cleanedNid.length < 7 ? '' : prev.dateOfBirth),
+                                gender: details?.gender ?? prev.gender
+                              }));
+                            }}
+                            className="w-full bg-white border border-stone-300 rounded-xl px-4 py-3 text-base font-mono tabular-nums tracking-wider text-stone-900 focus:outline-hidden focus:border-red-700"
+                            dir="ltr"
+                          />
+                          <div className="flex items-center justify-between mt-1.5 text-xs text-stone-500 tabular-nums">
+                            <span>
+                              {digitCount === 14
+                                ? '14 رقمًا'
+                                : digitCount > 0
+                                ? `${digitCount} / 14 رقمًا`
+                                : '14 رقمًا'}
+                            </span>
+                          </div>
+                        </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
-                        <span>النوع</span>
-                        {isFieldReq('gender') ? (
-                          <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 py-0.5 rounded-md">*</span>
+                        {nidDetails ? (
+                          <div className="bg-amber-50/70 border border-dashed border-amber-400/90 rounded-2xl p-5 sm:p-6 space-y-4">
+                            <div className="grid grid-cols-3 gap-3 text-right items-start">
+                              <div>
+                                <div className="text-xs sm:text-sm text-stone-500 font-medium mb-1">
+                                  تاريخ الميلاد
+                                </div>
+                                <div className="text-base sm:text-lg font-extrabold text-stone-900 leading-snug tabular-nums">
+                                  <div>{nidDetails.day} {nidDetails.monthName}</div>
+                                  <div>{nidDetails.year}</div>
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="text-xs sm:text-sm text-stone-500 font-medium mb-1">
+                                  النوع
+                                </div>
+                                <div className="text-base sm:text-lg font-extrabold text-stone-900">
+                                  {nidDetails.gender || '—'}
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="text-xs sm:text-sm text-stone-500 font-medium mb-1">
+                                  السن
+                                </div>
+                                <div className="text-base sm:text-lg font-extrabold text-stone-900 tabular-nums">
+                                  {nidDetails.age}
+                                </div>
+                              </div>
+                            </div>
+
+                            <p className="text-xs sm:text-sm text-stone-500 font-medium">
+                              يتم استخراج تاريخ الميلاد والنوع تلقائيًا من الرقم القومي.
+                            </p>
+                          </div>
                         ) : (
-                          <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1 py-0.5 rounded-md">اختياري</span>
-                        )}
-                      </label>
-                      <select
-                        required={isFieldReq('gender')}
-                        value={appForm.gender}
-                        onChange={e => setAppForm({ ...appForm, gender: e.target.value as any })}
-                        className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
-                      >
-                        <option value="ذكر">ذكر</option>
-                        <option value="أنثى">أنثى</option>
-                      </select>
-                    </div>
+                          !isFieldReq('nationalId') && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                              <div>
+                                <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                                  <span>تاريخ الميلاد</span>
+                                  {isFieldReq('dateOfBirth') ? (
+                                    <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                                  ) : (
+                                    <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                                  )}
+                                </label>
+                                <input
+                                  type="date"
+                                  required={isFieldReq('dateOfBirth')}
+                                  value={appForm.dateOfBirth}
+                                  onChange={e => setAppForm({ ...appForm, dateOfBirth: e.target.value })}
+                                  className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
+                                />
+                              </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
-                        <span>الحالة الاجتماعية</span>
-                        {isFieldReq('maritalStatus') ? (
-                          <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1 py-0.5 rounded-md">*</span>
-                        ) : (
-                          <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1 py-0.5 rounded-md">اختياري</span>
+                              <div>
+                                <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center justify-between">
+                                  <span>النوع</span>
+                                  {isFieldReq('gender') ? (
+                                    <span className="text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-md">* إجباري</span>
+                                  ) : (
+                                    <span className="text-[10px] font-medium text-stone-500 bg-stone-100 border border-stone-200 px-1.5 py-0.5 rounded-md">اختياري</span>
+                                  )}
+                                </label>
+                                <select
+                                  required={isFieldReq('gender')}
+                                  value={appForm.gender}
+                                  onChange={e => setAppForm({ ...appForm, gender: e.target.value as any })}
+                                  className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
+                                >
+                                  <option value="ذكر">ذكر</option>
+                                  <option value="أنثى">أنثى</option>
+                                </select>
+                              </div>
+                            </div>
+                          )
                         )}
-                      </label>
-                      <select
-                        required={isFieldReq('maritalStatus')}
-                        value={appForm.maritalStatus}
-                        onChange={e => setAppForm({ ...appForm, maritalStatus: e.target.value as any })}
-                        className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700"
-                      >
-                        <option value="أعزب">أعزب</option>
-                        <option value="متزوج">متزوج</option>
-                        <option value="أخرى">أخرى</option>
-                      </select>
-                    </div>
-                  </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -5529,6 +5751,320 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         </div>
       )}
 
+      {/* Global Event Details Modal */}
+      {selectedEvent && (() => {
+        const modalEventImgs = Array.from(
+          new Set([
+            ...(selectedEvent.coverUrl ? [selectedEvent.coverUrl] : []),
+            ...(selectedEvent.coverImage ? [selectedEvent.coverImage] : []),
+            ...(selectedEvent.images || []),
+            ...(selectedEvent.galleryImages || [])
+          ])
+        ).filter(Boolean);
+        const modalLeadImg = modalEventImgs[0];
+        const modalLocHref = normalizeLocationHref(selectedEvent.locationUrl);
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => {
+                  setSelectedEvent(null);
+                  if (onClearSelectedEventId) onClearSelectedEventId();
+                }}
+                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`text-xs font-bold px-2.5 py-1 rounded-md ${
+                      selectedEvent.status === 'upcoming'
+                        ? 'bg-amber-100 text-amber-900'
+                        : 'bg-stone-100 text-stone-700'
+                    }`}
+                  >
+                    {selectedEvent.status === 'upcoming'
+                      ? 'فعالية قادمة'
+                      : selectedEvent.status === 'completed'
+                      ? 'فعالية منتهية'
+                      : 'جارية'}
+                  </span>
+                  <span className="text-xs font-bold text-red-700">
+                    {new Date(selectedEvent.dateTime).toLocaleDateString('ar-EG', {
+                      weekday: 'long',
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric'
+                    })}
+                  </span>
+                  <span className="text-xs text-stone-500">
+                    •{' '}
+                    {new Date(selectedEvent.dateTime).toLocaleTimeString('ar-EG', {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
+
+                <h2 className="text-2xl font-black text-stone-900">{selectedEvent.title}</h2>
+
+                {modalLeadImg && (
+                  <div
+                    className="relative group cursor-pointer overflow-hidden rounded-xl bg-stone-100"
+                    onClick={() => openLightbox(modalEventImgs, 0, selectedEvent.title)}
+                  >
+                    <img
+                      src={modalLeadImg}
+                      alt={selectedEvent.title}
+                      className="w-full aspect-video object-cover rounded-xl group-hover:scale-102 transition-transform duration-200"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
+                      <Maximize2 className="w-5 h-5" />
+                      <span>عرض الصورة بحجم كامل</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
+                  {selectedEvent.description}
+                </div>
+
+                <div className="bg-stone-50 border border-stone-200/80 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs text-stone-700">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 text-red-700 shrink-0" />
+                      <span>
+                        <strong>المكان:</strong> {selectedEvent.venue}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>
+                        <strong>المنظم:</strong> {selectedEvent.organizer}
+                      </span>
+                    </div>
+                  </div>
+                  {modalLocHref && (
+                    <a
+                      href={modalLocHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs transition-colors shadow-xs"
+                    >
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>فتح اللوكيشن على الخريطة</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                </div>
+
+                {selectedEvent.postReport && (
+                  <div className="bg-stone-50 p-4 rounded-xl border border-stone-200 text-xs text-stone-700 space-y-1">
+                    <span className="font-bold text-stone-900">تقرير ما بعد الفعالية:</span>
+                    <p className="whitespace-pre-line">{selectedEvent.postReport}</p>
+                  </div>
+                )}
+
+                {modalEventImgs.length > 1 && (
+                  <div className="pt-3 border-t border-stone-100 space-y-2">
+                    <h4 className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-600" />
+                      <span>معرض صور الفعالية ({modalEventImgs.length} صورة)</span>
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {modalEventImgs.map((img, idx) => (
+                        <div
+                          key={idx}
+                          className="relative group cursor-pointer overflow-hidden rounded-xl border border-stone-200 aspect-video shadow-xs"
+                          onClick={() => openLightbox(modalEventImgs, idx, `${selectedEvent.title} - صورة ${idx + 1}`)}
+                        >
+                          <img
+                            src={img}
+                            alt={`${selectedEvent.title} - صورة ${idx + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                            <Maximize2 className="w-4 h-4" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedEvent.videoUrl && (
+                  <div className="pt-3 border-t border-stone-100">
+                    <VideoPlayer
+                      url={selectedEvent.videoUrl}
+                      title={selectedEvent.title}
+                      poster={modalLeadImg}
+                    />
+                  </div>
+                )}
+
+                {(selectedEvent.authorName ||
+                  selectedEvent.authorPosition ||
+                  selectedEvent.publisherName ||
+                  selectedEvent.publisherPosition) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                    {renderPersonBadge({
+                      label: 'القائم بالفعالية',
+                      name: selectedEvent.authorName,
+                      position: selectedEvent.authorPosition,
+                      secretariatId: selectedEvent.authorSecretariatId,
+                      tone: 'author'
+                    })}
+                    {renderPersonBadge({
+                      label: 'مسؤول النشر والتغطية (أمانة الإعلام)',
+                      name: selectedEvent.publisherName,
+                      position: selectedEvent.publisherPosition,
+                      secretariatId: selectedEvent.publisherSecretariatId,
+                      tone: 'publisher'
+                    })}
+                  </div>
+                )}
+
+                <SocialShareButtons
+                  title={selectedEvent.title}
+                  summary={selectedEvent.description}
+                  itemType="event"
+                  itemId={selectedEvent.id}
+                  imageUrl={modalLeadImg}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Global Initiative Activity Details Modal */}
+      {selectedActivity && (() => {
+        const { init, act, index } = selectedActivity;
+        const modalLocHref = normalizeLocationHref(act.locationUrl || init.locationUrl);
+        const modalImg = act.imageUrl || init.coverUrl || init.galleryImages?.[0] || init.logoUrl;
+        const shareUrl =
+          typeof window !== 'undefined'
+            ? `${window.location.origin}/initiative/${encodeURIComponent(init.slug || init.id)}?activity=${index}`
+            : '';
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 text-right shadow-2xl relative border border-stone-200 max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => {
+                  setSelectedActivity(null);
+                  if (onClearSelectedActivityIndex) onClearSelectedActivityIndex();
+                }}
+                className="absolute top-4 left-4 p-2 text-stone-400 hover:text-stone-700 rounded-lg hover:bg-stone-100 cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedActivity(null);
+                      if (onClearSelectedActivityIndex) onClearSelectedActivityIndex();
+                      openInitiative(init.slug);
+                    }}
+                    className="bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-bold px-2.5 py-1 rounded-md cursor-pointer transition-colors"
+                  >
+                    مبادرة: {init.title}
+                  </button>
+                  {act.date && <span className="text-xs text-stone-500 font-mono">{act.date}</span>}
+                </div>
+
+                <h2 className="text-2xl font-black text-stone-900">
+                  {act.title || 'نشاط ميداني'}
+                </h2>
+
+                {modalImg && (
+                  <div
+                    className="relative group cursor-pointer overflow-hidden rounded-xl bg-stone-100"
+                    onClick={() => openLightbox([modalImg], 0, `${act.title} – ${init.title}`)}
+                  >
+                    <img
+                      src={modalImg}
+                      alt={act.title || init.title}
+                      className="w-full aspect-video object-cover rounded-xl group-hover:scale-102 transition-transform duration-200"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
+                      <Maximize2 className="w-5 h-5" />
+                      <span>عرض الصورة بحجم كامل</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="prose prose-sm text-stone-700 leading-relaxed whitespace-pre-line text-xs sm:text-sm">
+                  {act.description}
+                </div>
+
+                {(act.venue || init.venue || modalLocHref) && (
+                  <div className="bg-stone-50 border border-stone-200/80 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs text-stone-700">
+                    {(act.venue || init.venue) && (
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="w-4 h-4 text-red-700 shrink-0" />
+                        <span>
+                          <strong>المكان:</strong> {act.venue || init.venue}
+                        </span>
+                      </div>
+                    )}
+                    {modalLocHref && (
+                      <a
+                        href={modalLocHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs transition-colors shadow-xs"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>فتح اللوكيشن على الخريطة</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                {(act.authorName || act.authorPosition || act.publisherName || act.publisherPosition) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                    {renderPersonBadge({
+                      label: 'القائم بالنشاط',
+                      name: act.authorName,
+                      position: act.authorPosition,
+                      secretariatId: act.authorSecretariatId,
+                      tone: 'author'
+                    })}
+                    {renderPersonBadge({
+                      label: 'مسؤول النشر والتغطية (أمانة الإعلام)',
+                      name: act.publisherName,
+                      position: act.publisherPosition,
+                      secretariatId: act.publisherSecretariatId,
+                      tone: 'publisher'
+                    })}
+                  </div>
+                )}
+
+                <SocialShareButtons
+                  title={`${act.title || 'نشاط ميداني'} – ${init.title}`}
+                  summary={act.description}
+                  itemType="initiative"
+                  itemId={init.slug || init.id}
+                  url={shareUrl}
+                  imageUrl={modalImg}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Global Fallback Unlinked Author/Publisher Modal */}
       {selectedPersonFallback && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
@@ -5579,7 +6115,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             } else if (c.rawInitiative) {
                               openInitiative(c.rawInitiative.slug);
                             } else if (c.rawEvent) {
-                              if (onNavigate) onNavigate('events');
+                              setSelectedEvent(c.rawEvent);
+                              if (onNavigate) onNavigate('events', { eventId: c.rawEvent.id });
                               else setCurrentView('events');
                             }
                           }}

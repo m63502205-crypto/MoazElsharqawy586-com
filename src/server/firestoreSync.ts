@@ -187,6 +187,7 @@ interface PersistedSyncState {
   hasUnpushedCloudChanges: boolean;
   lastLocalMutationAt: number;
   lastCloudSyncAt: number;
+  deletedDocKeys: string[];
 }
 
 function loadPersistedSyncState(): PersistedSyncState {
@@ -197,7 +198,10 @@ function loadPersistedSyncState(): PersistedSyncState {
       return {
         hasUnpushedCloudChanges: Boolean(parsed?.hasUnpushedCloudChanges),
         lastLocalMutationAt: Number(parsed?.lastLocalMutationAt || 0),
-        lastCloudSyncAt: Number(parsed?.lastCloudSyncAt || 0)
+        lastCloudSyncAt: Number(parsed?.lastCloudSyncAt || 0),
+        deletedDocKeys: Array.isArray(parsed?.deletedDocKeys)
+          ? parsed.deletedDocKeys.filter((k: any) => typeof k === 'string')
+          : []
       };
     }
   } catch {
@@ -206,7 +210,8 @@ function loadPersistedSyncState(): PersistedSyncState {
   return {
     hasUnpushedCloudChanges: false,
     lastLocalMutationAt: 0,
-    lastCloudSyncAt: 0
+    lastCloudSyncAt: 0,
+    deletedDocKeys: []
   };
 }
 
@@ -231,6 +236,7 @@ let lastPublicPullAt = 0;
 let lastLocalMutationAt = initialSyncState.lastLocalMutationAt;
 let lastCloudSyncAt = initialSyncState.lastCloudSyncAt;
 let hasUnpushedCloudChanges = initialSyncState.hasUnpushedCloudChanges;
+const deletedDocKeys = new Set<string>(initialSyncState.deletedDocKeys);
 let pullPromise: Promise<boolean> | null = null;
 
 const authorizedAdminDocCache = new Map<string, { allowed: boolean; expiresAt: number }>();
@@ -267,17 +273,48 @@ export function markLocalMutation(): void {
   writePersistedSyncState({
     hasUnpushedCloudChanges,
     lastLocalMutationAt,
-    lastCloudSyncAt
+    lastCloudSyncAt,
+    deletedDocKeys: Array.from(deletedDocKeys).slice(-500)
   });
+}
+
+export function markLocalDeletion(collectionName: string, rawId: string): void {
+  if (!rawId) return;
+  const key = `${collectionName}/${sanitizeFirestoreId(rawId)}`;
+  deletedDocKeys.add(key);
+  markLocalMutation();
+}
+
+export function unmarkLocalDeletion(collectionName: string, rawId: string): void {
+  if (!rawId) return;
+  const key = `${collectionName}/${sanitizeFirestoreId(rawId)}`;
+  if (deletedDocKeys.delete(key)) {
+    writePersistedSyncState({
+      hasUnpushedCloudChanges,
+      lastLocalMutationAt,
+      lastCloudSyncAt,
+      deletedDocKeys: Array.from(deletedDocKeys).slice(-500)
+    });
+  }
+}
+
+function getItemTimestampMs(item: any): number {
+  if (!item || typeof item !== 'object') return 0;
+  const raw = item.updatedAt || item.createdAt || item.timestamp || item.dispatchedAt || item.subscribedAt || item.reviewedAt || '';
+  if (!raw) return 0;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 function markCloudSyncCompleted(): void {
   hasUnpushedCloudChanges = false;
+  deletedDocKeys.clear();
   lastCloudSyncAt = Date.now();
   writePersistedSyncState({
     hasUnpushedCloudChanges,
     lastLocalMutationAt,
-    lastCloudSyncAt
+    lastCloudSyncAt,
+    deletedDocKeys: []
   });
 }
 
@@ -618,9 +655,15 @@ function sortCollectionItems(collectionName: string, items: any[]): any[] {
   }
 }
 
-// Merge public Firestore data into current DB (non-destructive for private/local drafts)
-export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<AppDatabase | null> {
+// Merge public Firestore data into current DB (strictly non-destructive: never discard local additions or newer local edits)
+export async function pullPublicFromFirestore(
+  currentDb: AppDatabase,
+  localDbMtimeMs = 0
+): Promise<AppDatabase | null> {
   if (!serverFirestore) return null;
+  if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) {
+    return null;
+  }
 
   try {
     const configSnap = await getDoc(doc(serverFirestore, 'site_config', 'public'));
@@ -629,14 +672,23 @@ export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<A
       return null;
     }
 
+    const configData = configSnap.data() as any;
+    const cloudConfigUpdatedMs = configData?.updatedAt ? new Date(configData.updatedAt).getTime() : 0;
+    // If local database.json was modified more recently than the cloud config doc, treat local DB as fresher
+    if (localDbMtimeMs > 0 && cloudConfigUpdatedMs > 0 && localDbMtimeMs > cloudConfigUpdatedMs + 2000) {
+      return null;
+    }
+
     cloudInitialized = true;
     const updated: AppDatabase = { ...currentDb };
-    const configData = configSnap.data() as any;
     if (configData?.data) {
       updated.settings = {
         ...updated.settings,
         ...configData.data,
-        rosterVersion: Number(configData.data.rosterVersion || 0)
+        rosterVersion: Math.max(
+          Number(updated.settings?.rosterVersion || 0),
+          Number(configData.data.rosterVersion || 0)
+        )
       };
       cloudHashes.set('site_config/public', hashObj({ isPublic: true, content: configData.data }));
     }
@@ -655,26 +707,38 @@ export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<A
       publicMappings.map(async m => {
         const q = query(collection(serverFirestore, m.collectionName), where('isPublic', '==', true));
         const snap = await getDocs(q);
-        const cloudItems: any[] = [];
-        const cloudPublicIds = new Set<string>();
+
+        const mergedBySid = new Map<string, any>();
+        for (const localItem of ((currentDb[m.dbKey] as any[]) || [])) {
+          if (!localItem?.id) continue;
+          const sid = sanitizeFirestoreId(localItem.id);
+          mergedBySid.set(sid, localItem);
+        }
 
         snap.forEach(docSnap => {
           const d = docSnap.data() as any;
-          if (d?.data) {
-            cloudItems.push(d.data);
-            cloudPublicIds.add(docSnap.id);
-            cloudHashes.set(`${m.collectionName}/${docSnap.id}`, hashObj({ isPublic: true, content: d.data }));
+          if (!d?.data) return;
+          const sid = docSnap.id;
+          const delKey = `${m.collectionName}/${sid}`;
+          if (deletedDocKeys.has(delKey)) return;
+
+          cloudHashes.set(delKey, hashObj({ isPublic: true, content: d.data }));
+          const existingLocal = mergedBySid.get(sid);
+          if (!existingLocal) {
+            mergedBySid.set(sid, d.data);
+          } else {
+            const localTs = getItemTimestampMs(existingLocal);
+            const cloudTs = Math.max(
+              getItemTimestampMs(d.data),
+              d.updatedAt ? new Date(d.updatedAt).getTime() || 0 : 0
+            );
+            if (cloudTs > localTs && cloudTs > lastLocalMutationAt && cloudTs > localDbMtimeMs) {
+              mergedBySid.set(sid, d.data);
+            }
           }
         });
 
-        // Keep any hidden/draft local items while replacing public items with authoritative cloud public items
-        const existingPrivateOrDrafts = ((currentDb[m.dbKey] as any[]) || []).filter(item => {
-          if (!item?.id) return false;
-          const sid = sanitizeFirestoreId(item.id);
-          return !cloudPublicIds.has(sid) && !computeIsPublic(m.collectionName, item);
-        });
-
-        (updated[m.dbKey] as any) = sortCollectionItems(m.collectionName, [...cloudItems, ...existingPrivateOrDrafts]);
+        (updated[m.dbKey] as any) = sortCollectionItems(m.collectionName, Array.from(mergedBySid.values()));
       })
     );
 
@@ -686,7 +750,11 @@ export async function pullPublicFromFirestore(currentDb: AppDatabase): Promise<A
   }
 }
 
-export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: (next: AppDatabase) => void): Promise<void> {
+export async function refreshPublicIfStale(
+  currentDb: AppDatabase,
+  applyUpdate: (next: AppDatabase) => void,
+  localDbMtimeMs = 0
+): Promise<void> {
   if (!serverFirestore) return;
   // Never overwrite local DB while there are unpushed admin/public edits waiting to sync
   if (hasUnpushedCloudChanges || Date.now() - lastLocalMutationAt < 30000) return;
@@ -696,7 +764,7 @@ export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: 
     return;
   }
   pullPromise = (async () => {
-    const next = await pullPublicFromFirestore(currentDb);
+    const next = await pullPublicFromFirestore(currentDb, localDbMtimeMs);
     if (next && !hasUnpushedCloudChanges && Date.now() - lastLocalMutationAt >= 30000) {
       applyUpdate(next);
       return true;
@@ -708,7 +776,7 @@ export async function refreshPublicIfStale(currentDb: AppDatabase, applyUpdate: 
   await pullPromise;
 }
 
-// Full authoritative cloud sync for authenticated Admin (pulls both public & private + seeds if Firestore empty)
+// Full authoritative cloud sync for authenticated Admin (non-destructive merge + seeds if Firestore empty)
 export async function syncAdminFullWithFirestore(
   currentDb: AppDatabase,
   idToken: string
@@ -758,7 +826,10 @@ export async function syncAdminFullWithFirestore(
     nextDb.settings = {
       ...nextDb.settings,
       ...parsedPublic.data,
-      rosterVersion: Number(parsedPublic.data.rosterVersion || 0)
+      rosterVersion: Math.max(
+        Number(nextDb.settings?.rosterVersion || 0),
+        Number(parsedPublic.data.rosterVersion || 0)
+      )
     };
     cloudHashes.set('site_config/public', hashObj({ isPublic: true, content: parsedPublic.data }));
   }
@@ -775,18 +846,19 @@ export async function syncAdminFullWithFirestore(
     }
   }
 
-  let hasPendingLocalApps = false;
+  let hasPendingLocalAdditions = false;
 
   await Promise.all(
     COLLECTION_MAPPINGS.map(async m => {
       try {
         const docs = await listCollectionRest(m.collectionName, idToken);
-        const items: any[] = [];
+        const mergedBySid = new Map<string, any>();
         const cloudIds = new Set<string>();
 
         for (const { docId, doc: docObj } of docs) {
           if (docObj?.data) {
-            items.push(docObj.data);
+            if (deletedDocKeys.has(`${m.collectionName}/${docId}`)) continue;
+            mergedBySid.set(docId, docObj.data);
             cloudIds.add(docId);
             cloudHashes.set(
               `${m.collectionName}/${docId}`,
@@ -795,58 +867,31 @@ export async function syncAdminFullWithFirestore(
           }
         }
 
-        // Preserve any newly submitted local public applications/subscribers/logs that haven't been synced to Firestore yet
-        if (m.collectionName === 'applications') {
-          const localApps = currentDb.applications || [];
-          for (const appItem of localApps) {
-            if (appItem?.id && !cloudIds.has(sanitizeFirestoreId(appItem.id))) {
-              items.unshift(appItem);
-              hasPendingLocalApps = true;
-            }
-          }
-        }
-        if (m.collectionName === 'subscribers') {
-          const localSubs = currentDb.subscribers || [];
-          for (const subItem of localSubs) {
-            if (subItem?.id && !cloudIds.has(sanitizeFirestoreId(subItem.id))) {
-              items.unshift(subItem);
-              hasPendingLocalApps = true;
-            }
-          }
-        }
-        if (m.collectionName === 'email_dispatch_logs') {
-          const localLogs = currentDb.emailDispatchLogs || [];
-          for (const logItem of localLogs) {
-            if (logItem?.id && !cloudIds.has(sanitizeFirestoreId(logItem.id))) {
-              items.unshift(logItem);
-              hasPendingLocalApps = true;
+        // Preserve any local records that aren't in Firestore yet or are newer than cloud
+        const localItems = (currentDb[m.dbKey] as any[]) || [];
+        for (const localItem of localItems) {
+          if (!localItem?.id) continue;
+          const sid = sanitizeFirestoreId(localItem.id);
+          if (!cloudIds.has(sid)) {
+            mergedBySid.set(sid, localItem);
+            hasPendingLocalAdditions = true;
+          } else {
+            const cloudItem = mergedBySid.get(sid);
+            if (getItemTimestampMs(localItem) > getItemTimestampMs(cloudItem)) {
+              mergedBySid.set(sid, localItem);
+              hasPendingLocalAdditions = true;
             }
           }
         }
 
-        // For admins: if cloud admin_users is empty, keep currentDb.admins so login doesn't break
-        if (m.collectionName === 'admin_users' && items.length === 0) {
+        const mergedList = Array.from(mergedBySid.values());
+        if (m.collectionName === 'admin_users' && mergedList.length === 0) {
           return;
         }
 
-        (nextDb[m.dbKey] as any) = sortCollectionItems(m.collectionName, items);
+        (nextDb[m.dbKey] as any) = sortCollectionItems(m.collectionName, mergedList);
       } catch {
-        if (m.isPublicCollection && serverFirestore) {
-          try {
-            const q = query(collection(serverFirestore, m.collectionName), where('isPublic', '==', true));
-            const snap = await getDocs(q);
-            const publicItems: any[] = [];
-            snap.forEach(docSnap => {
-              const d = docSnap.data() as any;
-              if (d?.data) publicItems.push(d.data);
-            });
-            if (publicItems.length > 0) {
-              (nextDb[m.dbKey] as any) = sortCollectionItems(m.collectionName, publicItems);
-            }
-          } catch {
-            // keep local snapshot
-          }
-        }
+        // keep local snapshot if cloud listing fails
       }
     })
   );
@@ -854,7 +899,7 @@ export async function syncAdminFullWithFirestore(
   cloudInitialized = true;
   lastPublicPullAt = Date.now();
 
-  if (hasPendingLocalApps) {
+  if (hasPendingLocalAdditions) {
     await pushDatabaseDiffToFirestore(nextDb, idToken, false);
   }
 

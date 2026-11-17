@@ -27,14 +27,15 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
   // Compute shareable URL: use direct server preview URL so social bots (WhatsApp, Facebook) unfurl the exact item image
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const routePath = itemType === 'news' ? 'news' : itemType === 'initiative' ? 'initiative' : 'events';
-  const shareUrl = url || (itemId ? `${baseUrl}/${routePath}/${itemId}` : `${baseUrl}/${routePath}`);
+  const shareUrl = url || (itemId ? `${baseUrl}/${routePath}/${encodeURIComponent(itemId)}` : `${baseUrl}/${routePath}`);
 
   const cleanTitle = title.trim();
   const cleanSummary = summary ? summary.replace(/\r?\n/g, ' ').slice(0, 140).trim() + '...' : '';
+  const typeIcon = itemType === 'news' ? '📰' : itemType === 'event' ? '📅' : '🤝';
 
   const handleWhatsApp = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const waText = `📰 *${cleanTitle}*\n\n${cleanSummary ? cleanSummary + '\n\n' : ''}🏛️ حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر\n${shareUrl}`;
+    const waText = `${typeIcon} *${cleanTitle}*\n\n${cleanSummary ? cleanSummary + '\n\n' : ''}🏛️ حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر\n${shareUrl}`;
     const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
     window.open(waUrl, '_blank', 'noopener,noreferrer');
   };

@@ -1370,10 +1370,15 @@ function getInitialDatabase(): AppDatabase {
 
 class DatabaseManager {
   private data: AppDatabase;
+  private dbFileMtimeMs = 0;
 
   constructor() {
     this.ensureDirectory();
     this.data = this.load();
+  }
+
+  public getDbFileMtimeMs(): number {
+    return this.dbFileMtimeMs;
   }
 
   private ensureDirectory() {
@@ -1391,8 +1396,18 @@ class DatabaseManager {
     let raw = '';
     try {
       if (fs.existsSync(DB_FILE)) {
+        try {
+          this.dbFileMtimeMs = fs.statSync(DB_FILE).mtimeMs || 0;
+        } catch {
+          this.dbFileMtimeMs = 0;
+        }
         raw = fs.readFileSync(DB_FILE, 'utf-8');
       } else if (fs.existsSync(backupFile)) {
+        try {
+          this.dbFileMtimeMs = fs.statSync(backupFile).mtimeMs || 0;
+        } catch {
+          this.dbFileMtimeMs = 0;
+        }
         raw = fs.readFileSync(backupFile, 'utf-8');
       }
       if (raw) {
@@ -1775,6 +1790,7 @@ class DatabaseManager {
         }
       }
       fs.renameSync(tempPath, DB_FILE);
+      this.dbFileMtimeMs = Date.now();
     } catch (err) {
       console.error('Error saving database atomically:', err);
     }

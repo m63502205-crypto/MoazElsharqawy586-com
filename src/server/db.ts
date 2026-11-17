@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
-import { pushDatabaseDiffToFirestore, markLocalMutation } from './firestoreSync.ts';
+import { pushDatabaseDiffToFirestore, recordDatabaseChanges } from './firestoreSync.ts';
 
 const firebaseTokenStorage = new AsyncLocalStorage<string>();
 
@@ -293,6 +293,7 @@ export interface AdminUser {
   isActive: boolean;
   lastLogin?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface AuditLog {
@@ -1370,15 +1371,16 @@ function getInitialDatabase(): AppDatabase {
 
 class DatabaseManager {
   private data: AppDatabase;
-  private dbFileMtimeMs = 0;
+  private lastSavedDbSnapshot: AppDatabase | null = null;
 
   constructor() {
     this.ensureDirectory();
     this.data = this.load();
+    this.lastSavedDbSnapshot = this.cloneDb(this.data);
   }
 
-  public getDbFileMtimeMs(): number {
-    return this.dbFileMtimeMs;
+  private cloneDb(src: AppDatabase): AppDatabase {
+    return JSON.parse(JSON.stringify(src));
   }
 
   private ensureDirectory() {
@@ -1396,18 +1398,8 @@ class DatabaseManager {
     let raw = '';
     try {
       if (fs.existsSync(DB_FILE)) {
-        try {
-          this.dbFileMtimeMs = fs.statSync(DB_FILE).mtimeMs || 0;
-        } catch {
-          this.dbFileMtimeMs = 0;
-        }
         raw = fs.readFileSync(DB_FILE, 'utf-8');
       } else if (fs.existsSync(backupFile)) {
-        try {
-          this.dbFileMtimeMs = fs.statSync(backupFile).mtimeMs || 0;
-        } catch {
-          this.dbFileMtimeMs = 0;
-        }
         raw = fs.readFileSync(backupFile, 'utf-8');
       }
       if (raw) {
@@ -1773,6 +1765,7 @@ class DatabaseManager {
   public setFromCloud(cloudData: AppDatabase): void {
     this.migrateSecretariatsIfNeeded(cloudData);
     this.data = cloudData;
+    this.lastSavedDbSnapshot = this.cloneDb(this.data);
     this.writeLocalFileOnly();
   }
 
@@ -1790,7 +1783,6 @@ class DatabaseManager {
         }
       }
       fs.renameSync(tempPath, DB_FILE);
-      this.dbFileMtimeMs = Date.now();
     } catch (err) {
       console.error('Error saving database atomically:', err);
     }
@@ -1800,7 +1792,8 @@ class DatabaseManager {
     if (dataToSave) {
       this.data = dataToSave;
     }
-    markLocalMutation();
+    recordDatabaseChanges(this.lastSavedDbSnapshot, this.data);
+    this.lastSavedDbSnapshot = this.cloneDb(this.data);
     this.writeLocalFileOnly();
 
     const activeToken = getCurrentFirebaseToken();

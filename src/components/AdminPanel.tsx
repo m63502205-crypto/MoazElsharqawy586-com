@@ -3281,6 +3281,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
+                      setModalError(null);
                       setEditingUser({
                         role: 'sub_admin',
                         roleId: 'role-content-manager',
@@ -3322,10 +3323,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           </p>
                         </div>
 
-                        {adm.email !== 'moazmahmoud586@gmail.com' && (
+                        {!['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((adm.email || '').toLowerCase()) && (
                           <div className="flex items-center gap-2 shrink-0">
                             <button
                               onClick={() => {
+                                setModalError(null);
                                 setEditingUser(adm);
                                 setShowUserModal(true);
                               }}
@@ -3333,17 +3335,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             >
                               تعديل الصلاحيات والدور
                             </button>
-                            <button
-                              onClick={async () => {
-                                if (confirm(`حذف حساب المشرف: ${adm.name}؟`)) {
-                                  await api.deleteAdminUser(adm.id);
-                                  loadAdminData();
-                                }
-                              }}
-                              className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            {adm.id !== user?.id && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`حذف حساب المشرف: ${adm.name}؟`)) {
+                                    await api.deleteAdminUser(adm.id);
+                                    loadAdminData();
+                                  }
+                                }}
+                                className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -3367,6 +3371,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       type="button"
                       onClick={() => {
+                        setModalError(null);
                         setEditingUser({
                           role: 'sub_admin',
                           roleId: 'role-content-manager',
@@ -7963,6 +7968,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 />
               </div>
 
+              {user?.role === 'super_admin' && (
+                <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2">
+                  <label className="block text-xs font-bold text-stone-900">
+                    مستوى الحساب الإداري:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser({ ...editingUser, role: 'sub_admin' })}
+                      className={`p-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        editingUser.role !== 'super_admin'
+                          ? 'bg-red-700 text-white border-red-800 shadow-xs'
+                          : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      مشرف فرعي (صلاحيات محددة)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser({ ...editingUser, role: 'super_admin', roleId: 'role-super-admin' })}
+                      className={`p-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        editingUser.role === 'super_admin'
+                          ? 'bg-amber-600 text-white border-amber-700 shadow-xs'
+                          : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      مدير رئيسي (كامل الصلاحيات)
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Role Preset Selector */}
               <div className="bg-amber-50/60 p-3.5 rounded-2xl border border-amber-200 space-y-2">
                 <label className="block text-xs font-bold text-amber-950">
@@ -7977,6 +8014,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       setEditingUser({
                         ...editingUser,
                         roleId: r.id,
+                        role: r.id === 'role-super-admin' && user?.role === 'super_admin' ? 'super_admin' : 'sub_admin',
                         permissions: [...r.permissions]
                       });
                     } else {
@@ -8119,12 +8157,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 disabled={isSavingModal}
                 onClick={async () => {
                   setModalError(null);
+                  const cleanName = String(editingUser.name || '').trim();
+                  const cleanEmail = String(editingUser.email || '').trim();
+                  const cleanPassword = String(editingUser.password || '').trim();
+
+                  if (!cleanName) {
+                    setModalError('الاسم الكامل للمشرف حقل إلزامي');
+                    return;
+                  }
+                  if (!editingUser.id && (!cleanEmail || !cleanEmail.includes('@'))) {
+                    setModalError('يرجى إدخال بريد إلكتروني صحيح للمشرف');
+                    return;
+                  }
+                  if (!editingUser.id && cleanPassword.length < 6) {
+                    setModalError('كلمة المرور للمشرف الجديد يجب أن لا تقل عن 6 أحرف');
+                    return;
+                  }
+                  if (editingUser.id && cleanPassword.length > 0 && cleanPassword.length < 6) {
+                    setModalError('كلمة المرور الجديدة يجب أن لا تقل عن 6 أحرف');
+                    return;
+                  }
+
                   setIsSavingModal(true);
                   try {
+                    const payload = {
+                      ...editingUser,
+                      name: cleanName,
+                      email: cleanEmail,
+                      ...(cleanPassword ? { password: cleanPassword } : {})
+                    };
+                    if (!cleanPassword) {
+                      delete payload.password;
+                    }
                     if (editingUser.id) {
-                      await api.updateAdminUser(editingUser.id, editingUser);
+                      await api.updateAdminUser(editingUser.id, payload);
                     } else {
-                      await api.createAdminUser(editingUser);
+                      await api.createAdminUser(payload);
                     }
                     setShowUserModal(false);
                     await loadAdminData();

@@ -1486,13 +1486,24 @@ app.post('/api/admin/login-google', async (req: Request, res: Response) => {
     a => a.email.toLowerCase() === verified.email && a.isActive
   );
 
-  // If bootstrapped owner logs in with Google, ensure they have super_admin access
+  // If bootstrapped owner logs in with Google, add a separate super_admin account without overwriting existing owner
   if (!admin && BOOTSTRAPPED_ADMIN_EMAILS.includes(verified.email)) {
-    admin = data.admins.find(a => a.role === 'super_admin' && a.isActive);
-    if (admin) {
-      admin.email = verified.email;
-      db.save();
-    }
+    const newBootstrappedAdmin: AdminUser = {
+      id: 'super-admin-' + Date.now(),
+      email: verified.email,
+      name: verified.displayName || 'مدير المنصة الرئيسي',
+      passwordHash: hashPassword(crypto.randomBytes(16).toString('hex')),
+      role: 'super_admin',
+      roleId: 'role-super-admin',
+      adminScope: 'general',
+      permissions: ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'pages', 'news', 'events', 'media', 'livestream', 'roles', 'admins', 'settings', 'audit'],
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    data.admins.push(newBootstrappedAdmin);
+    db.save();
+    admin = newBootstrappedAdmin;
   }
 
   if (!admin) {
@@ -1986,7 +1997,10 @@ app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermissio
       const key = normalizeSecName(item.name);
       if (seen.has(key)) continue;
       seen.add(key);
-      filtered.push(normalizeSecretariatPayload(item));
+      const existingSec = data.specializedSecretariats.find(
+        s => (item.id && s.id === item.id) || normalizeSecName(s.name) === key
+      );
+      filtered.push(normalizeSecretariatPayload(item, existingSec));
     }
     data.specializedSecretariats = filtered;
   }
@@ -3020,8 +3034,11 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   const admin = (req as any).admin as AdminUser;
   const { email, name, password, role, roleId, permissions, adminScope, managedSecretariatId } = req.body;
 
-  if (!email || !password || !name) {
+  if (!email || !password || !name || !String(name).trim() || !String(email).trim()) {
     return res.status(400).json({ error: 'الاسم والبريد وكلمة المرور حقول إلزامية' });
+  }
+  if (String(password).trim().length < 6) {
+    return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 6 أحرف' });
   }
 
   const data = db.get();
@@ -3041,18 +3058,20 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   // Only super_admin can create another super_admin
   const requestedRole = (role === 'super_admin' && admin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
 
+  const nowIso = new Date().toISOString();
   const newAdmin: AdminUser = {
     id: 'admin-' + Date.now(),
     email: cleanEmail,
-    name: name.trim(),
-    passwordHash: hashPassword(password),
+    name: String(name).trim(),
+    passwordHash: hashPassword(String(password).trim()),
     role: requestedRole,
     roleId: roleId || undefined,
     adminScope: adminScope === 'specialized' ? 'specialized' : 'general',
     managedSecretariatId: adminScope === 'specialized' ? managedSecretariatId : undefined,
-    permissions: requestedRole === 'super_admin' ? ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'news', 'events', 'media', 'livestream', 'social', 'admins', 'settings', 'audit'] : (userPerms.length > 0 ? userPerms : ['news', 'events']),
+    permissions: requestedRole === 'super_admin' ? ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'pages', 'news', 'events', 'media', 'livestream', 'roles', 'admins', 'settings', 'audit'] : (userPerms.length > 0 ? userPerms : ['news', 'events']),
     isActive: true,
-    createdAt: new Date().toISOString()
+    createdAt: nowIso,
+    updatedAt: nowIso
   };
 
   data.admins.push(newAdmin);
@@ -3091,9 +3110,12 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
     return res.status(403).json({ error: 'صلاحية المدير العام الرئيسي (Super Admin) محصورة لمدير المنصة فقط' });
   }
 
-  if (name) target.name = name.trim();
-  if (password && String(password).trim().length >= 6) {
-    target.passwordHash = hashPassword(password);
+  if (typeof name === 'string' && name.trim()) target.name = name.trim();
+  if (password !== undefined && String(password).trim() !== '') {
+    if (String(password).trim().length < 6) {
+      return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 6 أحرف' });
+    }
+    target.passwordHash = hashPassword(String(password).trim());
   }
   if (role) {
     target.role = (role === 'super_admin' && currentAdmin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
@@ -3103,6 +3125,7 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   if ('managedSecretariatId' in req.body) target.managedSecretariatId = managedSecretariatId;
   if (Array.isArray(permissions)) target.permissions = permissions;
   if (typeof isActive === 'boolean') target.isActive = isActive;
+  target.updatedAt = new Date().toISOString();
 
   db.save();
   db.addAuditLog(currentAdmin.email, currentAdmin.name, 'تعديل بيانات مشرف', 'AdminUser', `تم تعديل بيانات وصلاحيات ونطاق المشرف: ${target.name}`, target.id);

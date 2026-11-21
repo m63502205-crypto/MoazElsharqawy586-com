@@ -283,6 +283,7 @@ export interface AdminRole {
 export interface AdminUser {
   id: string;
   email: string;
+  phone?: string;
   name: string;
   passwordHash: string;
   role: 'super_admin' | 'sub_admin';
@@ -322,9 +323,14 @@ export interface SiteSettings {
   coordinates?: string;
   facebookUrl?: string;
   googleAnalyticsId?: string;
+  googleTagManagerId?: string;
   officialSiteUrl?: string;
   googleSiteVerification?: string;
   googleVerificationFile?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  seoKeywords?: string;
+  seoShareImage?: string;
   heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
   heroPosterUrl?: string;
@@ -1362,9 +1368,16 @@ function getInitialDatabase(): AppDatabase {
       heroVideoUrl: '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4',
       heroMediaType: 'video',
       heroDefaultMuted: false,
-      officialSiteUrl: 'https://www.algabhaalwataniya-oct3.org',
+      googleAnalyticsId: 'G-NX1MQ9NHXW',
+      googleTagManagerId: 'GTM-TRZ4SG95',
+      googleSiteVerification: '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo',
+      officialSiteUrl: 'https://nfp-october3.ai.studio',
+      seoTitle: 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر',
+      seoDescription: 'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.',
+      seoKeywords: 'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية',
+      seoShareImage: '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
       secretariatsVersion: 25,
-      rosterVersion: 3
+      rosterVersion: 4
     }
   };
 }
@@ -1741,17 +1754,41 @@ class DatabaseManager {
       changed = true;
     }
 
-    // Migrate officialSiteUrl to https://www.algabhaalwataniya-oct3.org
-    if ((dbObj.settings.rosterVersion || 0) < 3) {
+    // Migrate SEO, Google Services & officialSiteUrl to https://nfp-october3.ai.studio
+    if ((dbObj.settings.rosterVersion || 0) < 4) {
       const currentSiteUrl = (dbObj.settings.officialSiteUrl || '').trim().replace(/\/+$/, '');
       if (
         !currentSiteUrl ||
-        currentSiteUrl === 'https://nfp-october3.ai.studio' ||
-        currentSiteUrl === 'https://algabhaalwataniya-oct3.org'
+        currentSiteUrl === 'https://www.algabhaalwataniya-oct3.org' ||
+        currentSiteUrl === 'https://algabhaalwataniya-oct3.org' ||
+        currentSiteUrl === 'https://nfp-october3.cloud.run'
       ) {
-        dbObj.settings.officialSiteUrl = 'https://www.algabhaalwataniya-oct3.org';
+        dbObj.settings.officialSiteUrl = 'https://nfp-october3.ai.studio';
       }
-      dbObj.settings.rosterVersion = 3;
+      if (!dbObj.settings.googleAnalyticsId?.trim()) {
+        dbObj.settings.googleAnalyticsId = 'G-NX1MQ9NHXW';
+      }
+      if (!dbObj.settings.googleTagManagerId?.trim()) {
+        dbObj.settings.googleTagManagerId = 'GTM-TRZ4SG95';
+      }
+      if (!dbObj.settings.googleSiteVerification?.trim()) {
+        dbObj.settings.googleSiteVerification = '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo';
+      }
+      if (!dbObj.settings.seoTitle?.trim()) {
+        dbObj.settings.seoTitle = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+      }
+      if (!dbObj.settings.seoDescription?.trim()) {
+        dbObj.settings.seoDescription =
+          'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+      }
+      if (!dbObj.settings.seoKeywords?.trim()) {
+        dbObj.settings.seoKeywords =
+          'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
+      }
+      if (!dbObj.settings.seoShareImage?.trim()) {
+        dbObj.settings.seoShareImage = dbObj.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+      }
+      dbObj.settings.rosterVersion = 4;
       changed = true;
     }
 
@@ -1767,6 +1804,17 @@ class DatabaseManager {
     this.data = cloudData;
     this.lastSavedDbSnapshot = this.cloneDb(this.data);
     this.writeLocalFileOnly();
+  }
+
+  public getDbFileMtimeMs(): number {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        return fs.statSync(DB_FILE).mtimeMs || 0;
+      }
+    } catch {
+      // ignore
+    }
+    return 0;
   }
 
   private writeLocalFileOnly(): void {
@@ -1850,7 +1898,7 @@ class DatabaseManager {
   public addAuditLog(adminEmail: string, adminName: string, action: string, entityType: string, details: string, entityId?: string) {
     const log: AuditLog = {
       id: 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
-      adminEmail,
+      adminEmail: (adminEmail || '').trim() || adminName || 'admin',
       adminName,
       action,
       entityType,

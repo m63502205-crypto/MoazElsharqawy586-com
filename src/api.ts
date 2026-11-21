@@ -126,7 +126,7 @@ export const api = {
     }),
 
   // Admin Auth
-  adminLogin: (credentials: { email: string; password: string }) =>
+  adminLogin: (credentials: { email?: string; identifier?: string; phone?: string; password: string }) =>
     apiFetch<{ success: boolean; token: string; user: AdminUser }>('/api/admin/login', {
       method: 'POST',
       body: JSON.stringify(credentials)

@@ -16,8 +16,10 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
           <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-white border border-amber-500/40 p-2 shadow-2xl flex items-center justify-center">
             <img
               src={settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
-              alt="شعار حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
+              alt="شعار أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر"
               className="w-full h-full object-contain"
+              loading="lazy"
+              decoding="async"
               referrerPolicy="no-referrer"
             />
           </div>

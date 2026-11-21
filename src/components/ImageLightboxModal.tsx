@@ -139,7 +139,7 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
                   : 'border-transparent opacity-50 hover:opacity-90'
               }`}
             >
-              <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              <img src={img} alt={`صورة مصغرة ${idx + 1}`} loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             </button>
           ))}
         </div>

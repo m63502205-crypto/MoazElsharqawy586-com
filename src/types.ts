@@ -282,6 +282,7 @@ export interface AdminRole {
 export interface AdminUser {
   id: string;
   email: string;
+  phone?: string;
   name: string;
   role: 'super_admin' | 'sub_admin';
   roleId?: string;
@@ -384,10 +385,15 @@ export interface SiteSettings {
   mapEmbedUrl?: string;
   coordinates?: string;
   facebookUrl?: string;
-  googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-XXXXXXXXXX)
-  officialSiteUrl?: string; // Published custom or official URL for Google Search Console (e.g. https://www.algabhaalwataniya-oct3.org)
+  googleAnalyticsId?: string; // Google Analytics 4 Measurement ID (e.g. G-NX1MQ9NHXW)
+  googleTagManagerId?: string; // Google Tag Manager Container ID (e.g. GTM-TRZ4SG95)
+  officialSiteUrl?: string; // Published custom or official URL for Google Search Console (e.g. https://nfp-october3.ai.studio)
   googleSiteVerification?: string; // Google Search Console HTML tag verification token
   googleVerificationFile?: string; // Optional Google Search Console HTML filename (e.g. googleXXXX.html)
+  seoTitle?: string; // Custom main SEO site title
+  seoDescription?: string; // Custom main SEO meta description
+  seoKeywords?: string; // Custom SEO meta keywords
+  seoShareImage?: string; // Custom main OpenGraph / WhatsApp / Facebook share image
   customTexts?: SiteCustomTexts;
   heroMediaType?: 'video' | 'images' | 'both';
   heroVideoUrl?: string;
@@ -415,6 +421,50 @@ export interface SiteSettings {
   principles: string[];
   secretariatsVersion?: number;
   rosterVersion?: number;
+  updatedAt?: string;
+}
+
+export interface DailyAnalyticsPoint {
+  date: string;
+  label?: string;
+  visitors: number;
+  pageViews: number;
+  mobile: number;
+  desktop: number;
+}
+
+export interface PageAnalyticsPoint {
+  path: string;
+  title: string;
+  views: number;
+  uniqueVisitors: number;
+  sharePct?: number;
+  lastVisitedAt: string;
+}
+
+export interface TrafficSourcePoint {
+  source: string;
+  visits: number;
+  sharePct?: number;
+}
+
+export interface AdminAnalyticsResponse {
+  measurementId: string;
+  gtmId: string;
+  rangeDays: number;
+  summary: {
+    totalVisits: number;
+    uniqueVisitors: number;
+    todayVisits: number;
+    todayUniqueVisitors: number;
+    mobileSharePct: number;
+    topPageTitle: string;
+    topPagePath: string;
+  };
+  daily: DailyAnalyticsPoint[];
+  pages: PageAnalyticsPoint[];
+  sources: TrafficSourcePoint[];
+  updatedAt?: string;
 }
 
 export interface PublicPortalData {
@@ -487,4 +537,3 @@ export interface AdminStats {
   rolesCount: number;
   subscribersCount: number;
 }
-

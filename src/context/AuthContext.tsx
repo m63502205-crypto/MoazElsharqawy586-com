@@ -63,8 +63,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
   }, []);
 
-  const login = async (email: string, pass: string) => {
-    const res = await api.adminLogin({ email, password: pass });
+  const login = async (identifier: string, pass: string) => {
+    const res = await api.adminLogin({ email: identifier, identifier, password: pass });
     setAuthToken(res.token);
     setUser(res.user);
   };

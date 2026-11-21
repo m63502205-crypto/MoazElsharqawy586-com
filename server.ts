@@ -152,13 +152,31 @@ const SESSION_SECRET = getSessionSecret();
 const sessionStore = new Map<string, { admin: AdminUser; expiresAt: number }>();
 const revokedTokens = new Set<string>();
 
+function normalizeArabicDigitsServer(raw: string): string {
+  return String(raw || '')
+    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+}
+
+function normalizeAdminPhone(raw?: string | null): string {
+  if (!raw) return '';
+  let digits = normalizeArabicDigitsServer(raw).replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0020') && digits.length >= 13) {
+    digits = '0' + digits.slice(4);
+  } else if (digits.startsWith('20') && digits.length === 12 && digits[2] === '1') {
+    digits = '0' + digits.slice(2);
+  }
+  return digits;
+}
+
 function generateToken(admin?: AdminUser): string {
   if (!admin) {
     return 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
   }
   const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
   const payload = Buffer.from(
-    JSON.stringify({ id: admin.id, email: admin.email.toLowerCase(), exp })
+    JSON.stringify({ id: admin.id, email: (admin.email || '').toLowerCase(), phone: admin.phone || '', exp })
   ).toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
   return `v1.${payload}.${sig}`;
@@ -173,7 +191,10 @@ function resolveSessionAdmin(token: string): { admin: AdminUser; expiresAt: numb
       return null;
     }
     // Always resolve latest active record from DB if present
-    const latest = db.get().admins.find(a => (a.id === cached.admin.id || a.email.toLowerCase() === cached.admin.email.toLowerCase()) && a.isActive);
+    const cachedEmail = (cached.admin.email || '').toLowerCase();
+    const latest = db.get().admins.find(
+      a => a.isActive && (a.id === cached.admin.id || (cachedEmail !== '' && (a.email || '').toLowerCase() === cachedEmail))
+    );
     if (!latest) return null;
     return { admin: latest, expiresAt: cached.expiresAt };
   }
@@ -189,8 +210,9 @@ function resolveSessionAdmin(token: string): { admin: AdminUser; expiresAt: numb
     try {
       const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
       if (!parsed?.exp || parsed.exp < Date.now()) return null;
+      const parsedEmail = String(parsed.email || '').toLowerCase();
       const matched = db.get().admins.find(
-        a => a.isActive && (a.id === parsed.id || a.email.toLowerCase() === String(parsed.email || '').toLowerCase())
+        a => a.isActive && (a.id === parsed.id || (parsedEmail !== '' && (a.email || '').toLowerCase() === parsedEmail))
       );
       if (!matched) return null;
       const entry = { admin: matched, expiresAt: Number(parsed.exp) };
@@ -250,9 +272,9 @@ function requirePermission(perm: string) {
 
 // Google Site Verification File (supports built-in + custom admin verification filename)
 const DEFAULT_GOOGLE_VERIFICATION_TOKENS = [
+  '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo',
   'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg',
-  'Bod0xJP22hOaKj14Rq6e1ElD0LGxPQ2MuLNEiaa_bOQ',
-  '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo'
+  'Bod0xJP22hOaKj14Rq6e1ElD0LGxPQ2MuLNEiaa_bOQ'
 ];
 
 app.get('/googlef3c013b384f88d85.html', (_req: Request, res: Response) => {
@@ -269,27 +291,25 @@ app.get(/^\/(google[a-zA-Z0-9_-]+\.html)$/, (req: Request, res: Response, next: 
   return next();
 });
 
-const OFFICIAL_SITE_URL = 'https://www.algabhaalwataniya-oct3.org';
-const HOME_SEO_TITLE = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-const HOME_SEO_DESCRIPTION = 'الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-const DEFAULT_OG_IMAGE_URL = 'https://www.image2url.com/r2/default/images/1794831555116-0f6a9fec-0db4-450d-b7ae-a8dc44ef2e21.jpg';
-const HOME_OG_URL = 'https://nfp-october3.cloud.run/';
+const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
+const HOME_SEO_TITLE = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+const HOME_SEO_DESCRIPTION =
+  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+const HOME_SEO_KEYWORDS =
+  'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
+const DEFAULT_GA4_ID = 'G-NX1MQ9NHXW';
+const DEFAULT_GTM_ID = 'GTM-TRZ4SG95';
 
 function getOfficialSiteUrl(data: ReturnType<typeof db.get>): string {
   const configured = (data.settings?.officialSiteUrl || '').trim().replace(/\/+$/, '');
-  if (
-    configured &&
-    configured !== 'https://nfp-october3.ai.studio' &&
-    configured !== 'https://algabhaalwataniya-oct3.org' &&
-    (configured.startsWith('https://') || configured.startsWith('http://'))
-  ) {
+  if (configured && (configured.startsWith('https://') || configured.startsWith('http://'))) {
     return configured;
   }
   return OFFICIAL_SITE_URL;
 }
 
-// Ensure admin UI and admin APIs are never indexed by search engines
-app.use(['/admin', '/api/admin'], (_req: Request, res: Response, next: NextFunction) => {
+// Ensure admin UI, login, and admin APIs are never indexed by search engines
+app.use(['/admin', '/admin/', '/login', '/api/admin', '/api/admin/'], (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
   next();
 });
@@ -299,8 +319,8 @@ function getSitemapBaseUrl(req: Request, data: ReturnType<typeof db.get>): strin
   const reqHost = (forwardedHost || req.get('host') || '').toLowerCase().replace(/:\d+$/, '');
   if (
     reqHost &&
-    (reqHost === 'nfp-october3.cloud.run' ||
-      reqHost === 'nfp-october3.ai.studio' ||
+    (reqHost === 'nfp-october3.ai.studio' ||
+      reqHost === 'nfp-october3.cloud.run' ||
       reqHost === 'www.algabhaalwataniya-oct3.org' ||
       reqHost === 'algabhaalwataniya-oct3.org')
   ) {
@@ -316,6 +336,9 @@ app.get('/robots.txt', (req: Request, res: Response) => {
   const content = `User-agent: *
 Allow: /
 Disallow: /admin
+Disallow: /admin/
+Disallow: /login
+Disallow: /api/admin
 Disallow: /api/admin/
 
 Sitemap: ${siteUrl}/sitemap.xml
@@ -324,20 +347,45 @@ Sitemap: ${siteUrl}/sitemap.xml
   res.type('text/plain').send(content);
 });
 
-// Dynamic Sitemap.xml (real crawlable URLs for Google Search)
+// Dynamic Sitemap.xml (real crawlable URLs + images for Google Search)
 app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => {
   const data = db.get();
   const siteUrl = getSitemapBaseUrl(req, data);
+
+  interface SitemapImage {
+    loc: string;
+    title?: string;
+  }
 
   interface SitemapEntry {
     path: string;
     changefreq: string;
     priority: string;
     lastmod?: string;
+    images?: SitemapImage[];
   }
 
+  const toAbsoluteAssetUrl = (raw?: string): string | null => {
+    const val = (raw || '').trim();
+    if (!val || val.startsWith('data:')) return null;
+    if (val.startsWith('http://') || val.startsWith('https://')) return val;
+    if (val.startsWith('/')) return `${siteUrl}${val}`;
+    return `${siteUrl}/${val}`;
+  };
+
+  const mediaImages: SitemapImage[] = (data.media || [])
+    .filter(m => m.isVisible && m.type === 'photo')
+    .reduce<SitemapImage[]>((acc, m) => {
+      const loc = toAbsoluteAssetUrl(m.url);
+      if (loc) {
+        acc.push({ loc, title: m.title });
+      }
+      return acc;
+    }, [])
+    .slice(0, 30);
+
   const staticPages: SitemapEntry[] = [
-    { path: '', changefreq: 'daily', priority: '1.0' },
+    { path: '', changefreq: 'daily', priority: '1.0', images: mediaImages },
     { path: 'about', changefreq: 'weekly', priority: '0.9' },
     { path: 'party-leaders', changefreq: 'weekly', priority: '0.85' },
     { path: 'secretariat-leaders', changefreq: 'weekly', priority: '0.9' },
@@ -352,39 +400,73 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
 
   const secretariatPages: SitemapEntry[] = (data.specializedSecretariats || [])
     .filter(s => s.isActive && s.slug)
-    .map(s => ({
-      path: `secretariat/${encodeURIComponent(s.slug)}`,
-      changefreq: 'weekly',
-      priority: '0.85',
-      lastmod: s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : undefined
-    }));
+    .map(s => {
+      const imgs = [s.coverUrl, s.logoUrl, ...(s.galleryImages || [])]
+        .map(u => toAbsoluteAssetUrl(u))
+        .filter((u): u is string => Boolean(u))
+        .slice(0, 10)
+        .map(loc => ({ loc, title: s.name }));
+      return {
+        path: `secretariat/${encodeURIComponent(s.slug)}`,
+        changefreq: 'weekly',
+        priority: '0.85',
+        lastmod: s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : undefined,
+        images: imgs
+      };
+    });
 
   const initiativePages: SitemapEntry[] = (data.initiatives || [])
     .filter(i => i.isVisible && i.slug)
-    .map(i => ({
-      path: `initiative/${encodeURIComponent(i.slug)}`,
-      changefreq: 'weekly',
-      priority: '0.85',
-      lastmod: i.createdAt ? new Date(i.createdAt).toISOString().split('T')[0] : undefined
-    }));
+    .map(i => {
+      const imgs = [i.coverUrl, i.logoUrl, ...(i.galleryImages || [])]
+        .map(u => toAbsoluteAssetUrl(u))
+        .filter((u): u is string => Boolean(u))
+        .slice(0, 10)
+        .map(loc => ({ loc, title: i.title }));
+      return {
+        path: `initiative/${encodeURIComponent(i.slug)}`,
+        changefreq: 'weekly',
+        priority: '0.85',
+        lastmod: i.createdAt ? new Date(i.createdAt).toISOString().split('T')[0] : undefined,
+        images: imgs
+      };
+    });
 
   const newsPages: SitemapEntry[] = (data.news || [])
     .filter(n => !n.isDraft)
-    .map(n => ({
-      path: `news/${encodeURIComponent(n.id)}`,
-      changefreq: 'weekly',
-      priority: '0.85',
-      lastmod: n.publishDate ? new Date(n.publishDate).toISOString().split('T')[0] : undefined
-    }));
+    .map(n => {
+      const cover = toAbsoluteAssetUrl(n.coverImage) || (n.coverImage?.startsWith('data:') ? `${siteUrl}/api/news/${encodeURIComponent(n.id)}/image` : null);
+      const extraImgs = (n.galleryImages || [])
+        .map(u => toAbsoluteAssetUrl(u))
+        .filter((u): u is string => Boolean(u));
+      const allImgs = Array.from(new Set([...(cover ? [cover] : []), ...extraImgs]))
+        .slice(0, 10)
+        .map(loc => ({ loc, title: n.title }));
+      return {
+        path: `news/${encodeURIComponent(n.id)}`,
+        changefreq: 'weekly',
+        priority: '0.85',
+        lastmod: n.publishDate ? new Date(n.publishDate).toISOString().split('T')[0] : undefined,
+        images: allImgs
+      };
+    });
 
   const eventPages: SitemapEntry[] = (data.events || [])
     .filter(e => e.isVisible)
-    .map(e => ({
-      path: `events/${encodeURIComponent(e.id)}`,
-      changefreq: 'weekly',
-      priority: '0.8',
-      lastmod: e.dateTime ? new Date(e.dateTime).toISOString().split('T')[0] : undefined
-    }));
+    .map(e => {
+      const imgs = [e.coverUrl, e.coverImage, ...(e.images || []), ...(e.galleryImages || [])]
+        .map(u => toAbsoluteAssetUrl(u))
+        .filter((u): u is string => Boolean(u))
+        .slice(0, 10)
+        .map(loc => ({ loc, title: e.title }));
+      return {
+        path: `events/${encodeURIComponent(e.id)}`,
+        changefreq: 'weekly',
+        priority: '0.8',
+        lastmod: e.dateTime ? new Date(e.dateTime).toISOString().split('T')[0] : undefined,
+        images: imgs
+      };
+    });
 
   const cmsPages: SitemapEntry[] = (data.pages || [])
     .filter(p => p.isPublished && p.slug)
@@ -405,15 +487,24 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
   ];
 
   const xmlUrls = allItems
-    .map(item => `  <url>
+    .map(item => {
+      const imageTags = (item.images || [])
+        .map(
+          img => `\n    <image:image>
+      <image:loc>${escapeHtml(img.loc)}</image:loc>${img.title ? `\n      <image:title>${escapeHtml(img.title)}</image:title>` : ''}
+    </image:image>`
+        )
+        .join('');
+      return `  <url>
     <loc>${escapeHtml(`${siteUrl}/${item.path}`)}</loc>${item.lastmod ? `\n    <lastmod>${item.lastmod}</lastmod>` : ''}
     <changefreq>${item.changefreq}</changefreq>
-    <priority>${item.priority}</priority>
-  </url>`)
+    <priority>${item.priority}</priority>${imageTags}
+  </url>`;
+    })
     .join('\n');
 
   const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
 ${xmlUrls}
 </urlset>`;
 
@@ -453,12 +544,30 @@ function getLogoMimeType(filePath: string): string {
   return 'image/jpeg';
 }
 
+function resolveSiteShareImageUrl(settings: any, assetBaseUrl: string): string {
+  const raw = (settings?.seoShareImage || settings?.officialLogo || '').trim();
+  if (raw.startsWith('data:image/')) {
+    return `${assetBaseUrl}/api/seo/share-image`;
+  }
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    return raw;
+  }
+  if (raw.startsWith('/')) {
+    return `${assetBaseUrl}${raw}`;
+  }
+  if (raw) {
+    return `${assetBaseUrl}/${raw}`;
+  }
+  return `${assetBaseUrl}/og-logo.jpg`;
+}
+
 function resolvePublicImageUrl(
   rawImage: string | undefined,
   assetBaseUrl: string,
   itemType?: 'news' | 'events' | 'initiatives',
   itemId?: string,
-  querySuffix = ''
+  querySuffix = '',
+  fallbackUrl?: string
 ): string {
   if (rawImage && rawImage.startsWith('data:image/') && itemType && itemId) {
     return `${assetBaseUrl}/api/${itemType}/${encodeURIComponent(itemId)}/image${querySuffix}`;
@@ -472,7 +581,7 @@ function resolvePublicImageUrl(
   if (rawImage) {
     return `${assetBaseUrl}/${rawImage}`;
   }
-  return `${assetBaseUrl}/og-logo.jpg`;
+  return fallbackUrl || `${assetBaseUrl}/og-logo.jpg`;
 }
 
 function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): string {
@@ -527,13 +636,15 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
 function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   const settings = data.settings || ({} as any);
   const assetBaseUrl = getPublicBaseUrl(req);
-  const rawLogo = settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
-  const defaultOgImage =
-    rawLogo.startsWith('http://') || rawLogo.startsWith('https://')
-      ? rawLogo
-      : DEFAULT_OG_IMAGE_URL;
+  const defaultOgImage = resolveSiteShareImageUrl(settings, assetBaseUrl);
 
   const cleanPath = decodeURIComponent(req.path || '/').replace(/\/+$/, '') || '/';
+  const queryNewsId =
+    typeof req.query?.news === 'string'
+      ? req.query.news
+      : typeof req.query?.id === 'string'
+      ? req.query.id
+      : '';
   const visiblePartyLeaders = (data.partyLeaders || []).filter(l => l.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const visibleSecLeaders = (data.secretariatLeaders || []).filter(l => l.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const activeSecretariats = (data.specializedSecretariats || []).filter(s => s.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -545,34 +656,40 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   const phone = settings.phone || '01003070108';
   const address = settings.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
   const siteUrl = getOfficialSiteUrl(data);
+  const siteName = (settings.seoTitle || '').trim() || HOME_SEO_TITLE;
+  const siteDescription = (settings.seoDescription || '').trim() || HOME_SEO_DESCRIPTION;
+  const keywords = (settings.seoKeywords || '').trim() || HOME_SEO_KEYWORDS;
 
-  let title = HOME_SEO_TITLE;
-  let description = HOME_SEO_DESCRIPTION;
+  let title = siteName;
+  let description = siteDescription;
   let canonical = `${siteUrl}/`;
   let ogType = 'website';
   let ogImage = defaultOgImage;
+  let ogImageAlt = `شعار ${siteName}`;
   let robots = 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
   let mainHtml = '';
+  let articleSchema: Record<string, any> | null = null;
+  let eventSchema: Record<string, any> | null = null;
 
-  if (cleanPath === '/admin') {
-    title = 'لوحة التحكم | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+  if (cleanPath === '/admin' || cleanPath.startsWith('/admin/') || cleanPath === '/login') {
+    title = `لوحة التحكم | ${siteName}`;
     robots = 'noindex, nofollow';
-    mainHtml = '<section><h1>لوحة الإدارة – حزب الجبهة الوطنية</h1></section>';
+    mainHtml = '<section><h1>لوحة الإدارة – أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر</h1></section>';
   } else if (cleanPath === '/about') {
-    title = 'عن الحزب والأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `عن الحزب والأمانة | ${siteName}`;
     description = 'تعرف على رؤية ورسالة ومبادئ حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورها المجتمعي والتنموي.';
     canonical = `${siteUrl}/about`;
     mainHtml = `
       <section>
         <h1>عن حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر</h1>
-        <p>الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.</p>
+        <p>الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.</p>
         <h2>الرؤية والرسالة</h2>
         <p>حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يعمل على تعزيز المشاركة الشعبية الفاعلة وتحقيق العدالة الاجتماعية والتنمية المستدامة في قسم ثالث أكتوبر ومحافظة الجيزة ومصر.</p>
         <h2>محاور العمل الحزبي في قسم ثالث أكتوبر</h2>
         <p>خدمة المواطنين، دعم الشباب والمرأة، المبادرات التنموية والصحية، والتواصل الميداني المباشر.</p>
       </section>`;
   } else if (cleanPath === '/party-leaders') {
-    title = 'القيادات | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `قيادات الحزب | ${siteName}`;
     description = 'تعرف على قيادات حزب الجبهة الوطنية وقيادات وهيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورهم في العمل الوطني والمجتمعي.';
     canonical = `${siteUrl}/party-leaders`;
     const combinedLeadersCount = visiblePartyLeaders.length + visibleSecLeaders.length;
@@ -589,7 +706,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         }
       </section>`;
   } else if (cleanPath === '/secretariat-leaders') {
-    title = 'قيادات أمانة قسم ثالث أكتوبر | حزب الجبهة الوطنية';
+    title = `قيادات الأمانة | ${siteName}`;
     description = 'قيادات وهيئة مكتب أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/secretariat-leaders`;
     mainHtml = `
@@ -602,7 +719,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         }
       </section>`;
   } else if (cleanPath === '/secretariats') {
-    title = 'الأمانات التخصصية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `الأمانات التخصصية | ${siteName}`;
     description = 'استعرض الأمانات التخصصية لحزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر بمحافظة الجيزة ومهامها وأمناءها.';
     canonical = `${siteUrl}/secretariats`;
     mainHtml = `
@@ -620,11 +737,13 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const slug = cleanPath.slice('/secretariat/'.length);
     const sec = activeSecretariats.find(s => s.slug === slug || s.id === slug) || activeSecretariats[0];
     if (sec) {
-      title = `${sec.name} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
+      title = `${sec.name} | ${siteName}`;
       description = sec.description
-        ? `${sec.name} بحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر: ${sec.description.slice(0, 140)}`
-        : HOME_SEO_DESCRIPTION;
+        ? `${sec.name} – ${sec.description.slice(0, 140)}`
+        : siteDescription;
       canonical = `${siteUrl}/secretariat/${encodeURIComponent(sec.slug)}`;
+      ogImage = resolvePublicImageUrl(sec.coverUrl || sec.logoUrl, assetBaseUrl, undefined, undefined, '', defaultOgImage);
+      ogImageAlt = sec.name;
       const secMembers = (data.secretariatMembers || []).filter(m => m.secretariatId === sec.id);
       mainHtml = `
         <article>
@@ -639,7 +758,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         </article>`;
     }
   } else if (cleanPath === '/initiatives') {
-    title = 'المبادرات المجتمعية والتنموية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `المبادرات المجتمعية والتنموية | ${siteName}`;
     description = 'تابع المبادرات الميدانية والتنموية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/initiatives`;
     mainHtml = `
@@ -663,26 +782,31 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
 
       ogType = 'article';
       if (act) {
-        title = `${act.title || 'نشاط ميداني'} – ${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-        description = (act.description || init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
+        title = `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteName}`;
+        description = (act.description || init.description || siteDescription).slice(0, 160);
         canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}?activity=${actIdx}`;
         ogImage = resolvePublicImageUrl(
           act.imageUrl || init.coverUrl || init.galleryImages?.[0] || firstActImg || init.logoUrl,
           assetBaseUrl,
           'initiatives',
           init.id,
-          act.imageUrl ? `?activity=${actIdx}` : ''
+          act.imageUrl ? `?activity=${actIdx}` : '',
+          defaultOgImage
         );
+        ogImageAlt = act.title || init.title;
       } else {
-        title = `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-        description = (init.description || HOME_SEO_DESCRIPTION).slice(0, 160);
+        title = `${init.title} | ${siteName}`;
+        description = (init.description || siteDescription).slice(0, 160);
         canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
         ogImage = resolvePublicImageUrl(
           init.coverUrl || init.galleryImages?.[0] || firstActImg || init.logoUrl,
           assetBaseUrl,
           'initiatives',
-          init.id
+          init.id,
+          '',
+          defaultOgImage
         );
+        ogImageAlt = init.title;
       }
       mainHtml = `
         <article>
@@ -695,12 +819,12 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         </article>`;
     }
   } else if (cleanPath === '/news') {
-    title = 'الأخبار والبيانات الرسمية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-    description = 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.';
+    title = `الأخبار والبيانات الرسمية | ${siteName}`;
+    description = 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/news`;
     mainHtml = `
       <section>
-        <h1>أخبار وبيانات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر</h1>
+        <h1>أخبار وبيانات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر</h1>
         <p>المصدر الرسمي للأخبار والتغطيات الميدانية بمحافظة الجيزة.</p>
         ${publishedNews.map(n => `
           <article>
@@ -709,26 +833,53 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
             <p>${escapeHtml(n.excerpt || n.content.slice(0, 160))}</p>
           </article>`).join('')}
       </section>`;
-  } else if (cleanPath.startsWith('/news/')) {
-    const newsId = cleanPath.slice('/news/'.length);
+  } else if (cleanPath.startsWith('/news/') || (cleanPath === '/' && queryNewsId)) {
+    const newsId = cleanPath.startsWith('/news/') ? cleanPath.slice('/news/'.length) : queryNewsId;
     const item = publishedNews.find(n => n.id === newsId || (n as any).slug === newsId);
     if (item) {
-      title = `${item.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-      description = (item.excerpt || item.content || HOME_SEO_DESCRIPTION).slice(0, 160);
+      title = `${item.title} | ${siteName}`;
+      description = (item.excerpt || item.content || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/news/${encodeURIComponent(item.id)}`;
       ogType = 'article';
-      ogImage = resolvePublicImageUrl(item.coverImage, assetBaseUrl, 'news', item.id);
+      const itemImgRaw = item.coverImage || item.galleryImages?.[0];
+      ogImage = resolvePublicImageUrl(itemImgRaw, assetBaseUrl, 'news', item.id, '', defaultOgImage);
+      ogImageAlt = item.title;
+      articleSchema = {
+        '@context': 'https://schema.org',
+        '@type': 'NewsArticle',
+        headline: item.title,
+        description,
+        image: [ogImage],
+        datePublished: item.publishDate || item.createdAt,
+        dateModified: item.createdAt || item.publishDate,
+        author: {
+          '@type': item.authorName ? 'Person' : 'Organization',
+          name: item.authorName || siteName
+        },
+        publisher: {
+          '@type': 'Organization',
+          name: siteName,
+          logo: {
+            '@type': 'ImageObject',
+            url: defaultOgImage
+          }
+        },
+        mainEntityOfPage: {
+          '@type': 'WebPage',
+          '@id': canonical
+        }
+      };
       mainHtml = `
         <article>
           <h1>${escapeHtml(item.title)}</h1>
           <p>${escapeHtml(item.publishDate || '')}</p>
-          ${item.coverImage ? `<img src="${escapeHtml(ogImage)}" alt="${escapeHtml(item.title)}" />` : ''}
+          ${itemImgRaw ? `<img src="${escapeHtml(ogImage)}" alt="${escapeHtml(item.title)}" />` : ''}
           <div>${escapeHtml(item.content)}</div>
           <p><a href="/news">العودة إلى كافة الأخبار</a></p>
         </article>`;
     }
   } else if (cleanPath === '/events') {
-    title = 'الفعاليات والأنشطة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `الفعاليات والأنشطة | ${siteName}`;
     description = 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/events`;
     mainHtml = `
@@ -746,11 +897,37 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const evId = cleanPath.slice('/events/'.length);
     const ev = visibleEvents.find(e => e.id === evId || (e as any).slug === evId);
     if (ev) {
-      title = `${ev.title} | فعاليات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-      description = (ev.description || HOME_SEO_DESCRIPTION).slice(0, 160);
+      title = `${ev.title} | ${siteName}`;
+      description = (ev.description || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/events/${encodeURIComponent(ev.id)}`;
       ogType = 'article';
-      ogImage = resolvePublicImageUrl(ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0], assetBaseUrl, 'events', ev.id);
+      ogImage = resolvePublicImageUrl(
+        ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0],
+        assetBaseUrl,
+        'events',
+        ev.id,
+        '',
+        defaultOgImage
+      );
+      ogImageAlt = ev.title;
+      eventSchema = {
+        '@context': 'https://schema.org',
+        '@type': 'Event',
+        name: ev.title,
+        description,
+        startDate: ev.dateTime,
+        location: {
+          '@type': 'Place',
+          name: ev.venue || address,
+          address
+        },
+        image: [ogImage],
+        organizer: {
+          '@type': 'Organization',
+          name: ev.organizer || siteName,
+          url: `${siteUrl}/`
+        }
+      };
       mainHtml = `
         <article>
           <h1>${escapeHtml(ev.title)}</h1>
@@ -761,8 +938,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     }
   } else if (cleanPath === '/live') {
     const ls = data.liveStream;
-    title = 'البث المباشر | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-    description = ls?.description || 'البث المباشر لفعاليات ومؤتمرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.';
+    title = `البث المباشر | ${siteName}`;
+    description = ls?.description || 'البث المباشر لفعاليات ومؤتمرات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/live`;
     mainHtml = `
       <section>
@@ -772,7 +949,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         ${ls?.streamUrl ? `<p><a href="${escapeHtml(ls.streamUrl)}">رابط البث المباشر</a></p>` : ''}
       </section>`;
   } else if (cleanPath === '/join') {
-    title = 'طلب الانضمام والعضوية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+    title = `طلب الانضمام والعضوية | ${siteName}`;
     description = 'التقديم الإلكتروني لعضوية حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة والاستعلام عن حالة الطلب.';
     canonical = `${siteUrl}/join`;
     mainHtml = `
@@ -783,8 +960,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         <p>إدخال البيانات الشخصية والرقم القومي والتواصل عبر استمارة العضوية الإلكترونية المعتمدة.</p>
       </section>`;
   } else if (cleanPath === '/contact') {
-    title = 'تواصل معنا ومقر الأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-    description = 'طرق التواصل المباشرة ومقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.';
+    title = `تواصل معنا ومقر الأمانة | ${siteName}`;
+    description = 'طرق التواصل المباشرة ومقر أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.';
     canonical = `${siteUrl}/contact`;
     mainHtml = `
       <section>
@@ -798,9 +975,11 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const slug = cleanPath.slice('/page/'.length);
     const page = publishedPages.find(p => p.slug === slug);
     if (page) {
-      title = `${page.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`;
-      description = page.metaDescription || page.subtitle || (page.content || HOME_SEO_DESCRIPTION).slice(0, 160);
+      title = `${page.title} | ${siteName}`;
+      description = page.metaDescription || page.subtitle || (page.content || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/page/${encodeURIComponent(page.slug)}`;
+      ogImage = resolvePublicImageUrl(page.coverImage, assetBaseUrl, undefined, undefined, '', defaultOgImage);
+      ogImageAlt = page.title;
       mainHtml = `
         <article>
           <h1>${escapeHtml(page.title)}</h1>
@@ -812,13 +991,13 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
 
   // Default Home SSR markup (for '/' or unmatched SPA paths falling back to Home)
   if (!mainHtml) {
-    title = HOME_SEO_TITLE;
-    description = HOME_SEO_DESCRIPTION;
+    title = siteName;
+    description = siteDescription;
     canonical = `${siteUrl}/`;
     mainHtml = `
       <section>
         <h1>معاً نبني مستقبلاً مشرقاً لمصر</h1>
-        <p>الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.</p>
+        <p>${escapeHtml(siteDescription)}</p>
         <p>حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يهدف إلى تعزيز المشاركة الشعبية الفاعلة وتحقيق العدالة الاجتماعية والتنمية المستدامة لخدمة أهالي قسم ثالث أكتوبر ومحافظة الجيزة.</p>
       </section>
       <section>
@@ -872,18 +1051,20 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       </section>`;
   }
 
-  const isHomePath =
-    cleanPath === '/' || cleanPath === '/home' || cleanPath === '/index.html' || cleanPath === '/gallery';
-  const ogUrl = isHomePath ? HOME_OG_URL : canonical;
-
   return {
     title,
     description,
+    keywords,
+    siteName,
+    siteDescription,
     canonical,
-    ogUrl,
+    ogUrl: canonical,
     ogType,
     ogImage,
+    ogImageAlt,
     robots,
+    articleSchema,
+    eventSchema,
     ssrHtml: renderSsrShell(data, mainHtml)
   };
 }
@@ -898,17 +1079,15 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
   const streetAddress = settings?.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
 
   const siteUrl = getOfficialSiteUrl(data);
-  const schemaLogoUrl =
-    settings?.officialLogo && (settings.officialLogo.startsWith('http://') || settings.officialLogo.startsWith('https://'))
-      ? settings.officialLogo
-      : DEFAULT_OG_IMAGE_URL;
+  const assetBaseUrl = getPublicBaseUrl(req);
+  const schemaLogoUrl = resolveSiteShareImageUrl(settings, assetBaseUrl);
 
   const organizationSchema: Record<string, any> = {
     '@context': 'https://schema.org',
-    '@type': 'Organization',
-    name: HOME_SEO_TITLE,
+    '@type': 'PoliticalParty',
+    name: seo.siteName,
     url: `${siteUrl}/`,
-    description: HOME_SEO_DESCRIPTION,
+    description: seo.siteDescription,
     logo: schemaLogoUrl,
     telephone: phoneIntl,
     address: {
@@ -932,22 +1111,38 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     organizationSchema.sameAs = [settings.facebookUrl];
   }
 
-  const jsonLd = JSON.stringify([
+  const schemas: Record<string, any>[] = [
     {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
-      name: HOME_SEO_TITLE,
-      alternateName: ['أمانة قسم ثالث أكتوبر', 'حزب الجبهة الوطنية'],
+      name: seo.siteName,
+      alternateName: ['حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
       url: `${siteUrl}/`,
-      description: HOME_SEO_DESCRIPTION,
+      description: seo.siteDescription,
       inLanguage: 'ar'
     },
     organizationSchema
-  ], null, 2);
+  ];
+  if (seo.articleSchema) schemas.push(seo.articleSchema);
+  if (seo.eventSchema) schemas.push(seo.eventSchema);
+
+  const jsonLd = JSON.stringify(schemas, null, 2);
 
   let out = html;
+  const gtmId = (settings?.googleTagManagerId || '').trim() || DEFAULT_GTM_ID;
+  const ga4Id = (settings?.googleAnalyticsId || '').trim() || DEFAULT_GA4_ID;
+
+  // Replace GTM / GA4 IDs cleanly without ever duplicating script tags
+  if (gtmId && gtmId !== DEFAULT_GTM_ID) {
+    out = out.split(DEFAULT_GTM_ID).join(escapeHtml(gtmId));
+  }
+  if (ga4Id && ga4Id !== DEFAULT_GA4_ID) {
+    out = out.split(DEFAULT_GA4_ID).join(escapeHtml(ga4Id));
+  }
+
   out = out.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(seo.title)}</title>`);
   out = out.replace(/<meta\s+name="description"\s+content="[^"]*"\s*\/?>/i, `<meta name="description" content="${escapeHtml(seo.description)}" />`);
+  out = out.replace(/<meta\s+name="keywords"\s+content="[^"]*"\s*\/?>/i, `<meta name="keywords" content="${escapeHtml(seo.keywords)}" />`);
   out = out.replace(/<meta\s+name="robots"\s+content="[^"]*"\s*\/?>/i, `<meta name="robots" content="${escapeHtml(seo.robots)}" />`);
   out = out.replace(/<meta\s+name="googlebot"\s+content="[^"]*"\s*\/?>/i, `<meta name="googlebot" content="${escapeHtml(seo.robots)}" />`);
 
@@ -968,16 +1163,18 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     `\n    ${verificationMetaTags}`
   );
 
-  out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(HOME_SEO_TITLE)}" />`);
+  out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+property="og:type"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:type" content="${escapeHtml(seo.ogType)}" />`);
   out = out.replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(seo.ogUrl)}" />`);
   out = out.replace(/<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${escapeHtml(seo.title)}" />`);
   out = out.replace(/<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${escapeHtml(seo.description)}" />`);
   out = out.replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(seo.ogImage)}" />`);
   out = out.replace(/<meta\s+property="og:image:secure_url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image:secure_url" content="${escapeHtml(seo.ogImage)}" />`);
+  out = out.replace(/<meta\s+property="og:image:alt"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image:alt" content="${escapeHtml(seo.ogImageAlt)}" />`);
   out = out.replace(/<meta\s+name="twitter:title"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:title" content="${escapeHtml(seo.title)}" />`);
   out = out.replace(/<meta\s+name="twitter:description"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:description" content="${escapeHtml(seo.description)}" />`);
   out = out.replace(/<meta\s+name="twitter:image"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:image" content="${escapeHtml(seo.ogImage)}" />`);
+  out = out.replace(/<meta\s+name="twitter:image:alt"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:image:alt" content="${escapeHtml(seo.ogImageAlt)}" />`);
   out = out.replace(/<link\s+rel="canonical"\s+href="[^"]*"\s*\/?>/i, `<link rel="canonical" href="${escapeHtml(seo.canonical)}" />`);
   out = out.replace(/<link\s+rel="image_src"\s+href="[^"]*"\s*\/?>/i, `<link rel="image_src" href="${escapeHtml(seo.ogImage)}" />`);
 
@@ -986,9 +1183,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     `<script type="application/ld+json">\n${jsonLd}\n    </script>`
   );
 
-  // Inject prerendered SSR semantic HTML into #root for JS-disabled crawlers (Googlebot, Bingbot, social bots)
-  out = out.replace('<div id="root"></div>', `<div id="root">${seo.ssrHtml}</div>`);
-
+  // Keep #root clean so browsers render the styled React app without flashing unstyled fallback text
   return out;
 }
 
@@ -1009,15 +1204,17 @@ app.get(['/favicon.ico', '/site-icon.jpg', '/apple-touch-icon.png', '/apple-touc
   return res.status(404).end();
 });
 
-// Direct official logo endpoint for WhatsApp, Facebook, Telegram, Twitter, and OpenGraph previews
-app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
+// Direct official logo & SEO social-share image endpoints for WhatsApp, Facebook, Telegram, Twitter, and OpenGraph previews
+app.get(['/og-logo.jpg', '/api/site-logo', '/api/seo/share-image'], (req: Request, res: Response) => {
   const data = db.get();
-  const rawLogo = data.settings?.officialLogo || '';
+  const preferShare = req.path === '/api/seo/share-image' || req.query?.kind === 'share';
+  const rawLogo = (preferShare ? (data.settings?.seoShareImage || data.settings?.officialLogo) : data.settings?.officialLogo) || '';
 
   if (rawLogo.startsWith('data:image/')) {
     const match = rawLogo.match(/^data:([^;]+);base64,(.+)$/);
     if (match) {
       res.setHeader('Content-Type', match[1]);
+      res.setHeader('X-Robots-Tag', 'all');
       res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
       return res.send(Buffer.from(match[2], 'base64'));
     }
@@ -1032,6 +1229,7 @@ app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
     const uploadFilePath = path.join(uploadsDir, filename);
     if (fs.existsSync(uploadFilePath)) {
       res.setHeader('Content-Type', getLogoMimeType(uploadFilePath));
+      res.setHeader('X-Robots-Tag', 'all');
       res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
       return res.sendFile(uploadFilePath);
     }
@@ -1044,6 +1242,7 @@ app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
     const resolved = fs.existsSync(publicAsset) ? publicAsset : (fs.existsSync(distAsset) ? distAsset : null);
     if (resolved) {
       res.setHeader('Content-Type', getLogoMimeType(resolved));
+      res.setHeader('X-Robots-Tag', 'all');
       res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
       return res.sendFile(resolved);
     }
@@ -1052,6 +1251,7 @@ app.get(['/og-logo.jpg', '/api/site-logo'], (_req: Request, res: Response) => {
   const defaultLogo = getDefaultLogoPath();
   if (fs.existsSync(defaultLogo)) {
     res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('X-Robots-Tag', 'all');
     res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
     return res.sendFile(defaultLogo);
   }
@@ -1429,21 +1629,39 @@ app.get('/api/public/unsubscribe', (req: Request, res: Response) => {
 // -------------------------------------------------------------
 
 app.post('/api/admin/login', (req: Request, res: Response) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+  const { identifier, email, phone, password } = req.body || {};
+  const rawLogin = String(identifier ?? email ?? phone ?? '').trim();
+  const rawPassword = password !== undefined && password !== null ? String(password) : '';
+
+  if (!rawLogin || !rawPassword) {
+    return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور' });
   }
 
-  const cleanEmail = String(email).trim().toLowerCase();
+  const cleanEmail = rawLogin.toLowerCase();
+  const normalizedPhone = normalizeAdminPhone(rawLogin);
   const data = db.get();
-  const admin = data.admins.find(a => a.email.toLowerCase() === cleanEmail && a.isActive);
+
+  const admin = data.admins.find(a => {
+    if (!a.isActive) return false;
+    if (a.email && a.email.toLowerCase() === cleanEmail) return true;
+    if (a.phone && normalizedPhone && normalizeAdminPhone(a.phone) === normalizedPhone) return true;
+    return false;
+  });
 
   if (!admin) {
     return res.status(401).json({ error: 'بيانات الدخول غير صحيحة أو الحساب غير نشط' });
   }
 
-  const hashed = hashPassword(password);
-  if (admin.passwordHash !== hashed) {
+  const passCandidates = Array.from(
+    new Set([
+      rawPassword,
+      rawPassword.trim(),
+      normalizeArabicDigitsServer(rawPassword),
+      normalizeArabicDigitsServer(rawPassword).trim()
+    ].filter(Boolean))
+  );
+  const passwordOk = passCandidates.some(candidate => hashPassword(candidate) === admin.passwordHash);
+  if (!passwordOk) {
     return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
   }
 
@@ -1458,7 +1676,7 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
   });
 
-  db.addAuditLog(admin.email, admin.name, 'تسجيل دخول إداري', 'Auth', 'تم تسجيل الدخول بنجاح إلى لوحة التحكم');
+  db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تسجيل دخول إداري', 'Auth', 'تم تسجيل الدخول بنجاح إلى لوحة التحكم');
 
   const { passwordHash, ...safeAdmin } = admin;
   res.json({
@@ -1483,7 +1701,7 @@ app.post('/api/admin/login-google', async (req: Request, res: Response) => {
   const data = db.get();
   const BOOTSTRAPPED_ADMIN_EMAILS = ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'];
   let admin = data.admins.find(
-    a => a.email.toLowerCase() === verified.email && a.isActive
+    a => (a.email || '').toLowerCase() === verified.email && a.isActive
   );
 
   // If bootstrapped owner logs in with Google, add a separate super_admin account without overwriting existing owner
@@ -3032,19 +3250,32 @@ app.get('/api/admin/users', authenticateAdmin, requirePermission('admins'), (_re
 
 app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
-  const { email, name, password, role, roleId, permissions, adminScope, managedSecretariatId } = req.body;
+  const { email, phone, name, password, role, roleId, permissions, adminScope, managedSecretariatId } = req.body;
 
-  if (!email || !password || !name || !String(name).trim() || !String(email).trim()) {
-    return res.status(400).json({ error: 'الاسم والبريد وكلمة المرور حقول إلزامية' });
+  const cleanName = String(name || '').trim();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanPhone = normalizeAdminPhone(phone);
+  const rawPass = normalizeArabicDigitsServer(String(password ?? '')).trim();
+
+  if (!cleanName || !rawPass || (!cleanEmail && !cleanPhone)) {
+    return res.status(400).json({ error: 'الاسم وكلمة المرور وأحد وسائل الدخول (البريد الإلكتروني أو رقم الهاتف) حقول إلزامية' });
   }
-  if (String(password).trim().length < 6) {
-    return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 6 أحرف' });
+  if (cleanEmail && !cleanEmail.includes('@')) {
+    return res.status(400).json({ error: 'يرجى إدخال بريد إلكتروني صحيح' });
+  }
+  if (cleanPhone && cleanPhone.length < 8) {
+    return res.status(400).json({ error: 'يرجى إدخال رقم هاتف صحيح (8 أرقام على الأقل)' });
+  }
+  if (rawPass.length < 4) {
+    return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 4 أرقام أو أحرف' });
   }
 
   const data = db.get();
-  const cleanEmail = String(email).trim().toLowerCase();
-  if (data.admins.some(a => a.email.toLowerCase() === cleanEmail)) {
+  if (cleanEmail && data.admins.some(a => (a.email || '').toLowerCase() === cleanEmail)) {
     return res.status(400).json({ error: 'البريد الإلكتروني مسجل مسبقاً لمشرف آخر' });
+  }
+  if (cleanPhone && data.admins.some(a => a.phone && normalizeAdminPhone(a.phone) === cleanPhone)) {
+    return res.status(400).json({ error: 'رقم الهاتف مسجل مسبقاً لمشرف آخر' });
   }
 
   let userPerms = Array.isArray(permissions) ? permissions : [];
@@ -3062,8 +3293,9 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   const newAdmin: AdminUser = {
     id: 'admin-' + Date.now(),
     email: cleanEmail,
-    name: String(name).trim(),
-    passwordHash: hashPassword(String(password).trim()),
+    ...(cleanPhone ? { phone: cleanPhone } : {}),
+    name: cleanName,
+    passwordHash: hashPassword(rawPass),
     role: requestedRole,
     roleId: roleId || undefined,
     adminScope: adminScope === 'specialized' ? 'specialized' : 'general',
@@ -3077,7 +3309,8 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   data.admins.push(newAdmin);
   db.save();
   const scopeDesc = newAdmin.adminScope === 'specialized' ? `أمانة تخصصية (${newAdmin.managedSecretariatId || 'محددة'})` : 'إدارة عامة';
-  db.addAuditLog(admin.email, admin.name, 'إضافة مشرف جديد', 'AdminUser', `تم إنشاء حساب للمشرف: ${newAdmin.name} (${newAdmin.email}) بنطاق [${scopeDesc}]`, newAdmin.id);
+  const contactDesc = [newAdmin.email, newAdmin.phone].filter(Boolean).join(' / ');
+  db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'إضافة مشرف جديد', 'AdminUser', `تم إنشاء حساب للمشرف: ${newAdmin.name} (${contactDesc}) بنطاق [${scopeDesc}]`, newAdmin.id);
   await db.flushCloudSync();
 
   const { passwordHash, ...safe } = newAdmin;
@@ -3093,10 +3326,11 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   }
 
   const target = data.admins[idx];
-  const { name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body;
+  const { email, phone, name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body;
+  const isProtectedOwner = ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((target.email || '').toLowerCase());
 
   // Protect main super admin accounts
-  if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes(target.email.toLowerCase())) {
+  if (isProtectedOwner) {
     if (isActive === false) {
       return res.status(400).json({ error: 'لا يمكن تعطيل حساب المدير الرئيسي للمنصة' });
     }
@@ -3110,12 +3344,35 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
     return res.status(403).json({ error: 'صلاحية المدير العام الرئيسي (Super Admin) محصورة لمدير المنصة فقط' });
   }
 
+  const nextEmail = email !== undefined && !isProtectedOwner ? String(email || '').trim().toLowerCase() : (target.email || '');
+  const nextPhone = phone !== undefined ? normalizeAdminPhone(phone) : (target.phone || '');
+
+  if (nextEmail && !nextEmail.includes('@')) {
+    return res.status(400).json({ error: 'يرجى إدخال بريد إلكتروني صحيح' });
+  }
+  if (nextPhone && nextPhone.length < 8) {
+    return res.status(400).json({ error: 'يرجى إدخال رقم هاتف صحيح (8 أرقام على الأقل)' });
+  }
+  if (!nextEmail && !nextPhone) {
+    return res.status(400).json({ error: 'يجب الإبقاء على البريد الإلكتروني أو رقم الهاتف لحساب المشرف' });
+  }
+  if (nextEmail && data.admins.some(a => a.id !== target.id && (a.email || '').toLowerCase() === nextEmail)) {
+    return res.status(400).json({ error: 'البريد الإلكتروني مسجل مسبقاً لمشرف آخر' });
+  }
+  if (nextPhone && data.admins.some(a => a.id !== target.id && a.phone && normalizeAdminPhone(a.phone) === nextPhone)) {
+    return res.status(400).json({ error: 'رقم الهاتف مسجل مسبقاً لمشرف آخر' });
+  }
+
   if (typeof name === 'string' && name.trim()) target.name = name.trim();
+  if (email !== undefined && !isProtectedOwner) target.email = nextEmail;
+  if (phone !== undefined) target.phone = nextPhone || undefined;
+
   if (password !== undefined && String(password).trim() !== '') {
-    if (String(password).trim().length < 6) {
-      return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 6 أحرف' });
+    const rawPass = normalizeArabicDigitsServer(String(password)).trim();
+    if (rawPass.length < 4) {
+      return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 4 أرقام أو أحرف' });
     }
-    target.passwordHash = hashPassword(String(password).trim());
+    target.passwordHash = hashPassword(rawPass);
   }
   if (role) {
     target.role = (role === 'super_admin' && currentAdmin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
@@ -3128,7 +3385,7 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   target.updatedAt = new Date().toISOString();
 
   db.save();
-  db.addAuditLog(currentAdmin.email, currentAdmin.name, 'تعديل بيانات مشرف', 'AdminUser', `تم تعديل بيانات وصلاحيات ونطاق المشرف: ${target.name}`, target.id);
+  db.addAuditLog(currentAdmin.email || currentAdmin.phone || currentAdmin.id, currentAdmin.name, 'تعديل بيانات مشرف', 'AdminUser', `تم تعديل بيانات وصلاحيات ونطاق المشرف: ${target.name}`, target.id);
   await db.flushCloudSync();
 
   const { passwordHash, ...safe } = target;
@@ -3142,14 +3399,14 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
   if (!target) {
     return res.status(404).json({ error: 'المشرف غير موجود' });
   }
-  if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes(target.email.toLowerCase())) {
+  if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((target.email || '').toLowerCase())) {
     return res.status(400).json({ error: 'لا يمكن حذف حساب المدير الرئيسي للمنصة' });
   }
 
   data.admins = data.admins.filter(a => a.id !== req.params.id);
   markLocalDeletion('admin_users', req.params.id);
   db.save();
-  db.addAuditLog(currentAdmin.email, currentAdmin.name, 'حذف مشرف', 'AdminUser', `تم حذف حساب المشرف: ${target.name} (${target.email})`, req.params.id);
+  db.addAuditLog(currentAdmin.email || currentAdmin.phone || currentAdmin.id, currentAdmin.name, 'حذف مشرف', 'AdminUser', `تم حذف حساب المشرف: ${target.name} (${target.email || target.phone || target.id})`, req.params.id);
   await db.flushCloudSync();
   res.json({ success: true });
 });
@@ -3346,6 +3603,7 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
   const body = { ...req.body };
   // Sanitize any large base64 media payloads to disk files
   if (body.officialLogo) body.officialLogo = persistDataUrlIfAny(body.officialLogo, 'logo');
+  if (body.seoShareImage) body.seoShareImage = persistDataUrlIfAny(body.seoShareImage, 'seo_share');
   if (body.heroVideoUrl) body.heroVideoUrl = persistDataUrlIfAny(body.heroVideoUrl, 'hero_vid');
   if (body.heroPosterUrl) body.heroPosterUrl = persistDataUrlIfAny(body.heroPosterUrl, 'hero_poster');
   if (body.entranceImageUrl) body.entranceImageUrl = persistDataUrlIfAny(body.entranceImageUrl, 'entrance');
@@ -3365,7 +3623,7 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
     ...body
   };
   db.save();
-  db.addAuditLog(admin.email, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل للمنصة');
+  db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل وSEO للمنصة');
   await db.flushCloudSync();
   res.json({ success: true, settings: data.settings });
 });
@@ -3591,7 +3849,8 @@ async function startServer() {
       '/join',
       '/contact',
       '/page/:slug',
-      '/admin'
+      '/admin',
+      '/login'
     ];
 
     // Serve Vite SPA with route-specific SEO tags & semantic SSR HTML inside #root

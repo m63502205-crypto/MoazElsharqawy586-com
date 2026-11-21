@@ -39,7 +39,7 @@ export interface PersonPostContribution {
 }
 
 const TITLE_PREFIX_REGEX =
-  /^(?:أ\.د\/|أ\.د\.|أ\.م\/|أ\.\/|أ\.|د\.|م\.|لواء\.|لواء\/|مستشار\/|المستشار|المهندس|المهندسة|الدكتور|الدكتورة|الأستاذ|الأستاذة|الاستاذ|الاستاذة|الكاتب|اللواء|سيادة|النائب)\s+/g;
+  /^(?:أ\.د\/|أ\.د\.|ا\.د\/|ا\.د\.|أ\.م\/|ا\.م\/|أ\.\/|ا\.\/|أ\.|ا\.|د\.|م\.|لواء\.|لواء\/|مستشار\/|المستشار|المهندس|المهندسة|الدكتور|الدكتورة|الأستاذ|الأستاذة|الاستاذ|الاستاذة|الكاتب|اللواء|سيادة|النائب)\s+/g;
 
 export function normalizeArabicPersonName(input?: string | null): string {
   if (!input) return '';
@@ -69,15 +69,8 @@ export function namesMatch(a?: string | null, b?: string | null): boolean {
   const nb = normalizeArabicPersonName(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  // Require at least two tokens for substring matching to avoid false positives on first names
-  const wordsA = na.split(' ').filter(Boolean);
-  const wordsB = nb.split(' ').filter(Boolean);
-  if (wordsA.length >= 2 && wordsB.length >= 2) {
-    if (na.includes(nb) || nb.includes(na)) return true;
-    // Check first two + last word similarity
-    if (wordsA[0] === wordsB[0] && wordsA[1] === wordsB[1]) return true;
-  }
-  return false;
+  // Only match exact full names with spacing differences on Arabic compound names (e.g. "عبد العزيز" === "عبدالعزيز")
+  return na.replace(/\s+/g, '') === nb.replace(/\s+/g, '');
 }
 
 function getAllAssistantsForSecretariat(
@@ -124,11 +117,12 @@ export function getAllPeopleInSecretariat(
   const list: ResolvedPersonProfile[] = [];
   const membersForSec = (secretariatMembers || []).filter(m => m.secretariatId === sec.id);
 
+  // Only enrich from leaders explicitly assigned to THIS secretariat to prevent cross-secretariat leakage
   const findMatchingLeader = (name: string) =>
-    (secretariatLeaders || []).find(l => namesMatch(l.name, name));
+    (secretariatLeaders || []).find(l => l.specializedSecretariatId === sec.id && namesMatch(l.name, name));
 
   const findMatchingPartyLeader = (name: string) =>
-    (partyLeaders || []).find(l => namesMatch(l.name, name));
+    (partyLeaders || []).find(l => l.specializedSecretariatId === sec.id && namesMatch(l.name, name));
 
   const findMatchingMember = (name: string) =>
     membersForSec.find(m => namesMatch(m.name, name));
@@ -238,6 +232,7 @@ export function resolvePersonInSecretariats(params: {
   personKey?: string | null;
   position?: string | null;
   explicitSecretariatId?: string | null;
+  requireExplicitSecretariat?: boolean;
   specializedSecretariats: SpecializedSecretariat[];
   secretariatMembers: SecretariatMember[];
   secretariatLeaders: SecretariatLeader[];
@@ -248,6 +243,7 @@ export function resolvePersonInSecretariats(params: {
     personKey,
     position,
     explicitSecretariatId,
+    requireExplicitSecretariat = false,
     specializedSecretariats = [],
     secretariatMembers = [],
     secretariatLeaders = [],
@@ -255,6 +251,11 @@ export function resolvePersonInSecretariats(params: {
   } = params;
 
   if (!specializedSecretariats.length) return null;
+
+  const cleanExplicitId = (explicitSecretariatId || '').trim();
+  if (requireExplicitSecretariat && !cleanExplicitId) {
+    return null;
+  }
 
   // Helper to search inside a specific secretariat
   const findInSec = (sec: SpecializedSecretariat): ResolvedPersonProfile | null => {
@@ -270,16 +271,16 @@ export function resolvePersonInSecretariats(params: {
     return null;
   };
 
-  // 1. Check explicit secretariat ID first against registered directory
-  const targetSec = explicitSecretariatId
-    ? specializedSecretariats.find(
-        s => s.id === explicitSecretariatId || s.slug === explicitSecretariatId
-      )
-    : undefined;
+  // 1. When an explicit secretariat ID is provided, resolve STRICTLY inside that secretariat only
+  if (cleanExplicitId) {
+    const targetSec = specializedSecretariats.find(
+      s => s.id === cleanExplicitId || s.slug === cleanExplicitId
+    );
+    if (!targetSec) return null;
 
-  if (targetSec) {
     const match = findInSec(targetSec);
     if (match) return match;
+
     const matchedLeader = (secretariatLeaders || []).find(
       l =>
         l.specializedSecretariatId === targetSec.id &&
@@ -297,6 +298,7 @@ export function resolvePersonInSecretariats(params: {
         assignmentDate: matchedLeader.appointmentDate || ''
       };
     }
+
     const matchedParty = (partyLeaders || []).find(
       l =>
         l.specializedSecretariatId === targetSec.id &&
@@ -313,16 +315,52 @@ export function resolvePersonInSecretariats(params: {
         bio: matchedParty.bio || ''
       };
     }
+
+    if (name?.trim() || personKey?.trim()) {
+      const cleanName = (name || personKey || '').trim();
+      return {
+        personKey: cleanName,
+        name: cleanName,
+        role: position?.trim() || `مشارك / محرر في ${targetSec.name}`,
+        tierLabel: 'مسؤول / محرر مقيد بالأمانة',
+        secretariat: targetSec,
+        photoUrl: '',
+        bio: ''
+      };
+    }
+
+    return null;
   }
 
-  // 2. Search across all active secretariats for an actual registered profile
+  // 2. When no explicit secretariat was specified, search across secretariats by exact normalized full name
   for (const sec of specializedSecretariats) {
     const match = findInSec(sec);
     if (match) return match;
   }
 
-  // 3. If party leader has an explicit secretariat link even if not passed by caller
+  // 3. Check leaders who explicitly carry a specializedSecretariatId
   if (name || personKey) {
+    const linkedSecLeader = (secretariatLeaders || []).find(
+      l =>
+        Boolean(l.specializedSecretariatId) &&
+        ((name && namesMatch(l.name, name)) || (personKey && (l.id === personKey || namesMatch(l.name, personKey))))
+    );
+    if (linkedSecLeader?.specializedSecretariatId) {
+      const sec = specializedSecretariats.find(s => s.id === linkedSecLeader.specializedSecretariatId);
+      if (sec) {
+        return {
+          personKey: linkedSecLeader.id,
+          name: linkedSecLeader.name,
+          role: linkedSecLeader.title,
+          tierLabel: 'قيادة مقيدة بالأمانة',
+          secretariat: sec,
+          photoUrl: linkedSecLeader.photoUrl || '',
+          bio: linkedSecLeader.bio || '',
+          assignmentDate: linkedSecLeader.appointmentDate || ''
+        };
+      }
+    }
+
     const linkedParty = (partyLeaders || []).find(
       l =>
         Boolean(l.specializedSecretariatId) &&
@@ -344,33 +382,40 @@ export function resolvePersonInSecretariats(params: {
     }
   }
 
-  // 4. Fallback: if a post explicitly tagged a secretariat for this person, resolve into that secretariat
-  if (targetSec && (name?.trim() || personKey?.trim())) {
-    const cleanName = (name || personKey || '').trim();
-    return {
-      personKey: cleanName,
-      name: cleanName,
-      role: position?.trim() || `مشارك / محرر في ${targetSec.name}`,
-      tierLabel: 'مسؤول / محرر مقيد بالأمانة',
-      secretariat: targetSec,
-      photoUrl: '',
-      bio: ''
-    };
-  }
-
   return null;
+}
+
+function contributionBelongsToScope(
+  postSecId: string | undefined,
+  scopeSecretariatId?: string | null
+): boolean {
+  const cleanPostSec = (postSecId || '').trim();
+  if (scopeSecretariatId === undefined) return true;
+  if (scopeSecretariatId === null) {
+    // Person is outside specialized secretariats: exclude posts attributed to any specialized secretariat
+    return !cleanPostSec;
+  }
+  const cleanScope = scopeSecretariatId.trim();
+  if (!cleanScope) return !cleanPostSec;
+  // Inside a specific secretariat: include matching secretariat or general untagged posts, NEVER another secretariat's posts
+  return !cleanPostSec || cleanPostSec === cleanScope;
 }
 
 export function getPersonContributions(
   personName: string | undefined | null,
-  data: PublicPortalData
+  data: PublicPortalData,
+  secretariatId?: string | null
 ): PersonPostContribution[] {
   if (!personName || !personName.trim()) return [];
   const list: PersonPostContribution[] = [];
 
   for (const item of data.news || []) {
-    const isAuthor = namesMatch(item.authorName, personName);
-    const isPublisher = namesMatch(item.publisherName, personName);
+    const rawAuthorMatch = namesMatch(item.authorName, personName);
+    const rawPublisherMatch = namesMatch(item.publisherName, personName);
+    const authorSecId = item.authorSecretariatId || item.linkedSecretariatId;
+    const publisherSecId = item.publisherSecretariatId;
+    const isAuthor = rawAuthorMatch && contributionBelongsToScope(authorSecId, secretariatId);
+    const isPublisher = rawPublisherMatch && contributionBelongsToScope(publisherSecId, secretariatId);
     if (isAuthor || isPublisher) {
       list.push({
         kind: 'news',
@@ -384,9 +429,7 @@ export function getPersonContributions(
             ? 'بقلم'
             : 'نشر ورفع الخبر (أمانة الإعلام)',
         positionUsed: isAuthor ? item.authorPosition : item.publisherPosition,
-        secretariatId: isAuthor
-          ? item.authorSecretariatId || item.linkedSecretariatId
-          : item.publisherSecretariatId,
+        secretariatId: isAuthor ? authorSecId : publisherSecId,
         coverImage: item.coverImage,
         rawNews: item
       });
@@ -394,8 +437,10 @@ export function getPersonContributions(
   }
 
   for (const ev of data.events || []) {
-    const isAuthor = namesMatch(ev.authorName, personName);
-    const isPublisher = namesMatch(ev.publisherName, personName);
+    const rawAuthorMatch = namesMatch(ev.authorName, personName);
+    const rawPublisherMatch = namesMatch(ev.publisherName, personName);
+    const isAuthor = rawAuthorMatch && contributionBelongsToScope(ev.authorSecretariatId, secretariatId);
+    const isPublisher = rawPublisherMatch && contributionBelongsToScope(ev.publisherSecretariatId, secretariatId);
     if (isAuthor || isPublisher) {
       list.push({
         kind: 'event',
@@ -417,8 +462,10 @@ export function getPersonContributions(
   }
 
   for (const init of data.initiatives || []) {
-    const isAuthor = namesMatch(init.authorName, personName);
-    const isPublisher = namesMatch(init.publisherName, personName);
+    const rawAuthorMatch = namesMatch(init.authorName, personName);
+    const rawPublisherMatch = namesMatch(init.publisherName, personName);
+    const isAuthor = rawAuthorMatch && contributionBelongsToScope(init.authorSecretariatId, secretariatId);
+    const isPublisher = rawPublisherMatch && contributionBelongsToScope(init.publisherSecretariatId, secretariatId);
     if (isAuthor || isPublisher) {
       list.push({
         kind: 'initiative',
@@ -439,8 +486,10 @@ export function getPersonContributions(
     }
 
     (init.activities || []).forEach((act, idx) => {
-      const actAuthor = namesMatch(act.authorName, personName);
-      const actPublisher = namesMatch(act.publisherName, personName);
+      const rawActAuthor = namesMatch(act.authorName, personName);
+      const rawActPublisher = namesMatch(act.publisherName, personName);
+      const actAuthor = rawActAuthor && contributionBelongsToScope(act.authorSecretariatId, secretariatId);
+      const actPublisher = rawActPublisher && contributionBelongsToScope(act.publisherSecretariatId, secretariatId);
       if (actAuthor || actPublisher) {
         list.push({
           kind: 'activity',

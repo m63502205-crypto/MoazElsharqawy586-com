@@ -298,6 +298,36 @@ export function unmarkLocalDeletion(collectionName: string, rawId: string): void
   }
 }
 
+export function recordDatabaseChanges(prevDb: AppDatabase | null, nextDb: AppDatabase): void {
+  if (!prevDb) {
+    markLocalMutation();
+    return;
+  }
+
+  for (const mapping of COLLECTION_MAPPINGS) {
+    const prevList = ((prevDb[mapping.dbKey] as any[]) || []).filter(i => i?.id);
+    const nextList = ((nextDb[mapping.dbKey] as any[]) || []).filter(i => i?.id);
+    const prevIds = new Set<string>(prevList.map(i => sanitizeFirestoreId(i.id)));
+    const nextIds = new Set<string>(nextList.map(i => sanitizeFirestoreId(i.id)));
+
+    for (const sid of nextIds) {
+      if (!prevIds.has(sid)) {
+        deletedDocKeys.delete(`${mapping.collectionName}/${sid}`);
+      }
+    }
+
+    if (mapping.collectionName !== 'audit_logs') {
+      for (const sid of prevIds) {
+        if (!nextIds.has(sid)) {
+          deletedDocKeys.add(`${mapping.collectionName}/${sid}`);
+        }
+      }
+    }
+  }
+
+  markLocalMutation();
+}
+
 function getItemTimestampMs(item: any): number {
   if (!item || typeof item !== 'object') return 0;
   const raw = item.updatedAt || item.createdAt || item.timestamp || item.dispatchedAt || item.subscribedAt || item.reviewedAt || '';
@@ -489,14 +519,22 @@ export async function pushDatabaseDiffToFirestore(dbObj: AppDatabase, idToken: s
     }
   }
 
-  // Delete removed docs that were previously known in Firestore
+  // Delete removed docs that were previously known in Firestore or explicitly deleted locally
+  const keysToDelete = new Set<string>();
   for (const existingKey of cloudHashes.keys()) {
-    if (!currentKeys.has(existingKey)) {
-      if (existingKey.startsWith('uploads_public/')) continue;
-      writes.push({
-        delete: `${docNamePrefix}/${existingKey}`
-      });
+    if (!currentKeys.has(existingKey) && !existingKey.startsWith('uploads_public/')) {
+      keysToDelete.add(existingKey);
     }
+  }
+  for (const delKey of deletedDocKeys) {
+    if (!currentKeys.has(delKey) && !delKey.startsWith('uploads_public/')) {
+      keysToDelete.add(delKey);
+    }
+  }
+  for (const delKey of keysToDelete) {
+    writes.push({
+      delete: `${docNamePrefix}/${delKey}`
+    });
   }
 
   if (writes.length === 0) {

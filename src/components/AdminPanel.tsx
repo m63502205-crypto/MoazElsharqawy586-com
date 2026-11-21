@@ -140,6 +140,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     | 'roles'
     | 'users'
     | 'settings'
+    | 'seo'
     | 'audit'
   >('stats');
 
@@ -342,6 +343,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       case 'users':
         return hasPermission('admins');
       case 'settings':
+      case 'seo':
         return hasPermission('settings');
       case 'audit':
         return hasPermission('audit');
@@ -370,7 +372,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     try {
       await login(loginEmail, loginPass);
     } catch (err: any) {
-      setLoginError(err.message || 'فشل تسجيل الدخول، تأكد من صحة البريد وكلمة المرور');
+      setLoginError(err.message || 'فشل تسجيل الدخول، تأكد من صحة البريد الإلكتروني أو رقم الهاتف وكلمة المرور');
     } finally {
       setLoginLoading(false);
     }
@@ -402,11 +404,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-stone-700 mb-1">
-                البريد الإلكتروني المعتمد للمدير
+                البريد الإلكتروني أو رقم الهاتف المسجل
               </label>
               <input
-                type="email"
+                type="text"
+                autoComplete="username"
                 required
+                placeholder="example@domain.com أو 010xxxxxxxx"
                 value={loginEmail}
                 onChange={e => setLoginEmail(e.target.value)}
                 className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700 font-mono"
@@ -420,7 +424,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               </label>
               <input
                 type="password"
+                autoComplete="current-password"
                 required
+                placeholder="أرقام أو أحرف..."
                 value={loginPass}
                 onChange={e => setLoginPass(e.target.value)}
                 className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700 font-mono"
@@ -796,6 +802,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <span className="flex items-center gap-2">
                       <Settings className="w-4 h-4" />
                       <span>إعدادات وهوية المنصة</span>
+                    </span>
+                  </button>
+                )}
+
+                {isTabPermitted('seo') && (
+                  <button
+                    onClick={() => setActiveTab('seo')}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                      activeTab === 'seo' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-700 hover:bg-stone-100'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Search className="w-4 h-4" />
+                      <span>إعدادات SEO ومحركات البحث</span>
                     </span>
                   </button>
                 )}
@@ -3317,7 +3337,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             </span>
                           </div>
                           <h3 className="font-bold text-stone-900 text-sm">{adm.name}</h3>
-                          <p className="text-xs text-stone-500 font-mono">{adm.email}</p>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-500 font-mono" dir="ltr">
+                            {adm.email && <span>{adm.email}</span>}
+                            {adm.phone && <span className="text-stone-700 font-bold">{adm.phone}</span>}
+                          </div>
                           <p className="text-[11px] text-stone-600">
                             الصلاحيات الممنوحة: {adm.role === 'super_admin' ? 'كامل الصلاحيات دون قيود (Super Admin)' : (adm.permissions?.join(' · ') || 'لا توجد')}
                           </p>
@@ -4893,11 +4916,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     {(() => {
                       const rawOfficial = (settings.officialSiteUrl || '').trim().replace(/\/+$/, '');
                       const activeOfficialUrl =
-                        rawOfficial &&
-                        rawOfficial !== 'https://nfp-october3.ai.studio' &&
-                        rawOfficial !== 'https://algabhaalwataniya-oct3.org'
+                        rawOfficial && (rawOfficial.startsWith('https://') || rawOfficial.startsWith('http://'))
                           ? rawOfficial
-                          : 'https://www.algabhaalwataniya-oct3.org';
+                          : 'https://nfp-october3.ai.studio';
                       const sitemapFullUrl = `${activeOfficialUrl}/sitemap.xml`;
                       const robotsFullUrl = `${activeOfficialUrl}/robots.txt`;
                       return (
@@ -4910,7 +4931,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               <div className="flex gap-2">
                                 <input
                                   type="url"
-                                  placeholder="https://www.algabhaalwataniya-oct3.org"
+                                  placeholder="https://nfp-october3.ai.studio"
                                   value={activeOfficialUrl}
                                   onChange={e => setSettings({ ...settings, officialSiteUrl: e.target.value.trim() })}
                                   className="flex-1 border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono text-left bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
@@ -4933,8 +4954,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               </label>
                               <input
                                 type="text"
-                                placeholder="HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg"
-                                value={settings.googleSiteVerification ?? 'HXP-EDvILB2MqyR6q9kA9RFDZpFEiVuOrcTjTomsPsg'}
+                                placeholder="1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo"
+                                value={settings.googleSiteVerification ?? '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo'}
                                 onChange={e => {
                                   const raw = e.target.value.trim();
                                   const match = raw.match(/content=["']([^"']+)["']/i);
@@ -5181,6 +5202,423 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </form>
               </div>
             )}
+
+            {/* TAB: SEO & GOOGLE SERVICES SETTINGS */}
+            {activeTab === 'seo' && settings && (() => {
+              const activeOfficialUrl =
+                (settings.officialSiteUrl || '').trim().replace(/\/+$/, '') || 'https://nfp-october3.ai.studio';
+              const activeGa4Id = (settings.googleAnalyticsId || '').trim() || 'G-NX1MQ9NHXW';
+              const activeGtmId = (settings.googleTagManagerId || '').trim() || 'GTM-TRZ4SG95';
+              const activeGscToken = (settings.googleSiteVerification || '').trim() || '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo';
+              const activeSeoTitle = settings.seoTitle ?? 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+              const activeSeoDesc =
+                settings.seoDescription ??
+                'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+              const activeSeoKeywords =
+                settings.seoKeywords ??
+                'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
+              const activeShareImage =
+                settings.seoShareImage || settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
+              const sitemapFullUrl = `${activeOfficialUrl}/sitemap.xml`;
+              const robotsFullUrl = `${activeOfficialUrl}/robots.txt`;
+
+              return (
+                <div className="space-y-6">
+                  <div className="border-b border-stone-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-xl font-black text-stone-900 flex items-center gap-2">
+                        <Search className="w-5 h-5 text-red-700" />
+                        <span>إعدادات SEO ومحركات البحث</span>
+                      </h2>
+                      <p className="text-xs text-stone-500 mt-1">
+                        إدارة بيانات الظهور في محركات البحث، صورة المشاركة على واتساب وفيسبوك، وحالة الربط مع خدمات Google وخريطة الموقع.
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full self-start">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                      <span>متصل بخدمات Google</span>
+                    </span>
+                  </div>
+
+                  <form
+                    onSubmit={async e => {
+                      e.preventDefault();
+                      setIsSavingSettings(true);
+                      try {
+                        const updated = {
+                          ...settings,
+                          seoTitle: activeSeoTitle.trim(),
+                          seoDescription: activeSeoDesc.trim(),
+                          seoKeywords: activeSeoKeywords.trim(),
+                          seoShareImage: settings.seoShareImage || settings.officialLogo,
+                          officialSiteUrl: activeOfficialUrl,
+                          googleAnalyticsId: activeGa4Id,
+                          googleTagManagerId: activeGtmId,
+                          googleSiteVerification: activeGscToken
+                        };
+                        await api.updateSettings(updated);
+                        await loadAdminData();
+                        onRefreshPublicData();
+                        showBanner('success', 'تم حفظ وتحديث إعدادات SEO ومحركات البحث بنجاح');
+                      } catch (err: any) {
+                        showBanner('error', `تعذر حفظ إعدادات SEO: ${err.message || 'خطأ غير متوقع'}`);
+                      } finally {
+                        setIsSavingSettings(false);
+                      }
+                    }}
+                    className="space-y-6"
+                  >
+                    {/* 1. Google Services Connection Status Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* GA4 Card */}
+                      <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50/50 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-stone-900 flex items-center gap-1.5">
+                            <BarChart3 className="w-4 h-4 text-amber-600" />
+                            <span>Google Analytics 4</span>
+                          </span>
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full">
+                            نشط ومتصل
+                          </span>
+                        </div>
+                        <div className="bg-white border border-stone-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                          <code className="text-xs font-mono font-bold text-stone-900" dir="ltr">{activeGa4Id}</code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(activeGa4Id);
+                              showBanner('success', `تم نسخ معرّف القياس: ${activeGa4Id}`);
+                            }}
+                            className="text-stone-500 hover:text-stone-900 p-1 cursor-pointer"
+                            title="نسخ المعرّف"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            initGoogleAnalytics(activeGa4Id);
+                            trackEvent('seo_panel_ga4_ping', { measurement_id: activeGa4Id });
+                            setGaTestStatus(`تم إرسال إشارة تحقق بنجاح إلى ${activeGa4Id}`);
+                            setTimeout(() => setGaTestStatus(null), 5000);
+                          }}
+                          className="w-full bg-amber-100 hover:bg-amber-200 text-amber-950 text-[11px] font-bold py-1.5 px-3 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <Activity className="w-3.5 h-3.5" />
+                          <span>اختبار اتصال Analytics</span>
+                        </button>
+                      </div>
+
+                      {/* GTM Card */}
+                      <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50/40 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-stone-900 flex items-center gap-1.5">
+                            <Activity className="w-4 h-4 text-blue-600" />
+                            <span>Google Tag Manager</span>
+                          </span>
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full">
+                            مفعّل (head + body)
+                          </span>
+                        </div>
+                        <div className="bg-white border border-stone-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                          <code className="text-xs font-mono font-bold text-stone-900" dir="ltr">{activeGtmId}</code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(activeGtmId);
+                              showBanner('success', `تم نسخ معرّف Tag Manager: ${activeGtmId}`);
+                            }}
+                            className="text-stone-500 hover:text-stone-900 p-1 cursor-pointer"
+                            title="نسخ المعرّف"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-stone-600 leading-relaxed">
+                          مثبت داخل وسم <code dir="ltr">&lt;head&gt;</code> ومع <code dir="ltr">&lt;noscript&gt;</code> بعد <code dir="ltr">&lt;body&gt;</code> بدون أي تكرار.
+                        </p>
+                      </div>
+
+                      {/* Search Console Card */}
+                      <div className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-stone-900 flex items-center gap-1.5">
+                            <Globe className="w-4 h-4 text-emerald-600" />
+                            <span>Search Console</span>
+                          </span>
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full">
+                            كود الإثبات مضاف
+                          </span>
+                        </div>
+                        <div className="bg-white border border-stone-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                          <code className="text-[11px] font-mono font-bold text-stone-900 truncate" dir="ltr">{activeGscToken}</code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(activeGscToken);
+                              showBanner('success', 'تم نسخ كود إثبات Google Search Console');
+                            }}
+                            className="text-stone-500 hover:text-stone-900 p-1 shrink-0 cursor-pointer"
+                            title="نسخ كود الإثبات"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-stone-600 truncate font-mono" dir="ltr">
+                          &lt;meta name="google-site-verification" ... /&gt;
+                        </p>
+                      </div>
+                    </div>
+
+                    {gaTestStatus && (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{gaTestStatus}</span>
+                      </div>
+                    )}
+
+                    {/* 2. Core SEO Meta Inputs */}
+                    <div className="p-5 bg-stone-50 border border-stone-200 rounded-3xl space-y-4">
+                      <h3 className="text-sm font-black text-stone-900 border-b border-stone-200 pb-2.5">
+                        البيانات التعريفية لمحركات البحث (Meta Title, Description & Keywords)
+                      </h3>
+
+                      <div>
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          عنوان الموقع الرئيسي (Site SEO Title)
+                        </label>
+                        <input
+                          type="text"
+                          value={activeSeoTitle}
+                          onChange={e => setSettings({ ...settings, seoTitle: e.target.value })}
+                          placeholder="أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر"
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-bold bg-white focus:outline-none focus:ring-2 focus:ring-red-700"
+                        />
+                        <p className="text-[10px] text-stone-500 mt-1">
+                          يظهر كعنوان رئيسي في نتائج بحث جوجل وعند مشاركة رابط الصفحة الرئيسية (الحالي: {activeSeoTitle.length} حرفاً).
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          وصف الموقع لمحركات البحث (Meta Description)
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={activeSeoDesc}
+                          onChange={e => setSettings({ ...settings, seoDescription: e.target.value })}
+                          placeholder="الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة..."
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 bg-white focus:outline-none focus:ring-2 focus:ring-red-700 leading-relaxed"
+                        />
+                        <p className="text-[10px] text-stone-500 mt-1">
+                          الوصف المختصر الذي يظهر أسفل اسم الموقع في جوجل وواتساب وفيسبوك (يفضل بين 120 و160 حرفاً — الحالي: {activeSeoDesc.length} حرفاً).
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-stone-800 mb-1">
+                          الكلمات المفتاحية (SEO Keywords)
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={activeSeoKeywords}
+                          onChange={e => setSettings({ ...settings, seoKeywords: e.target.value })}
+                          placeholder="حزب الجبهة الوطنية، أمانة قسم ثالث أكتوبر، محافظة الجيزة..."
+                          className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 bg-white focus:outline-none focus:ring-2 focus:ring-red-700 leading-relaxed"
+                        />
+                        <p className="text-[10px] text-stone-500 mt-1">
+                          افصل بين الكلمات والعبارات المفتاحية بفاصلة عربية (،) أو إنجليزية (,).
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 3. Main Social Share Image + Live WhatsApp/Facebook Preview */}
+                    <div className="p-5 bg-stone-50 border border-stone-200 rounded-3xl space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-200 pb-2.5">
+                        <div>
+                          <h3 className="text-sm font-black text-stone-900">
+                            صورة المشاركة الرئيسية (Open Graph / WhatsApp / Facebook)
+                          </h3>
+                          <p className="text-[11px] text-stone-500 mt-0.5">
+                            تُستخدم هذه الصورة عند مشاركة رابط الموقع الرئيسي والصفحات العامة؛ وعند مشاركة أي خبر من لوحة الإدارة يتم استخدام صورة الخبر نفسه تلقائياً.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                        <div className="lg:col-span-7">
+                          <ImageFieldWithPicker
+                            label="اختيار أو رفع صورة المشاركة الرئيسية"
+                            value={settings.seoShareImage || settings.officialLogo || ''}
+                            onChange={url => setSettings({ ...settings, seoShareImage: url })}
+                            media={media}
+                            onMediaCreated={handleMediaCreated}
+                            shape="rounded"
+                            helpText="يفضل استخدام الشعار الرسمي الواضح أو صورة تعبر عن الأمانة (مقاس مثالي 1200×630 أو مربع 630×630)"
+                            pickerTitle="اختيار صورة المشاركة الرئيسية من المعرض"
+                          />
+                        </div>
+
+                        {/* Live Social Share Card Preview */}
+                        <div className="lg:col-span-5 bg-white border border-stone-200 rounded-2xl p-3 space-y-2 shadow-2xs">
+                          <span className="text-[10px] font-bold text-stone-500 block">
+                            معاينة شكل الرابط عند المشاركة على واتساب وفيسبوك:
+                          </span>
+                          <div className="rounded-xl overflow-hidden border border-stone-200 bg-stone-100">
+                            <div className="aspect-[1.91/1] bg-stone-200 overflow-hidden">
+                              <img
+                                src={activeShareImage}
+                                alt={activeSeoTitle}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="p-2.5 bg-stone-50 border-t border-stone-200 space-y-0.5">
+                              <span className="text-[10px] text-stone-400 font-mono block" dir="ltr">
+                                {activeOfficialUrl.replace(/^https?:\/\//, '')}
+                              </span>
+                              <p className="text-xs font-black text-stone-900 line-clamp-1">{activeSeoTitle}</p>
+                              <p className="text-[11px] text-stone-600 line-clamp-2 leading-snug">{activeSeoDesc}</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 4. Sitemap.xml & Robots.txt Links + Live Diagnostics */}
+                    <div className="p-5 bg-emerald-50/40 border border-emerald-200 rounded-3xl space-y-4">
+                      <div className="border-b border-emerald-200/70 pb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-sm font-black text-stone-900">
+                            خريطة الموقع (Sitemap.xml) وملف Robots.txt
+                          </h3>
+                          <p className="text-[11px] text-stone-600 mt-0.5">
+                            يتم تحديث ملف Sitemap تلقائياً عند نشر أي أخبار أو فعاليات أو مبادرات أو صفحات جديدة، مع منع فهرسة لوحة الإدارة وصفحات تسجيل الدخول.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Sitemap URL Box */}
+                        <div className="bg-white border border-stone-200 rounded-2xl p-3.5 space-y-2">
+                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Sitemap التلقائي</span>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 text-xs font-mono text-stone-900 bg-stone-50 border border-stone-200 px-3 py-2 rounded-xl truncate" dir="ltr">
+                              {sitemapFullUrl}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(sitemapFullUrl);
+                                setCopiedSitemapUrl(true);
+                                setTimeout(() => setCopiedSitemapUrl(false), 2500);
+                              }}
+                              className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl text-xs font-bold cursor-pointer shrink-0 flex items-center gap-1"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>{copiedSitemapUrl ? 'تم النسخ' : 'نسخ'}</span>
+                            </button>
+                            <a
+                              href="/sitemap.xml"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shrink-0 flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>فتح</span>
+                            </a>
+                          </div>
+                        </div>
+
+                        {/* Robots.txt URL Box */}
+                        <div className="bg-white border border-stone-200 rounded-2xl p-3.5 space-y-2">
+                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Robots.txt</span>
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 text-xs font-mono text-stone-900 bg-stone-50 border border-stone-200 px-3 py-2 rounded-xl truncate" dir="ltr">
+                              {robotsFullUrl}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(robotsFullUrl);
+                                setCopiedRobotsUrl(true);
+                                setTimeout(() => setCopiedRobotsUrl(false), 2500);
+                              }}
+                              className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl text-xs font-bold cursor-pointer shrink-0 flex items-center gap-1"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>{copiedRobotsUrl ? 'تم النسخ' : 'نسخ'}</span>
+                            </button>
+                            <a
+                              href="/robots.txt"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-2 bg-stone-800 hover:bg-stone-900 text-white rounded-xl text-xs font-bold shrink-0 flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>فتح</span>
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const [robRes, mapRes, adminRes] = await Promise.all([
+                                fetch('/robots.txt'),
+                                fetch('/sitemap.xml'),
+                                fetch('/admin')
+                              ]);
+                              const robText = await robRes.text();
+                              const mapText = await mapRes.text();
+                              const urlCount = (mapText.match(/<url>/g) || []).length;
+                              const blocksAdmin = robText.includes('Disallow: /admin') && robText.includes('Disallow: /login');
+                              const adminRobotsHeader = (adminRes.headers.get('x-robots-tag') || '').includes('noindex');
+                              if (robRes.ok && mapRes.ok && urlCount > 0 && blocksAdmin) {
+                                setSeoCheckStatus(
+                                  `تم التحقق بنجاح: Sitemap يضم ${urlCount} رابطاً عاماً، وRobots.txt يمنع فهرسة /admin و/login${adminRobotsHeader ? '، وحماية X-Robots-Tag noindex مفعلة' : ''}.`
+                                );
+                              } else {
+                                setSeoCheckStatus('يرجى مراجعة استجابة ملفات الفهرسة.');
+                              }
+                            } catch {
+                              setSeoCheckStatus('تعذر فحص الملفات حالياً.');
+                            }
+                            setTimeout(() => setSeoCheckStatus(null), 8000);
+                          }}
+                          className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>فحص حالة Sitemap و Robots.txt وحماية الإدارة</span>
+                        </button>
+                      </div>
+
+                      {seoCheckStatus && (
+                        <div className="p-3 bg-white border border-emerald-300 rounded-xl text-emerald-900 text-xs font-bold flex items-center gap-2">
+                          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>{seoCheckStatus}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Save Bar */}
+                    <div className="pt-4 border-t border-stone-200 flex items-center justify-end">
+                      <button
+                        type="submit"
+                        disabled={isSavingSettings}
+                        className="bg-red-700 hover:bg-red-800 disabled:opacity-60 text-white font-black text-xs sm:text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center gap-2 shadow-sm transition-colors"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>{isSavingSettings ? 'جاري الحفظ...' : 'حفظ إعدادات SEO ومحركات البحث'}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              );
+            })()}
 
             {/* TAB: AUDIT LOG */}
             {activeTab === 'audit' && (
@@ -7940,19 +8378,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">البريد الإلكتروني المعتمد <span className="text-red-600">*</span></label>
-                <input
-                  type="email"
-                  required
-                  disabled={!!editingUser.id}
-                  placeholder="user@example.com"
-                  value={editingUser.email || ''}
-                  onChange={e => setEditingUser({ ...editingUser, email: e.target.value })}
-                  className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-mono disabled:bg-stone-100"
-                  dir="ltr"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">رقم الهاتف (للتسجيل والدخول)</label>
+                  <input
+                    type="tel"
+                    placeholder="01012345678"
+                    value={editingUser.phone || ''}
+                    onChange={e => setEditingUser({ ...editingUser, phone: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-mono"
+                    dir="ltr"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">البريد الإلكتروني (اختياري مع الهاتف)</label>
+                  <input
+                    type="email"
+                    disabled={!!editingUser.id && ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((editingUser.email || '').toLowerCase())}
+                    placeholder="user@example.com"
+                    value={editingUser.email || ''}
+                    onChange={e => setEditingUser({ ...editingUser, email: e.target.value })}
+                    className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-mono disabled:bg-stone-100"
+                    dir="ltr"
+                  />
+                </div>
               </div>
+              <p className="text-[11px] text-stone-500 -mt-1">
+                يمكن إضافة المشرف برقم الهاتف فقط، أو بالبريد الإلكتروني فقط، أو بالاثنين معاً لتسجيل الدخول بأي منهما.
+              </p>
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">
@@ -7960,12 +8414,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 </label>
                 <input
                   type="password"
-                  placeholder="••••••••"
+                  placeholder="مسموح بأرقام فقط أو أحرف (4 خانات فأكثر)"
                   value={editingUser.password || ''}
                   onChange={e => setEditingUser({ ...editingUser, password: e.target.value })}
                   className="w-full border border-stone-300 rounded-xl px-3.5 py-2 text-xs font-mono"
                   dir="ltr"
                 />
+                <p className="text-[11px] text-stone-400 mt-1">
+                  يُسمح بكلمة مرور مكونة من أرقام فقط (مثل 1234 أو أرقام الهاتف المختصرة) بحد أدنى 4 خانات.
+                </p>
               </div>
 
               {user?.role === 'super_admin' && (
@@ -8157,24 +8614,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 disabled={isSavingModal}
                 onClick={async () => {
                   setModalError(null);
+                  const normalizeDigits = (v: string) =>
+                    v
+                      .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+                      .replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
                   const cleanName = String(editingUser.name || '').trim();
-                  const cleanEmail = String(editingUser.email || '').trim();
-                  const cleanPassword = String(editingUser.password || '').trim();
+                  const cleanEmail = String(editingUser.email || '').trim().toLowerCase();
+                  const cleanPhoneRaw = normalizeDigits(String(editingUser.phone || '').trim());
+                  const cleanPhoneDigits = cleanPhoneRaw.replace(/\D/g, '');
+                  const cleanPassword = normalizeDigits(String(editingUser.password || '')).trim();
 
                   if (!cleanName) {
                     setModalError('الاسم الكامل للمشرف حقل إلزامي');
                     return;
                   }
-                  if (!editingUser.id && (!cleanEmail || !cleanEmail.includes('@'))) {
+                  if (!cleanEmail && !cleanPhoneDigits) {
+                    setModalError('يرجى إدخال رقم الهاتف أو البريد الإلكتروني للمشرف على الأقل');
+                    return;
+                  }
+                  if (cleanEmail && !cleanEmail.includes('@')) {
                     setModalError('يرجى إدخال بريد إلكتروني صحيح للمشرف');
                     return;
                   }
-                  if (!editingUser.id && cleanPassword.length < 6) {
-                    setModalError('كلمة المرور للمشرف الجديد يجب أن لا تقل عن 6 أحرف');
+                  if (cleanPhoneDigits && cleanPhoneDigits.length < 8) {
+                    setModalError('يرجى إدخال رقم هاتف صحيح (8 أرقام على الأقل)');
                     return;
                   }
-                  if (editingUser.id && cleanPassword.length > 0 && cleanPassword.length < 6) {
-                    setModalError('كلمة المرور الجديدة يجب أن لا تقل عن 6 أحرف');
+                  if (!editingUser.id && cleanPassword.length < 4) {
+                    setModalError('كلمة المرور للمشرف الجديد يجب أن لا تقل عن 4 أرقام أو أحرف');
+                    return;
+                  }
+                  if (editingUser.id && cleanPassword.length > 0 && cleanPassword.length < 4) {
+                    setModalError('كلمة المرور الجديدة يجب أن لا تقل عن 4 أرقام أو أحرف');
                     return;
                   }
 
@@ -8184,6 +8655,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       ...editingUser,
                       name: cleanName,
                       email: cleanEmail,
+                      phone: cleanPhoneRaw,
                       ...(cleanPassword ? { password: cleanPassword } : {})
                     };
                     if (!cleanPassword) {

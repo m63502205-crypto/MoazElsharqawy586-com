@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
@@ -12,7 +12,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { api } from './api';
 import { PublicPortalData } from './types';
 import { Loader2 } from 'lucide-react';
-import { initGoogleAnalytics, trackPageView } from './utils/analytics';
+import { initGoogleAnalytics, trackPageView, DEFAULT_GA4_MEASUREMENT_ID } from './utils/analytics';
 import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
 import { resolvePersonInSecretariats } from './utils/personSecretariat';
 
@@ -66,14 +66,15 @@ function MainApp() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Initialize or re-configure Google Analytics when site settings are loaded
+  const lastTrackedRouteRef = useRef<string | null>(null);
+
+  // Initialize Google Analytics 4 immediately with default or configured Measurement ID
   useEffect(() => {
-    if (data?.settings?.googleAnalyticsId) {
-      initGoogleAnalytics(data.settings.googleAnalyticsId);
-    }
+    const measurementId = data?.settings?.googleAnalyticsId?.trim() || DEFAULT_GA4_MEASUREMENT_ID;
+    initGoogleAnalytics(measurementId);
   }, [data?.settings?.googleAnalyticsId]);
 
-  // Dynamically update Document Title, Meta Description, Canonical, Robots, OpenGraph & GA PageView on route changes
+  // Dynamically update Document Title, Meta Description, Keywords, Canonical, Robots, OpenGraph, Twitter & GA PageView
   useEffect(() => {
     const seo = getPageSeoMeta(currentView, data, {
       slug: selectedSlug,
@@ -96,17 +97,19 @@ function MainApp() {
     };
 
     setMeta('meta[name="description"]', 'name', 'description', seo.description);
+    setMeta('meta[name="keywords"]', 'name', 'keywords', seo.keywords);
     setMeta('meta[name="robots"]', 'name', 'robots', seo.robots);
+    setMeta('meta[name="googlebot"]', 'name', 'googlebot', seo.robots);
+    setMeta('meta[property="og:site_name"]', 'property', 'og:site_name', seo.siteName);
+    setMeta('meta[property="og:type"]', 'property', 'og:type', seo.ogType);
     setMeta('meta[property="og:title"]', 'property', 'og:title', seo.title);
     setMeta('meta[property="og:description"]', 'property', 'og:description', seo.description);
-    setMeta(
-      'meta[property="og:url"]',
-      'property',
-      'og:url',
-      currentView === 'home' ? 'https://nfp-october3.cloud.run/' : seo.canonicalUrl
-    );
+    setMeta('meta[property="og:url"]', 'property', 'og:url', seo.canonicalUrl);
+    setMeta('meta[property="og:image"]', 'property', 'og:image', seo.ogImage);
+    setMeta('meta[property="og:image:secure_url"]', 'property', 'og:image:secure_url', seo.ogImage);
     setMeta('meta[name="twitter:title"]', 'name', 'twitter:title', seo.title);
     setMeta('meta[name="twitter:description"]', 'name', 'twitter:description', seo.description);
+    setMeta('meta[name="twitter:image"]', 'name', 'twitter:image', seo.ogImage);
 
     let canonicalEl = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
     if (!canonicalEl) {
@@ -116,15 +119,21 @@ function MainApp() {
     }
     canonicalEl.setAttribute('href', seo.canonicalUrl);
 
-    const path = getViewPath(currentView, {
-      slug: selectedSlug,
-      newsId: selectedNewsId,
-      eventId: selectedEventId,
-      person: selectedPerson,
-      activity: selectedActivityIndex
-    });
-    trackPageView(path, seo.title);
-  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, selectedPerson, selectedActivityIndex, data]);
+    if (!loading) {
+      const path = getViewPath(currentView, {
+        slug: selectedSlug,
+        newsId: selectedNewsId,
+        eventId: selectedEventId,
+        person: selectedPerson,
+        activity: selectedActivityIndex
+      });
+      const trackingKey = `${path}::${seo.title}`;
+      if (lastTrackedRouteRef.current !== trackingKey) {
+        lastTrackedRouteRef.current = trackingKey;
+        trackPageView(path, seo.title);
+      }
+    }
+  }, [currentView, selectedSlug, selectedNewsId, selectedEventId, selectedPerson, selectedActivityIndex, data, loading]);
 
   // Sync view from browser history (popstate) and legacy hash links (hashchange)
   useEffect(() => {
@@ -206,6 +215,7 @@ function MainApp() {
             name: res.rawItem?.name,
             personKey: res.rawItem?.id || res.rawItem?.name,
             explicitSecretariatId: res.rawItem?.specializedSecretariatId,
+            requireExplicitSecretariat: true,
             specializedSecretariats: data.specializedSecretariats,
             secretariatMembers: data.secretariatMembers,
             secretariatLeaders: data.secretariatLeaders,

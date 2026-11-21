@@ -748,6 +748,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     name?: string | null,
     options?: {
       explicitSecretariatId?: string | null;
+      requireExplicitSecretariat?: boolean;
       personKey?: string | null;
       position?: string | null;
       fallbackPartyLeader?: PartyLeader | null;
@@ -761,6 +762,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       personKey: options?.personKey,
       position: options?.position,
       explicitSecretariatId: options?.explicitSecretariatId,
+      requireExplicitSecretariat: options?.requireExplicitSecretariat,
       specializedSecretariats: data.specializedSecretariats || [],
       secretariatMembers: data.secretariatMembers || [],
       secretariatLeaders: data.secretariatLeaders || [],
@@ -1255,6 +1257,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         onClick={() =>
                           handlePersonClick(leader.name, {
                             explicitSecretariatId: leader.specializedSecretariatId,
+                            requireExplicitSecretariat: true,
                             personKey: leader.id || leader.name,
                             fallbackPartyLeader: leader
                           })
@@ -1265,6 +1268,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           <img
                             src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                             alt={leader.name}
+                            loading="lazy"
+                            decoding="async"
                             className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
                               leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
                             }`}
@@ -1309,6 +1314,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         name: leader.name,
                         personKey: leader.id || leader.name,
                         explicitSecretariatId: leader.specializedSecretariatId,
+                        requireExplicitSecretariat: true,
                         specializedSecretariats: data.specializedSecretariats || [],
                         secretariatMembers: data.secretariatMembers || [],
                         secretariatLeaders: data.secretariatLeaders || [],
@@ -1320,6 +1326,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         onClick={() =>
                           handlePersonClick(leader.name, {
                             explicitSecretariatId: leader.specializedSecretariatId,
+                            requireExplicitSecretariat: true,
                             personKey: leader.id || leader.name,
                             fallbackSecLeader: leader
                           })
@@ -1330,6 +1337,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           <img
                             src={leader.photoUrl || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg'}
                             alt={leader.name}
+                            loading="lazy"
+                            decoding="async"
                             className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
                               leader.photoUrl ? 'object-cover object-top' : 'object-contain p-4 bg-white'
                             }`}
@@ -1458,6 +1467,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           <img
                             src={person.photoUrl}
                             alt={person.name}
+                            loading="lazy"
+                            decoding="async"
                             className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl object-cover object-top border-2 border-amber-500 shadow-md bg-stone-100 group-hover/person:scale-[1.04] group-hover/person:border-red-600 transition-all"
                             referrerPolicy="no-referrer"
                           />
@@ -1583,6 +1594,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           <img
                             src={initLeadImg || data.settings.officialLogo}
                             alt={init.title}
+                            loading="lazy"
+                            decoding="async"
                             className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
                               initLeadImg ? 'object-cover' : 'object-contain p-6 opacity-85'
                             }`}
@@ -1745,6 +1758,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <img
                         src={item.coverImage || data.settings.officialLogo}
                         alt={item.title}
+                        loading="lazy"
+                        decoding="async"
                         className="w-full sm:w-24 h-32 sm:h-24 object-cover rounded-lg shrink-0 bg-stone-100"
                         referrerPolicy="no-referrer"
                       />
@@ -1868,6 +1883,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             <img
                               src={eventLeadImg || data.settings.officialLogo}
                               alt={event.title}
+                              loading="lazy"
+                              decoding="async"
                               className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
                                 eventLeadImg ? 'object-cover' : 'object-contain p-2 bg-stone-100'
                               }`}
@@ -2291,6 +2308,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 onClick={() =>
                   handlePersonClick(leader.name, {
                     explicitSecretariatId: leader.specializedSecretariatId,
+                    requireExplicitSecretariat: true,
                     personKey: leader.id || leader.name,
                     fallbackPartyLeader: leader
                   })
@@ -2340,6 +2358,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 name: leader.name,
                 personKey: leader.id || leader.name,
                 explicitSecretariatId: leader.specializedSecretariatId,
+                requireExplicitSecretariat: true,
                 specializedSecretariats: data.specializedSecretariats || [],
                 secretariatMembers: data.secretariatMembers || [],
                 secretariatLeaders: data.secretariatLeaders || [],
@@ -2351,6 +2370,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 onClick={() =>
                   handlePersonClick(leader.name, {
                     explicitSecretariatId: leader.specializedSecretariatId,
+                    requireExplicitSecretariat: true,
                     personKey: leader.id || leader.name,
                     fallbackSecLeader: leader
                   })
@@ -2736,7 +2756,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
 
                 {(() => {
-                  const contribs = getPersonContributions(activePersonProfile.name, data);
+                  const contribs = getPersonContributions(activePersonProfile.name, data, activePersonProfile.secretariat.id);
                   if (contribs.length === 0) return null;
                   return (
                     <div className="pt-4 mt-2 border-t border-amber-200/70 space-y-2 text-right">
@@ -3323,6 +3343,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <img
                       src={initLeadImg || data.settings.officialLogo}
                       alt={init.title}
+                      loading="lazy"
+                      decoding="async"
                       className={`w-full h-full transition-transform duration-300 group-hover:scale-105 ${
                         initLeadImg ? 'object-cover' : 'object-contain p-6 bg-stone-50'
                       }`}
@@ -3792,6 +3814,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <img
                     src={item.coverImage || data.settings.officialLogo}
                     alt={item.title}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     referrerPolicy="no-referrer"
                   />
@@ -3961,6 +3985,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <img
                       src={leadEventImg}
                       alt={event.title}
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       referrerPolicy="no-referrer"
                     />
@@ -4056,6 +4082,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             <img
                               src={img}
                               alt={`${event.title} - صورة ${i + 1}`}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
                               referrerPolicy="no-referrer"
                             />
@@ -6093,7 +6121,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
 
             {(() => {
-              const contribs = getPersonContributions(selectedPersonFallback.name, data);
+              const contribs = getPersonContributions(
+                selectedPersonFallback.name,
+                data,
+                selectedPersonFallback.secretariatId ?? null
+              );
               return (
                 <div className="border-t border-stone-100 pt-4 space-y-2.5">
                   <h4 className="font-bold text-stone-800 text-xs sm:text-sm">

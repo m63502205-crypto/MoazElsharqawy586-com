@@ -1,8 +1,11 @@
 import { PublicPortalData } from '../types';
 
-export const OFFICIAL_SITE_URL = 'https://www.algabhaalwataniya-oct3.org';
-export const HOME_TITLE = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
-export const HOME_DESCRIPTION = 'الموقع الرسمي لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+export const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
+export const HOME_TITLE = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+export const HOME_DESCRIPTION =
+  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+export const HOME_KEYWORDS =
+  'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
 
 export interface ParsedRoute {
   view: string;
@@ -143,7 +146,7 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
   if (pathname === '/' || pathname === '/index.html' || pathname === '/home' || pathname === '/gallery') {
     return { view: 'home' };
   }
-  if (pathname === '/admin') {
+  if (pathname === '/admin' || pathname === '/login') {
     return { view: 'admin' };
   }
   if (
@@ -191,18 +194,43 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
   return { view: 'home' };
 }
 
+function resolveClientShareImage(rawImg: string | undefined, baseSiteUrl: string, fallback: string): string {
+  const candidate = (rawImg || '').trim();
+  if (!candidate) return fallback;
+  if (candidate.startsWith('http://') || candidate.startsWith('https://')) return candidate;
+  if (candidate.startsWith('/')) return `${baseSiteUrl}${candidate}`;
+  if (candidate.startsWith('data:')) return fallback;
+  return `${baseSiteUrl}/${candidate}`;
+}
+
 export function getPageSeoMeta(
   view: string,
   data: PublicPortalData | null,
   options?: { slug?: string; newsId?: string | null; eventId?: string | null; person?: string | null; activity?: number | null }
-): { title: string; description: string; canonicalUrl: string; robots: string } {
+): {
+  title: string;
+  description: string;
+  keywords: string;
+  siteName: string;
+  canonicalUrl: string;
+  ogImage: string;
+  ogType: string;
+  robots: string;
+} {
   const configuredUrl = (data?.settings?.officialSiteUrl || '').trim().replace(/\/+$/, '');
   const baseSiteUrl =
-    configuredUrl &&
-    configuredUrl !== 'https://nfp-october3.ai.studio' &&
-    configuredUrl !== 'https://algabhaalwataniya-oct3.org'
+    configuredUrl && (configuredUrl.startsWith('https://') || configuredUrl.startsWith('http://'))
       ? configuredUrl
       : OFFICIAL_SITE_URL;
+  const siteTitle = data?.settings?.seoTitle?.trim() || HOME_TITLE;
+  const siteDesc = data?.settings?.seoDescription?.trim() || HOME_DESCRIPTION;
+  const siteKeywords = data?.settings?.seoKeywords?.trim() || HOME_KEYWORDS;
+  const defaultShareImg = resolveClientShareImage(
+    data?.settings?.seoShareImage || data?.settings?.officialLogo,
+    baseSiteUrl,
+    `${baseSiteUrl}/og-logo.jpg`
+  );
+
   const path = getViewPath(view, options).split('?')[0];
   const canonicalUrl = `${baseSiteUrl}${path === '/#admin' ? '/' : path}`;
   const robots =
@@ -211,37 +239,62 @@ export function getPageSeoMeta(
       : 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
 
   if (view === 'home') {
-    return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${baseSiteUrl}/`, robots };
+    return {
+      title: siteTitle,
+      description: siteDesc,
+      keywords: siteKeywords,
+      siteName: siteTitle,
+      canonicalUrl: `${baseSiteUrl}/`,
+      ogImage: defaultShareImg,
+      ogType: 'website',
+      robots
+    };
   }
   if (view === 'about') {
     return {
-      title: 'عن الحزب والأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `عن الحزب والأمانة | ${siteTitle}`,
       description: 'تعرف على رؤية ورسالة ومبادئ حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورها المجتمعي والتنموي.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'party-leaders') {
     return {
-      title: 'القيادات | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `قيادات الحزب | ${siteTitle}`,
       description: 'تعرف على قيادات حزب الجبهة الوطنية وقيادات وهيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورهم في العمل الوطني والمجتمعي.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'secretariat-leaders') {
     return {
-      title: 'قيادات أمانة قسم ثالث أكتوبر | حزب الجبهة الوطنية',
+      title: `قيادات الأمانة | ${siteTitle}`,
       description: 'قيادات وهيئة مكتب أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'secretariats') {
     return {
-      title: 'الأمانات التخصصية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `الأمانات التخصصية | ${siteTitle}`,
       description: 'استعرض الأمانات التخصصية لحزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر بمحافظة الجيزة ومهامها وأمناءها.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
@@ -249,22 +302,31 @@ export function getPageSeoMeta(
     const sec = data?.specializedSecretariats?.find(
       s => s.slug === options?.slug || s.id === options?.slug
     );
+    const secImg = sec
+      ? resolveClientShareImage(sec.coverUrl || sec.logoUrl, baseSiteUrl, defaultShareImg)
+      : defaultShareImg;
     return {
-      title: sec
-        ? `${sec.name} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`
-        : 'الأمانات التخصصية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: sec ? `${sec.name} | ${siteTitle}` : `الأمانات التخصصية | ${siteTitle}`,
       description: sec?.description
-        ? `${sec.name} بحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر: ${sec.description.slice(0, 140)}`
-        : 'تفاصيل ومهام الأمانة التخصصية بحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.',
+        ? `${sec.name} – ${sec.description.slice(0, 140)}`
+        : 'تفاصيل ومهام الأمانة التخصصية بأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: secImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'initiatives') {
     return {
-      title: 'المبادرات المجتمعية والتنموية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `المبادرات المجتمعية والتنموية | ${siteTitle}`,
       description: 'تابع المبادرات الميدانية والتنموية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
@@ -277,21 +339,35 @@ export function getPageSeoMeta(
         ? init.activities?.[options.activity]
         : null;
     if (act && init) {
+      const actImg = resolveClientShareImage(
+        act.imageUrl || init.coverUrl || init.galleryImages?.[0] || init.logoUrl,
+        baseSiteUrl,
+        defaultShareImg
+      );
       return {
-        title: `${act.title || 'نشاط ميداني'} – ${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`,
-        description: (act.description || init.description || HOME_DESCRIPTION).slice(0, 160),
+        title: `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteTitle}`,
+        description: (act.description || init.description || siteDesc).slice(0, 160),
+        keywords: siteKeywords,
+        siteName: siteTitle,
         canonicalUrl: `${canonicalUrl}?activity=${options?.activity}`,
+        ogImage: actImg,
+        ogType: 'article',
         robots
       };
     }
+    const initImg = init
+      ? resolveClientShareImage(init.coverUrl || init.galleryImages?.[0] || init.logoUrl, baseSiteUrl, defaultShareImg)
+      : defaultShareImg;
     return {
-      title: init
-        ? `${init.title} | مبادرات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`
-        : 'المبادرات | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: init ? `${init.title} | ${siteTitle}` : `المبادرات | ${siteTitle}`,
       description: init?.description
         ? init.description.slice(0, 160)
         : 'تفاصيل وأنشطة المبادرة الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: initImg,
+      ogType: init ? 'article' : 'website',
       robots
     };
   }
@@ -300,17 +376,29 @@ export function getPageSeoMeta(
       ? data?.news?.find(n => n.id === options.newsId || (n as any).slug === options.newsId)
       : null;
     if (item) {
+      const newsRawImg = item.coverImage || item.galleryImages?.[0];
+      const newsImg = newsRawImg?.startsWith('data:')
+        ? `${baseSiteUrl}/api/news/${encodeURIComponent(item.id)}/image`
+        : resolveClientShareImage(newsRawImg, baseSiteUrl, defaultShareImg);
       return {
-        title: `${item.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`,
-        description: (item.excerpt || item.content || HOME_DESCRIPTION).slice(0, 160),
+        title: `${item.title} | ${siteTitle}`,
+        description: (item.excerpt || item.content || siteDesc).slice(0, 160),
+        keywords: siteKeywords,
+        siteName: siteTitle,
         canonicalUrl,
+        ogImage: newsImg,
+        ogType: 'article',
         robots
       };
     }
     return {
-      title: 'الأخبار والبيانات الرسمية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
-      description: 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لحزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة.',
+      title: `الأخبار والبيانات الرسمية | ${siteTitle}`,
+      description: 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
@@ -319,63 +407,105 @@ export function getPageSeoMeta(
       ? data?.events?.find(e => e.id === options.eventId || (e as any).slug === options.eventId)
       : null;
     if (ev) {
+      const evRawImg = ev.coverUrl || ev.coverImage || ev.images?.[0] || ev.galleryImages?.[0];
+      const evImg = evRawImg?.startsWith('data:')
+        ? `${baseSiteUrl}/api/events/${encodeURIComponent(ev.id)}/image`
+        : resolveClientShareImage(evRawImg, baseSiteUrl, defaultShareImg);
       return {
-        title: `${ev.title} | فعاليات حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`,
-        description: (ev.description || HOME_DESCRIPTION).slice(0, 160),
+        title: `${ev.title} | ${siteTitle}`,
+        description: (ev.description || siteDesc).slice(0, 160),
+        keywords: siteKeywords,
+        siteName: siteTitle,
         canonicalUrl,
+        ogImage: evImg,
+        ogType: 'article',
         robots
       };
     }
     return {
-      title: 'الفعاليات والأنشطة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `الفعاليات والأنشطة | ${siteTitle}`,
       description: 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'live') {
     return {
-      title: 'البث المباشر | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `البث المباشر | ${siteTitle}`,
       description: 'تابع البث المباشر لفعاليات ومؤتمرات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'join') {
     return {
-      title: 'طلب الانضمام والعضوية | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
+      title: `طلب العضوية والانضمام | ${siteTitle}`,
       description: 'التقديم الإلكتروني لعضوية حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة والاستعلام عن حالة الطلب.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'contact') {
     return {
-      title: 'تواصل معنا ومقر الأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
-      description: 'طرق التواصل المباشرة ومقر حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.',
+      title: `تواصل معنا ومقر الأمانة | ${siteTitle}`,
+      description: 'طرق التواصل المباشرة ومقر أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.',
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots
     };
   }
   if (view === 'cms-page') {
     const page = data?.pages?.find(p => p.slug === options?.slug);
+    const pageImg = page?.coverImage
+      ? resolveClientShareImage(page.coverImage, baseSiteUrl, defaultShareImg)
+      : defaultShareImg;
     return {
-      title: page?.title
-        ? `${page.title} | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر`
-        : HOME_TITLE,
-      description: page?.metaDescription || page?.subtitle || (page?.content || HOME_DESCRIPTION).slice(0, 160),
+      title: page?.title ? `${page.title} | ${siteTitle}` : siteTitle,
+      description: page?.metaDescription || page?.subtitle || (page?.content || siteDesc).slice(0, 160),
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl,
+      ogImage: pageImg,
+      ogType: 'article',
       robots
     };
   }
   if (view === 'admin') {
     return {
-      title: 'لوحة التحكم | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر',
-      description: HOME_DESCRIPTION,
+      title: `لوحة التحكم | ${siteTitle}`,
+      description: siteDesc,
+      keywords: siteKeywords,
+      siteName: siteTitle,
       canonicalUrl: `${baseSiteUrl}/`,
+      ogImage: defaultShareImg,
+      ogType: 'website',
       robots: 'noindex, nofollow'
     };
   }
 
-  return { title: HOME_TITLE, description: HOME_DESCRIPTION, canonicalUrl: `${baseSiteUrl}/`, robots };
+  return {
+    title: siteTitle,
+    description: siteDesc,
+    keywords: siteKeywords,
+    siteName: siteTitle,
+    canonicalUrl: `${baseSiteUrl}/`,
+    ogImage: defaultShareImg,
+    ogType: 'website',
+    robots
+  };
 }

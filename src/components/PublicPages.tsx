@@ -311,7 +311,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     data.settings.officialLogo
   ]);
 
-  // Keep hero <video> always playing and sync Web Audio / native fallback audio respecting heroDefaultMuted
+  const activeHeroSlide = heroSlides[heroSlideIndex] || heroSlides[0];
+  const activeHeroSlideType = activeHeroSlide?.type || '';
+  const activeHeroSlideUrl = activeHeroSlide?.url || '';
+
+  // Keep hero <video> always playing and sync Web Audio respecting heroDefaultMuted without tearing down on unrelated live updates
   useEffect(() => {
     clearBrowserMediaSession();
 
@@ -341,12 +345,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       vid.addEventListener('pause', ensureVideoPlaying);
     }
 
-    const activeSlide = heroSlides[heroSlideIndex];
-    const isVideoSlide = Boolean(activeSlide && activeSlide.type === 'video' && activeSlide.url);
+    const isVideoSlide = activeHeroSlideType === 'video' && Boolean(activeHeroSlideUrl);
 
     syncHeroAudioState({
       enabled: isVideoSlide && !effectiveHeroMuted,
-      videoUrl: activeSlide?.url || null,
+      videoUrl: activeHeroSlideUrl || null,
       getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
     });
 
@@ -374,9 +377,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
-      syncHeroAudioState({ enabled: false });
     };
-  }, [currentView, heroSlideIndex, heroSlides, effectiveHeroMuted]);
+  }, [currentView, heroSlideIndex, activeHeroSlideType, activeHeroSlideUrl, effectiveHeroMuted]);
+
+  useEffect(() => {
+    if (heroSlideIndex >= heroSlides.length && heroSlides.length > 0) {
+      setHeroSlideIndex(0);
+    }
+  }, [heroSlideIndex, heroSlides.length]);
 
   // Auto-flip effect every 5 seconds (only when more than 1 slide)
   useEffect(() => {
@@ -982,6 +990,17 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             e.currentTarget.muted = true;
                             e.currentTarget.defaultMuted = true;
                             e.currentTarget.volume = 0;
+                          }
+                        }}
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          const fallbackVid = '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
+                          if (!target.src.includes(fallbackVid)) {
+                            target.src = fallbackVid;
+                            target.muted = true;
+                            target.defaultMuted = true;
+                            target.volume = 0;
+                            target.play().catch(() => {});
                           }
                         }}
                         poster={data.settings.heroPosterUrl || '/assets/aistudio/hero-poster.jpg'}

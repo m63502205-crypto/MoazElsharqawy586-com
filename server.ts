@@ -57,12 +57,92 @@ const PORT =
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Static uploads directory
+// Static uploads directory + persistent asset backup vault
 const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-app.use('/uploads', express.static(uploadsDir));
+const uploadAssetsVaultPath = path.resolve(process.cwd(), 'data', 'uploads-assets.json');
+type StoredUploadAsset = { mime: string; base64: string; updatedAt: string };
+let uploadAssetsVaultCache: Record<string, StoredUploadAsset> | null = null;
+
+function loadUploadAssetsVault(): Record<string, StoredUploadAsset> {
+  if (uploadAssetsVaultCache) return uploadAssetsVaultCache;
+  try {
+    if (fs.existsSync(uploadAssetsVaultPath)) {
+      const parsed = JSON.parse(fs.readFileSync(uploadAssetsVaultPath, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        uploadAssetsVaultCache = parsed as Record<string, StoredUploadAsset>;
+        return uploadAssetsVaultCache;
+      }
+    }
+  } catch {
+    // ignore corrupt vault read
+  }
+  uploadAssetsVaultCache = {};
+  return uploadAssetsVaultCache;
+}
+
+function savePersistentUploadAsset(filename: string, mime: string, buffer: Buffer) {
+  if (!filename || !mime.startsWith('image/') || buffer.length === 0 || buffer.length > 2 * 1024 * 1024) {
+    return;
+  }
+  try {
+    const vault = loadUploadAssetsVault();
+    vault[filename] = {
+      mime,
+      base64: buffer.toString('base64'),
+      updatedAt: new Date().toISOString()
+    };
+    const tmpPath = `${uploadAssetsVaultPath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(vault), 'utf-8');
+    fs.renameSync(tmpPath, uploadAssetsVaultPath);
+  } catch (err) {
+    console.warn('Could not write persistent upload vault:', err);
+  }
+}
+
+function getPersistentUploadAsset(filename: string): StoredUploadAsset | null {
+  const safeName = path.basename(String(filename || '').trim());
+  if (!safeName || safeName.includes('..')) return null;
+  const vault = loadUploadAssetsVault();
+  return vault[safeName] || null;
+}
+
+app.use('/uploads', express.static(uploadsDir, { maxAge: '7d' }));
+app.use('/uploads', (req: Request, res: Response) => {
+  const safeName = path.basename(decodeURIComponent(req.path || '').split('?')[0].trim());
+  if (safeName && !safeName.includes('..')) {
+    const vaulted = getPersistentUploadAsset(safeName);
+    if (vaulted && vaulted.base64) {
+      try {
+        const buffer = Buffer.from(vaulted.base64, 'base64');
+        const restoredPath = path.join(uploadsDir, safeName);
+        if (!fs.existsSync(restoredPath)) {
+          fs.writeFileSync(restoredPath, buffer);
+        }
+        res.setHeader('Content-Type', vaulted.mime || 'image/jpeg');
+        res.setHeader('X-Robots-Tag', 'all');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(buffer);
+      } catch {
+        // fall through
+      }
+    }
+  }
+
+  if (/\.(jpe?g|png|webp|gif|avif)$/i.test(safeName)) {
+    const fallbackLogo = path.resolve(process.cwd(), 'public', 'assets', 'aistudio', 'FB_IMG_1793904484101_850eafaf.jpg');
+    const distLogo = path.resolve(process.cwd(), 'dist', 'assets', 'aistudio', 'FB_IMG_1793904484101_850eafaf.jpg');
+    const resolvedFallback = fs.existsSync(fallbackLogo) ? fallbackLogo : (fs.existsSync(distLogo) ? distLogo : null);
+    if (resolvedFallback) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.sendFile(resolvedFallback);
+    }
+  }
+  return res.status(404).end();
+});
 
 const publicAssetsDir = path.resolve(process.cwd(), 'public', 'assets');
 const heroAudioExtractionInFlight = new Map<string, Promise<string | null>>();
@@ -85,6 +165,24 @@ function resolveSafeLocalMediaFile(rawUrl?: string | null): string | null {
     return fs.existsSync(target) && fs.statSync(target).isFile() ? target : null;
   }
   return null;
+}
+
+function hasAvailableUploadFile(rawUrl?: string | null): boolean {
+  const clean = String(rawUrl || '').split('?')[0].trim();
+  if (!clean) return false;
+  if (!clean.startsWith('/uploads/')) return true;
+  if (resolveSafeLocalMediaFile(clean)) return true;
+  const rel = clean.slice('/uploads/'.length);
+  return Boolean(getPersistentUploadAsset(rel));
+}
+
+function sanitizeMediaUrlForRead(rawUrl?: string | null): string {
+  const val = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!val) return '';
+  if (val.startsWith('/uploads/') && !hasAvailableUploadFile(val)) {
+    return '';
+  }
+  return val;
 }
 
 async function ensureHeroAudioMp3(rawVideoUrl?: string | null): Promise<string | null> {
@@ -175,6 +273,33 @@ function getFirebaseTokenVerifier() {
 let lastLocalAdminMutationAt = 0;
 let lastFirestoreHydrateAt = 0;
 let firestoreHydrateInFlight: Promise<boolean> | null = null;
+
+// Real-time Server-Sent Events (SSE) clients for instant Frontend & Admin live sync
+const sseClients = new Set<Response>();
+let sseBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+let sseVersionCounter = 0;
+
+function broadcastServerDbUpdate(scope: 'public' | 'admin' | 'all' = 'all') {
+  if (sseClients.size === 0) return;
+  if (sseBroadcastTimer) clearTimeout(sseBroadcastTimer);
+  sseBroadcastTimer = setTimeout(() => {
+    sseBroadcastTimer = null;
+    sseVersionCounter += 1;
+    const payload = JSON.stringify({ scope, version: sseVersionCounter, ts: Date.now() });
+    const frame = `event: db-update\ndata: ${payload}\n\n`;
+    for (const client of sseClients) {
+      try {
+        client.write(frame);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }, 45);
+}
+
+db.setAfterSaveHook(() => {
+  broadcastServerDbUpdate('all');
+});
 
 function decodeFirestoreRestValue(val: any): any {
   if (!val || typeof val !== 'object') return undefined;
@@ -428,35 +553,72 @@ app.use('/api/admin', (req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Helper to persist base64 data URLs to disk in data/uploads
-export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): string {
-  if (!dataUrlOrUrl || typeof dataUrlOrUrl !== 'string') return dataUrlOrUrl;
-  if (!dataUrlOrUrl.startsWith('data:')) return dataUrlOrUrl;
+// Helper to persist base64 data URLs to disk in data/uploads (and persistent vault for images)
+export function persistDataUrlStrict(
+  dataUrlOrUrl: string,
+  prefix = 'media'
+): { ok: boolean; url: string; error?: string } {
+  if (!dataUrlOrUrl || typeof dataUrlOrUrl !== 'string') {
+    return { ok: true, url: '' };
+  }
+  const trimmed = dataUrlOrUrl.trim();
+  if (!trimmed.startsWith('data:')) {
+    return { ok: true, url: sanitizeMediaUrlForRead(trimmed) };
+  }
 
   try {
-    const match = dataUrlOrUrl.match(/^data:([a-zA-Z0-9/+-]+);base64,(.+)$/);
-    if (!match) return dataUrlOrUrl;
+    const match = trimmed.match(/^data:([a-zA-Z0-9.+_-]+\/[a-zA-Z0-9.+_-]+)(?:;[^,]*)?;base64,(.+)$/is);
+    if (!match) {
+      return { ok: false, url: '', error: 'صيغة الصورة أو الملف غير صالحة للرفع' };
+    }
 
-    const mime = match[1];
-    const base64Data = match[2];
+    const mime = match[1].toLowerCase();
+    const base64Data = match[2].replace(/\s+/g, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (!buffer || buffer.length === 0) {
+      return { ok: false, url: '', error: 'ملف الصورة فارغ أو تالف' };
+    }
+
     let ext = 'bin';
     if (mime.includes('jpeg') || mime.includes('jpg')) ext = 'jpg';
     else if (mime.includes('png')) ext = 'png';
     else if (mime.includes('webp')) ext = 'webp';
     else if (mime.includes('gif')) ext = 'gif';
-    else if (mime.includes('mp4')) ext = 'mp4';
+    else if (mime.includes('avif')) ext = 'avif';
+    else if (mime.includes('bmp')) ext = 'bmp';
+    else if (mime.includes('svg')) {
+      const svgText = buffer.toString('utf-8');
+      if (/<script\b/i.test(svgText)) {
+        return { ok: false, url: '', error: 'صيغة SVG غير مسموح باحتوائها على أكواد' };
+      }
+      ext = 'svg';
+    } else if (mime.includes('mp4')) ext = 'mp4';
     else if (mime.includes('webm')) ext = 'webm';
     else if (mime.includes('ogg')) ext = 'ogg';
     else if (mime.includes('quicktime')) ext = 'mov';
+    else if (mime.includes('mpeg') || mime.includes('mp3')) ext = 'mp3';
+    else if (!mime.startsWith('image/') && !mime.startsWith('video/') && !mime.startsWith('audio/')) {
+      return { ok: false, url: '', error: 'نوع الملف غير مدعوم؛ يرجى اختيار صورة أو فيديو' };
+    } else if (mime.startsWith('image/')) {
+      ext = 'jpg';
+    }
 
     const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
     const filePath = path.join(uploadsDir, filename);
-    fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-    return `/uploads/${filename}`;
+    fs.writeFileSync(filePath, buffer);
+    if (mime.startsWith('image/')) {
+      savePersistentUploadAsset(filename, mime, buffer);
+    }
+    return { ok: true, url: `/uploads/${filename}` };
   } catch (err) {
     console.error('Error persisting data URL to disk:', err);
-    return dataUrlOrUrl;
+    return { ok: false, url: '', error: 'تعذر حفظ الملف المرفوع على الخادم' };
   }
+}
+
+export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): string {
+  const res = persistDataUrlStrict(dataUrlOrUrl, prefix);
+  return res.ok ? res.url : '';
 }
 
 // Persistent session signing secret + in-memory cache (survives server restarts & Cloud Run recycles)
@@ -714,10 +876,13 @@ function buildSitemapItems(data: ReturnType<typeof db.get>, siteUrl: string): Si
   const toAbsoluteAssetUrl = (raw?: string): string | null => {
     const val = (raw || '').trim();
     if (!val || val.startsWith('data:')) return null;
+    if (val.startsWith('/uploads/') && !hasAvailableUploadFile(val)) return null;
     if (val.startsWith('http://') || val.startsWith('https://')) return val;
     if (val.startsWith('/')) return `${siteUrl}${val}`;
     return `${siteUrl}/${val}`;
   };
+
+  const siteLastmod = toSitemapLastmod(data.settings?.updatedAt);
 
   const mediaImages: SitemapImage[] = (data.media || [])
     .filter(m => m.isVisible && m.type === 'photo')
@@ -730,19 +895,37 @@ function buildSitemapItems(data: ReturnType<typeof db.get>, siteUrl: string): Si
     }, [])
     .slice(0, 30);
 
+  const partyLeaderImages: SitemapImage[] = (data.partyLeaders || [])
+    .filter(l => l.isVisible)
+    .reduce<SitemapImage[]>((acc, l) => {
+      const loc = toAbsoluteAssetUrl(l.photoUrl);
+      if (loc) acc.push({ loc, title: l.name });
+      return acc;
+    }, [])
+    .slice(0, 20);
+
+  const secLeaderImages: SitemapImage[] = (data.secretariatLeaders || [])
+    .filter(l => l.isVisible)
+    .reduce<SitemapImage[]>((acc, l) => {
+      const loc = toAbsoluteAssetUrl(l.photoUrl);
+      if (loc) acc.push({ loc, title: l.name });
+      return acc;
+    }, [])
+    .slice(0, 20);
+
   const staticPages: SitemapEntry[] = [
-    { path: '', title: 'الصفحة الرئيسية – الموقع الرسمي', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '1.0', images: mediaImages },
-    { path: 'about', title: 'عن الحزب والأمانة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
-    { path: 'party-leaders', title: 'قيادات حزب الجبهة الوطنية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.85' },
-    { path: 'secretariat-leaders', title: 'قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
-    { path: 'secretariats', title: 'الأمانات التخصصية والنوعية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.95' },
-    { path: 'initiatives', title: 'المبادرات المجتمعية والتنموية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
-    { path: 'news', title: 'أخبار وبيانات الأمانة', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.95' },
-    { path: 'events', title: 'الفعاليات والأنشطة الميدانية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
-    { path: 'live', title: 'البث المباشر للفعاليات', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.85' },
-    { path: 'join', title: 'استمارة طلب العضوية والانضمام', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.9' },
-    { path: 'contact', title: 'تواصل معنا ومقر الأمانة', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.85' },
-    { path: 'sitemap', title: 'خريطة الموقع الكاملة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.8' }
+    { path: '', title: 'الصفحة الرئيسية – الموقع الرسمي', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '1.0', lastmod: siteLastmod, images: mediaImages },
+    { path: 'about', title: 'عن الحزب والأمانة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9', lastmod: siteLastmod },
+    { path: 'party-leaders', title: 'قيادات حزب الجبهة الوطنية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.85', lastmod: siteLastmod, images: partyLeaderImages },
+    { path: 'secretariat-leaders', title: 'قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9', lastmod: siteLastmod, images: secLeaderImages },
+    { path: 'secretariats', title: 'الأمانات التخصصية والنوعية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.95', lastmod: siteLastmod },
+    { path: 'initiatives', title: 'المبادرات المجتمعية والتنموية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9', lastmod: siteLastmod },
+    { path: 'news', title: 'أخبار وبيانات الأمانة', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.95', lastmod: siteLastmod },
+    { path: 'events', title: 'الفعاليات والأنشطة الميدانية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9', lastmod: siteLastmod },
+    { path: 'live', title: 'البث المباشر للفعاليات', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.85', lastmod: siteLastmod },
+    { path: 'join', title: 'استمارة طلب العضوية والانضمام', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.9', lastmod: siteLastmod },
+    { path: 'contact', title: 'تواصل معنا ومقر الأمانة', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.85', lastmod: siteLastmod },
+    { path: 'sitemap', title: 'خريطة الموقع الكاملة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.8', lastmod: siteLastmod }
   ];
 
   const secretariatPages: SitemapEntry[] = (data.specializedSecretariats || [])
@@ -1738,175 +1921,125 @@ function buildPublicPortalPayload(
     rawHeroVideoUrl.startsWith('/uploads/') && !resolveSafeLocalMediaFile(rawHeroVideoUrl)
       ? '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
       : rawSettingsInput.heroVideoUrl;
-  const rawSettings = {
-    ...rawSettingsInput,
-    heroVideoUrl: resolvedHeroVideoUrl
+  const cleanField = (val: string | undefined, collection: string, id: string, field: string): string => {
+    const cleaned = sanitizeMediaUrlForRead(val);
+    if (!cleaned) return '';
+    return ext ? (toInlineAssetUrl(cleaned, collection, id, field) || '') : cleaned;
   };
-  const settings = ext
-    ? {
-        ...rawSettings,
-        officialLogo: toInlineAssetUrl(rawSettings.officialLogo, 'settings', 'main', 'officialLogo'),
-        seoShareImage: toInlineAssetUrl(rawSettings.seoShareImage, 'settings', 'main', 'seoShareImage'),
-        heroPosterUrl: toInlineAssetUrl(rawSettings.heroPosterUrl, 'settings', 'main', 'heroPosterUrl'),
-        entranceImageUrl: toInlineAssetUrl(rawSettings.entranceImageUrl, 'settings', 'main', 'entranceImageUrl'),
-        heroImages: Array.isArray(rawSettings.heroImages)
-          ? rawSettings.heroImages.map((img: string, idx: number) =>
-              toInlineAssetUrl(img, 'settings', 'main', `heroImages_${idx}`)
-            )
-          : rawSettings.heroImages,
-        heroSlides: Array.isArray(rawSettings.heroSlides)
-          ? rawSettings.heroSlides.map((slide: any, idx: number) => ({
-              ...slide,
-              url: toInlineAssetUrl(slide?.url, 'settings', 'main', `heroSlides_${idx}_url`),
-              posterUrl: toInlineAssetUrl(slide?.posterUrl, 'settings', 'main', `heroSlides_${idx}_posterUrl`)
-            }))
-          : rawSettings.heroSlides
-      }
-    : rawSettings;
+  const cleanList = (arr: any, collection: string, id: string, prefix: string): any =>
+    Array.isArray(arr)
+      ? arr
+          .map((img: string, idx: number) => cleanField(img, collection, id, `${prefix}_${idx}`))
+          .filter(Boolean)
+      : arr;
+
+  const settings = {
+    ...rawSettingsInput,
+    heroVideoUrl: resolvedHeroVideoUrl,
+    officialLogo: cleanField(rawSettingsInput.officialLogo, 'settings', 'main', 'officialLogo') || rawSettingsInput.officialLogo,
+    seoShareImage: cleanField(rawSettingsInput.seoShareImage, 'settings', 'main', 'seoShareImage'),
+    heroPosterUrl: cleanField(rawSettingsInput.heroPosterUrl, 'settings', 'main', 'heroPosterUrl'),
+    entranceImageUrl: cleanField(rawSettingsInput.entranceImageUrl, 'settings', 'main', 'entranceImageUrl'),
+    heroImages: cleanList(rawSettingsInput.heroImages, 'settings', 'main', 'heroImages'),
+    heroSlides: Array.isArray(rawSettingsInput.heroSlides)
+      ? rawSettingsInput.heroSlides.map((slide: any, idx: number) => ({
+          ...slide,
+          url: cleanField(slide?.url, 'settings', 'main', `heroSlides_${idx}_url`),
+          posterUrl: cleanField(slide?.posterUrl, 'settings', 'main', `heroSlides_${idx}_posterUrl`)
+        }))
+      : rawSettingsInput.heroSlides
+  };
 
   const partyLeaders = (data.partyLeaders || [])
     .filter(l => l.isVisible)
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(l =>
-      ext ? { ...l, photoUrl: toInlineAssetUrl(l.photoUrl, 'partyLeaders', l.id, 'photoUrl') || '' } : l
-    );
+    .map(l => ({
+      ...l,
+      photoUrl: cleanField(l.photoUrl, 'partyLeaders', l.id, 'photoUrl')
+    }));
 
   const secretariatLeaders = (data.secretariatLeaders || [])
     .filter(l => l.isVisible)
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(l =>
-      ext ? { ...l, photoUrl: toInlineAssetUrl(l.photoUrl, 'secretariatLeaders', l.id, 'photoUrl') || '' } : l
-    );
+    .map(l => ({
+      ...l,
+      photoUrl: cleanField(l.photoUrl, 'secretariatLeaders', l.id, 'photoUrl')
+    }));
 
   const specializedSecretariats = (data.specializedSecretariats || [])
     .filter(s => s.isActive)
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(s =>
-      ext
-        ? {
-            ...s,
-            logoUrl: toInlineAssetUrl(s.logoUrl, 'specializedSecretariats', s.id, 'logoUrl'),
-            coverUrl: toInlineAssetUrl(s.coverUrl, 'specializedSecretariats', s.id, 'coverUrl'),
-            secretaryPhotoUrl: toInlineAssetUrl(s.secretaryPhotoUrl, 'specializedSecretariats', s.id, 'secretaryPhotoUrl'),
-            assistantSecretaryPhotoUrl: toInlineAssetUrl(
-              s.assistantSecretaryPhotoUrl,
-              'specializedSecretariats',
-              s.id,
-              'assistantSecretaryPhotoUrl'
-            ),
-            assistantSecretaries: Array.isArray(s.assistantSecretaries)
-              ? s.assistantSecretaries.map((asst, idx) => ({
-                  ...asst,
-                  photoUrl: toInlineAssetUrl(
-                    asst.photoUrl,
-                    'specializedSecretariats',
-                    s.id,
-                    `assistantSecretaries_${idx}_photoUrl`
-                  )
-                }))
-              : s.assistantSecretaries,
-            galleryImages: Array.isArray(s.galleryImages)
-              ? s.galleryImages.map((img, idx) =>
-                  toInlineAssetUrl(img, 'specializedSecretariats', s.id, `galleryImages_${idx}`) || ''
-                )
-              : s.galleryImages
-          }
-        : s
-    );
+    .map(s => ({
+      ...s,
+      logoUrl: cleanField(s.logoUrl, 'specializedSecretariats', s.id, 'logoUrl'),
+      coverUrl: cleanField(s.coverUrl, 'specializedSecretariats', s.id, 'coverUrl'),
+      secretaryPhotoUrl: cleanField(s.secretaryPhotoUrl, 'specializedSecretariats', s.id, 'secretaryPhotoUrl'),
+      assistantSecretaryPhotoUrl: cleanField(s.assistantSecretaryPhotoUrl, 'specializedSecretariats', s.id, 'assistantSecretaryPhotoUrl'),
+      assistantSecretaries: Array.isArray(s.assistantSecretaries)
+        ? s.assistantSecretaries.map((asst, idx) => ({
+            ...asst,
+            photoUrl: cleanField(asst.photoUrl, 'specializedSecretariats', s.id, `assistantSecretaries_${idx}_photoUrl`)
+          }))
+        : s.assistantSecretaries,
+      galleryImages: cleanList(s.galleryImages, 'specializedSecretariats', s.id, 'galleryImages')
+    }));
 
-  const secretariatMembers = (data.secretariatMembers || []).map(m =>
-    ext ? { ...m, photoUrl: toInlineAssetUrl(m.photoUrl, 'secretariatMembers', m.id, 'photoUrl') } : m
-  );
+  const secretariatMembers = (data.secretariatMembers || []).map(m => ({
+    ...m,
+    photoUrl: cleanField(m.photoUrl, 'secretariatMembers', m.id, 'photoUrl')
+  }));
 
   const initiatives = (data.initiatives || [])
     .filter(i => i.isVisible)
-    .map(i =>
-      ext
-        ? {
-            ...i,
-            logoUrl: toInlineAssetUrl(i.logoUrl, 'initiatives', i.id, 'logoUrl'),
-            coverUrl: toInlineAssetUrl(i.coverUrl, 'initiatives', i.id, 'coverUrl'),
-            galleryImages: Array.isArray(i.galleryImages)
-              ? i.galleryImages.map((img, idx) =>
-                  toInlineAssetUrl(img, 'initiatives', i.id, `galleryImages_${idx}`) || ''
-                )
-              : i.galleryImages,
-            activities: Array.isArray(i.activities)
-              ? i.activities.map((act, idx) => ({
-                  ...act,
-                  imageUrl: toInlineAssetUrl(act.imageUrl, 'initiatives', i.id, `activities_${idx}_imageUrl`)
-                }))
-              : i.activities
-          }
-        : i
-    );
+    .map(i => ({
+      ...i,
+      logoUrl: cleanField(i.logoUrl, 'initiatives', i.id, 'logoUrl'),
+      coverUrl: cleanField(i.coverUrl, 'initiatives', i.id, 'coverUrl'),
+      galleryImages: cleanList(i.galleryImages, 'initiatives', i.id, 'galleryImages'),
+      activities: Array.isArray(i.activities)
+        ? i.activities.map((act, idx) => ({
+            ...act,
+            imageUrl: cleanField(act.imageUrl, 'initiatives', i.id, `activities_${idx}_imageUrl`)
+          }))
+        : i.activities
+    }));
 
   const news = (data.news || [])
     .filter(n => !n.isDraft)
     .sort((a, b) => new Date(b.publishDate).getTime() - new Date(a.publishDate).getTime())
-    .map(n =>
-      ext
-        ? {
-            ...n,
-            coverImage: toInlineAssetUrl(n.coverImage, 'news', n.id, 'coverImage'),
-            galleryImages: Array.isArray(n.galleryImages)
-              ? n.galleryImages.map((img, idx) =>
-                  toInlineAssetUrl(img, 'news', n.id, `galleryImages_${idx}`) || ''
-                )
-              : n.galleryImages
-          }
-        : n
-    );
+    .map(n => ({
+      ...n,
+      coverImage: cleanField(n.coverImage, 'news', n.id, 'coverImage'),
+      galleryImages: cleanList(n.galleryImages, 'news', n.id, 'galleryImages')
+    }));
 
   const events = (data.events || [])
     .filter(e => e.isVisible)
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())
-    .map(e =>
-      ext
-        ? {
-            ...e,
-            coverUrl: toInlineAssetUrl(e.coverUrl, 'events', e.id, 'coverUrl'),
-            coverImage: toInlineAssetUrl(e.coverImage, 'events', e.id, 'coverImage'),
-            images: Array.isArray(e.images)
-              ? e.images.map((img, idx) => toInlineAssetUrl(img, 'events', e.id, `images_${idx}`) || '')
-              : e.images,
-            galleryImages: Array.isArray(e.galleryImages)
-              ? e.galleryImages.map((img, idx) =>
-                  toInlineAssetUrl(img, 'events', e.id, `galleryImages_${idx}`) || ''
-                )
-              : e.galleryImages
-          }
-        : e
-    );
+    .map(e => ({
+      ...e,
+      coverUrl: cleanField(e.coverUrl, 'events', e.id, 'coverUrl'),
+      coverImage: cleanField(e.coverImage, 'events', e.id, 'coverImage'),
+      images: cleanList(e.images, 'events', e.id, 'images'),
+      galleryImages: cleanList(e.galleryImages, 'events', e.id, 'galleryImages')
+    }));
 
   const media = (data.media || [])
     .filter(m => m.isVisible)
     .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(m =>
-      ext
-        ? {
-            ...m,
-            url: toInlineAssetUrl(m.url, 'media', m.id, 'url') || m.url,
-            thumbnail: toInlineAssetUrl(m.thumbnail, 'media', m.id, 'thumbnail')
-          }
-        : m
-    );
+    .map(m => ({
+      ...m,
+      url: cleanField(m.url, 'media', m.id, 'url') || m.url,
+      thumbnail: cleanField(m.thumbnail, 'media', m.id, 'thumbnail')
+    }));
 
   const pages = (data.pages || [])
     .filter(p => p.isPublished)
-    .map(p =>
-      ext
-        ? {
-            ...p,
-            coverImage: toInlineAssetUrl(p.coverImage, 'pages', p.id, 'coverImage'),
-            galleryImages: Array.isArray(p.galleryImages)
-              ? p.galleryImages.map((img, idx) =>
-                  toInlineAssetUrl(img, 'pages', p.id, `galleryImages_${idx}`) || ''
-                )
-              : p.galleryImages
-          }
-        : p
-    );
+    .map(p => ({
+      ...p,
+      coverImage: cleanField(p.coverImage, 'pages', p.id, 'coverImage'),
+      galleryImages: cleanList(p.galleryImages, 'pages', p.id, 'galleryImages')
+    }));
 
   return {
     settings,
@@ -2141,13 +2274,51 @@ app.get('/api/public/firestore-asset/:assetId', async (req: Request, res: Respon
 // Extracted lightweight MP3 track for custom hero videos (prevents mobile OS lockscreen media bars)
 app.get('/api/public/hero-audio', async (req: Request, res: Response) => {
   const src = typeof req.query?.src === 'string' ? req.query.src : '';
-  const mp3Path = await ensureHeroAudioMp3(src);
+  let mp3Path = await ensureHeroAudioMp3(src);
+  if (!mp3Path || !fs.existsSync(mp3Path)) {
+    const cleanSrc = src.split('?')[0].trim();
+    if (!cleanSrc || cleanSrc.startsWith('/uploads/')) {
+      const bundledFallback = path.resolve(publicAssetsDir, 'aistudio', 'hero-audio.mp3');
+      if (fs.existsSync(bundledFallback)) {
+        mp3Path = bundledFallback;
+      }
+    }
+  }
   if (!mp3Path || !fs.existsSync(mp3Path)) {
     return res.status(404).json({ error: 'Audio track not available' });
   }
   res.setHeader('Content-Type', 'audio/mpeg');
   res.setHeader('Cache-Control', 'public, max-age=86400');
   return res.sendFile(mp3Path);
+});
+
+// Real-time SSE stream notifying public & admin views instantly on any DB mutation
+app.get('/api/public/stream', (req: Request, res: Response) => {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  res.write(`event: connected\ndata: ${JSON.stringify({ version: sseVersionCounter, ts: Date.now() })}\n\n`);
+  sseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
 });
 
 // 1. Get all public portal data
@@ -2249,7 +2420,7 @@ app.post('/api/public/analytics/track', (req: Request, res: Response) => {
     data.analytics.sources[sourceLabel] = (data.analytics.sources[sourceLabel] || 0) + 1;
     data.analytics.updatedAt = now.toISOString();
 
-    db.save();
+    db.save(undefined, { skipBroadcast: true });
     return res.json({ success: true });
   } catch {
     return res.json({ success: false });
@@ -2910,15 +3081,61 @@ app.get('/api/admin/analytics', authenticateAdmin, (req: Request, res: Response)
   });
 });
 
-// Full DB for admin
+// Full DB for admin (sanitizes dead legacy /uploads/ paths without altering on-disk user records)
 app.get('/api/admin/full-db', authenticateAdmin, async (_req: Request, res: Response) => {
   await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
   const data = db.get();
   const safeAdmins = data.admins.map(({ passwordHash, ...rest }) => rest);
-  const sortedSecretariats = [...(data.specializedSecretariats || [])].sort((a, b) => a.sortOrder - b.sortOrder);
+  const sortedSecretariats = [...(data.specializedSecretariats || [])]
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(s => ({
+      ...s,
+      logoUrl: sanitizeMediaUrlForRead(s.logoUrl),
+      coverUrl: sanitizeMediaUrlForRead(s.coverUrl),
+      secretaryPhotoUrl: sanitizeMediaUrlForRead(s.secretaryPhotoUrl),
+      assistantSecretaryPhotoUrl: sanitizeMediaUrlForRead(s.assistantSecretaryPhotoUrl),
+      assistantSecretaries: Array.isArray(s.assistantSecretaries)
+        ? s.assistantSecretaries.map(a => ({ ...a, photoUrl: sanitizeMediaUrlForRead(a.photoUrl) }))
+        : s.assistantSecretaries,
+      galleryImages: Array.isArray(s.galleryImages)
+        ? s.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean)
+        : s.galleryImages
+    }));
   res.json({
     ...data,
+    partyLeaders: (data.partyLeaders || []).map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) })),
+    secretariatLeaders: (data.secretariatLeaders || []).map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) })),
     specializedSecretariats: sortedSecretariats,
+    secretariatMembers: (data.secretariatMembers || []).map(m => ({ ...m, photoUrl: sanitizeMediaUrlForRead(m.photoUrl) })),
+    initiatives: (data.initiatives || []).map(i => ({
+      ...i,
+      logoUrl: sanitizeMediaUrlForRead(i.logoUrl),
+      coverUrl: sanitizeMediaUrlForRead(i.coverUrl),
+      galleryImages: Array.isArray(i.galleryImages) ? i.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : i.galleryImages,
+      activities: Array.isArray(i.activities) ? i.activities.map(a => ({ ...a, imageUrl: sanitizeMediaUrlForRead(a.imageUrl) })) : i.activities
+    })),
+    news: (data.news || []).map(n => ({
+      ...n,
+      coverImage: sanitizeMediaUrlForRead(n.coverImage),
+      galleryImages: Array.isArray(n.galleryImages) ? n.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : n.galleryImages
+    })),
+    events: (data.events || []).map(e => ({
+      ...e,
+      coverUrl: sanitizeMediaUrlForRead(e.coverUrl),
+      coverImage: sanitizeMediaUrlForRead(e.coverImage),
+      images: Array.isArray(e.images) ? e.images.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.images,
+      galleryImages: Array.isArray(e.galleryImages) ? e.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.galleryImages
+    })),
+    media: (data.media || []).map(m => ({
+      ...m,
+      url: sanitizeMediaUrlForRead(m.url) || m.url,
+      thumbnail: sanitizeMediaUrlForRead(m.thumbnail)
+    })),
+    pages: (data.pages || []).map(p => ({
+      ...p,
+      coverImage: sanitizeMediaUrlForRead(p.coverImage),
+      galleryImages: Array.isArray(p.galleryImages) ? p.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : p.galleryImages
+    })),
     admins: safeAdmins,
     subscribers: data.subscribers || [],
     emailDispatchLogs: data.emailDispatchLogs || [],
@@ -4592,15 +4809,18 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
 
 // Upload API
 app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) => {
-  const { data: fileData } = req.body;
-  if (!fileData) {
-    return res.status(400).json({ error: 'لم يتم إرسال أي ملف' });
+  const { data: fileData } = req.body || {};
+  if (!fileData || typeof fileData !== 'string') {
+    return res.status(400).json({ error: 'لم يتم إرسال أي ملف صالح للرفع' });
   }
-  const url = persistDataUrlIfAny(fileData, 'upload');
-  if (typeof url === 'string' && /\.(mp4|webm|mov|ogg)$/i.test(url)) {
-    void ensureHeroAudioMp3(url);
+  const result = persistDataUrlStrict(fileData, 'upload');
+  if (!result.ok || !result.url) {
+    return res.status(400).json({ error: result.error || 'تعذر حفظ الملف المرفوع؛ تأكد من صحة صيغة الصورة' });
   }
-  res.json({ success: true, url });
+  if (/\.(mp4|webm|mov|ogg)$/i.test(result.url)) {
+    void ensureHeroAudioMp3(result.url);
+  }
+  res.json({ success: true, url: result.url });
 });
 
 // --- SETTINGS MANAGEMENT ---

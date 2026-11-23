@@ -44,6 +44,22 @@ export function clearBrowserMediaSession(): void {
     try {
       navigator.mediaSession.metadata = null;
       navigator.mediaSession.playbackState = 'none';
+      const actions: Array<'play' | 'pause' | 'seekbackward' | 'seekforward' | 'previoustrack' | 'nexttrack' | 'stop'> = [
+        'play',
+        'pause',
+        'seekbackward',
+        'seekforward',
+        'previoustrack',
+        'nexttrack',
+        'stop'
+      ];
+      for (const act of actions) {
+        try {
+          navigator.mediaSession.setActionHandler(act, null);
+        } catch {
+          // ignore unsupported action handler
+        }
+      }
     } catch {
       // Ignore browser MediaSession restrictions
     }
@@ -96,9 +112,6 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
   if (decodedBuffers.has(url)) {
     return decodedBuffers.get(url) || null;
   }
-  if (failedDecodeUrls.has(url)) {
-    return null;
-  }
   if (pendingFetches.has(url)) {
     return pendingFetches.get(url)!;
   }
@@ -121,9 +134,17 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
       pendingFetches.delete(url);
       return decoded;
     })
-    .catch(() => {
-      failedDecodeUrls.add(url);
+    .catch(async () => {
       pendingFetches.delete(url);
+      if (url !== DEFAULT_HERO_AUDIO_URL) {
+        const fallback = await fetchAndDecodeAudio(DEFAULT_HERO_AUDIO_URL);
+        if (fallback) {
+          decodedBuffers.set(url, fallback);
+          failedDecodeUrls.delete(url);
+          return fallback;
+        }
+      }
+      failedDecodeUrls.add(url);
       return null;
     });
 
@@ -339,14 +360,30 @@ export function syncHeroAudioState(options: {
   initHeroAudioEarly();
   clearBrowserMediaSession();
 
-  desiredEnabled = options.enabled;
-  desiredAudioUrl = options.enabled && options.videoUrl ? resolveHeroAudioUrl(options.videoUrl) : null;
+  const nextEnabled = options.enabled;
+  const nextAudioUrl = nextEnabled && options.videoUrl ? resolveHeroAudioUrl(options.videoUrl) : null;
   videoTimeProvider = options.getCurrentVideoTime || null;
 
-  if (!desiredEnabled || !desiredAudioUrl) {
+  if (!nextEnabled || !nextAudioUrl) {
+    desiredEnabled = false;
+    desiredAudioUrl = null;
     stopCurrentSource();
     return;
   }
+
+  // Avoid stuttering/restarting when live Firebase updates re-sync the exact same unmuted hero video
+  if (
+    desiredEnabled &&
+    desiredAudioUrl === nextAudioUrl &&
+    currentPlayingUrl === nextAudioUrl &&
+    currentSource &&
+    audioCtx?.state === 'running'
+  ) {
+    return;
+  }
+
+  desiredEnabled = true;
+  desiredAudioUrl = nextAudioUrl;
 
   const targetUrl = desiredAudioUrl;
   fetchAndDecodeAudio(targetUrl).then((buf) => {

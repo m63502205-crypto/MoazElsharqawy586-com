@@ -1462,10 +1462,15 @@ function getInitialDatabase(): AppDatabase {
 
 class DatabaseManager {
   private data: AppDatabase;
+  private afterSaveHook: (() => void) | null = null;
 
   constructor() {
     this.ensureDirectory();
     this.data = this.load();
+  }
+
+  public setAfterSaveHook(hook: () => void): void {
+    this.afterSaveHook = hook;
   }
 
   private ensureDirectory() {
@@ -2011,7 +2016,7 @@ class DatabaseManager {
     return changed;
   }
 
-  public save(dataToSave?: AppDatabase): void {
+  public save(dataToSave?: AppDatabase, options?: { skipBroadcast?: boolean }): void {
     if (dataToSave) {
       this.data = dataToSave;
     }
@@ -2028,6 +2033,13 @@ class DatabaseManager {
         }
       }
       fs.renameSync(tempPath, DB_FILE);
+      if (!options?.skipBroadcast && this.afterSaveHook) {
+        try {
+          this.afterSaveHook();
+        } catch {
+          // ignore hook error
+        }
+      }
     } catch (err) {
       console.error('Error saving database atomically:', err);
     }

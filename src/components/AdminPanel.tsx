@@ -85,7 +85,11 @@ import {
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { readAndCompressImageFile } from '../utils/imageCompression';
-import { reconcileAdminFirestore } from '../utils/firestoreSync';
+import {
+  reconcileAdminFirestore,
+  subscribeAdminFirestoreChanges,
+  subscribeLiveSyncBus
+} from '../utils/firestoreSync';
 
 const MEMBERSHIP_FORM_FIELDS = [
   { key: 'fullName', label: 'الاسم الرباعي كاملاً' },
@@ -309,9 +313,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     onRefreshPublicData();
   };
 
-  // Load all DB data on login or refresh
-  const loadAdminData = async () => {
+  const activeTabRef = React.useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  // Load all DB data on login, explicit refresh, or live silent sync
+  const loadAdminData = async (options?: { silent?: boolean }) => {
     if (!user) return;
+    const isSilent = Boolean(options?.silent);
     try {
       const full = await api.getFullDatabase();
       setPartyLeaders(full.partyLeaders || []);
@@ -329,12 +339,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       setRoles(full.roles || []);
       setAdminUsers(full.admins || []);
       setAuditLogs(full.auditLogs || []);
-      setSettings(full.settings || null);
+      if (!isSilent || activeTabRef.current !== 'settings') {
+        setSettings(full.settings || null);
+      }
 
       const st = await api.getAdminStats();
       setStats(st);
 
-      if (firebaseReady) {
+      if (!isSilent && firebaseReady) {
         reconcileAdminFirestore(full)
           .then(didSync => {
             if (didSync) onRefreshPublicData();
@@ -342,7 +354,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
           .catch(() => undefined);
       }
     } catch (err) {
-      console.error('Error fetching admin data:', err);
+      if (!isSilent) {
+        console.error('Error fetching admin data:', err);
+      }
     }
   };
 
@@ -399,9 +413,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   }, [user, activeTab]);
 
   useEffect(() => {
-    if (user) {
-      loadAdminData();
+    if (!user) return;
+    loadAdminData();
+
+    let silentTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSilentSync = () => {
+      if (silentTimer) clearTimeout(silentTimer);
+      silentTimer = setTimeout(() => {
+        void loadAdminData({ silent: true });
+      }, 220);
+    };
+
+    const unsubFirestore = subscribeAdminFirestoreChanges(firebaseReady, () => {
+      scheduleSilentSync();
+      onRefreshPublicData();
+    });
+
+    const unsubBus = subscribeLiveSyncBus(() => {
+      scheduleSilentSync();
+    });
+
+    let eventSource: EventSource | null = null;
+    if (typeof window !== 'undefined' && 'EventSource' in window) {
+      try {
+        eventSource = new EventSource('/api/public/stream');
+        eventSource.addEventListener('db-update', () => {
+          scheduleSilentSync();
+        });
+      } catch {
+        eventSource = null;
+      }
     }
+
+    return () => {
+      if (silentTimer) clearTimeout(silentTimer);
+      unsubFirestore();
+      unsubBus();
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
   }, [user, firebaseReady]);
 
   useEffect(() => {

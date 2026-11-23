@@ -1,12 +1,11 @@
 {
-  "projectId": "burnished-groove-wc70r",
-  "appId": "1:165529819651:web:976aa74d90f31684878c36",
-  "apiKey": "AIzaSyApx63rCciPXiquk4fR6eSkZcD2OcCYHLU",
-  "authDomain": "burnished-groove-wc70r.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-moazelsharqawy58-91112c19-add5-4f76-950f-25eb98091d75",
-  "storageBucket": "burnished-groove-wc70r.firebasestorage.app",
-  "messagingSenderId": "165529819651",
+  "projectId": "gen-lang-client-0502248911",
+  "appId": "1:747833112131:web:6a70c7c255b2428f7146f6",
+  "apiKey": "AIzaSyD4dQUhvSvsmFlitIbc2yq1ZGrP_lVzQ-g",
+  "authDomain": "gen-lang-client-0502248911.firebaseapp.com",
+  "storageBucket": "gen-lang-client-0502248911.firebasestorage.app",
+  "messagingSenderId": "747833112131",
   "measurementId": "",
-  "oAuthClientId": "165529819651-n8982apk6f4gql38ibcfeo1vrfk2702l.apps.googleusercontent.com",
+  "oAuthClientId": "747833112131-sk5c7fqijk7lukj3pgf2mr9fjejofoei.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

@@ -14,6 +14,109 @@ import { signInWithPopup, signOut } from 'firebase/auth';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../firebase';
 import { LiveStream, PublicPortalData, SiteSettings } from '../types';
 
+const DEFAULT_BUNDLED_HERO_VIDEO = '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
+const LIVE_SYNC_CHANNEL = 'nfp_live_sync_bus';
+const LIVE_SYNC_STORAGE_KEY = 'nfp_live_sync_ping';
+
+export type LiveSyncScope = 'public' | 'admin' | 'all';
+
+export interface LiveSyncSignal {
+  scope: LiveSyncScope;
+  entity?: string;
+  ts: number;
+  origin?: string;
+}
+
+const INSTANCE_ORIGIN_ID =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+const inProcessSyncListeners = new Set<(signal: LiveSyncSignal) => void>();
+
+export function broadcastLiveSyncEvent(scope: LiveSyncScope = 'all', entity?: string): void {
+  const signal: LiveSyncSignal = {
+    scope,
+    entity,
+    ts: Date.now(),
+    origin: INSTANCE_ORIGIN_ID
+  };
+  inProcessSyncListeners.forEach(cb => {
+    try {
+      cb(signal);
+    } catch {
+      // ignore listener errors
+    }
+  });
+
+  if (typeof window === 'undefined') return;
+  try {
+    if ('BroadcastChannel' in window) {
+      const ch = new BroadcastChannel(LIVE_SYNC_CHANNEL);
+      ch.postMessage(signal);
+      ch.close();
+    }
+  } catch {
+    // ignore BroadcastChannel restrictions in sandboxed iframes
+  }
+  try {
+    localStorage.setItem(LIVE_SYNC_STORAGE_KEY, JSON.stringify(signal));
+  } catch {
+    // ignore storage quota / private mode
+  }
+}
+
+export function subscribeLiveSyncBus(onSignal: (signal: LiveSyncSignal) => void): () => void {
+  inProcessSyncListeners.add(onSignal);
+  let channel: BroadcastChannel | null = null;
+
+  if (typeof window !== 'undefined') {
+    try {
+      if ('BroadcastChannel' in window) {
+        channel = new BroadcastChannel(LIVE_SYNC_CHANNEL);
+        channel.onmessage = (ev: MessageEvent) => {
+          const payload = ev?.data as LiveSyncSignal | undefined;
+          if (payload && payload.origin !== INSTANCE_ORIGIN_ID) {
+            onSignal(payload);
+          }
+        };
+      }
+    } catch {
+      channel = null;
+    }
+  }
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key !== LIVE_SYNC_STORAGE_KEY || !ev.newValue) return;
+    try {
+      const payload = JSON.parse(ev.newValue) as LiveSyncSignal;
+      if (payload && payload.origin !== INSTANCE_ORIGIN_ID) {
+        onSignal(payload);
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', handleStorage);
+  }
+
+  return () => {
+    inProcessSyncListeners.delete(onSignal);
+    if (channel) {
+      try {
+        channel.close();
+      } catch {
+        // ignore
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('storage', handleStorage);
+    }
+  };
+}
+
 export const BOOTSTRAPPED_ADMIN_EMAILS = [
   'moazmahmoud586@gmail.com',
   'm63502205@gmail.com',
@@ -54,6 +157,62 @@ export const PUBLIC_COLLECTIONS: PublicCollectionName[] = [
 ];
 
 const SEO_UPGRADE_CUTOFF_ISO = '2026-11-23T15:00:00.000Z';
+
+const localUploadReachableCache = new Map<string, boolean>();
+const localUploadPendingChecks = new Map<string, Promise<boolean>>();
+
+export async function isLocalUploadReachable(rawUrl?: string): Promise<boolean> {
+  const clean = String(rawUrl || '').split('?')[0].trim();
+  if (!clean) return false;
+  if (!clean.startsWith('/uploads/')) return true;
+  if (localUploadReachableCache.has(clean)) {
+    return Boolean(localUploadReachableCache.get(clean));
+  }
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return true;
+  }
+  const existing = localUploadPendingChecks.get(clean);
+  if (existing) return existing;
+
+  const task = fetch(clean, { method: 'HEAD', cache: 'no-store' })
+    .then(res => {
+      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+      const valid = res.ok && !contentType.includes('text/html');
+      localUploadReachableCache.set(clean, valid);
+      localUploadPendingChecks.delete(clean);
+      return valid;
+    })
+    .catch(() => {
+      localUploadReachableCache.set(clean, false);
+      localUploadPendingChecks.delete(clean);
+      return false;
+    });
+
+  localUploadPendingChecks.set(clean, task);
+  return task;
+}
+
+function resolveHeroVideoSync(cloudHeroVideo: string, localHeroVideo: string): string {
+  const cloudClean = String(cloudHeroVideo || '').trim();
+  const localClean = String(localHeroVideo || '').trim();
+  if (!cloudClean) return localClean || DEFAULT_BUNDLED_HERO_VIDEO;
+  if (cloudClean.startsWith('/uploads/')) {
+    const known = localUploadReachableCache.get(cloudClean.split('?')[0]);
+    if (known === false) {
+      return localClean && (!localClean.startsWith('/uploads/') || localUploadReachableCache.get(localClean.split('?')[0]) === true)
+        ? localClean
+        : DEFAULT_BUNDLED_HERO_VIDEO;
+    }
+    if (known === undefined) {
+      // Trigger async check so any subsequent snapshot/render resolves cleanly; meanwhile preserve verified local fallback if cloud upload isn't verified yet
+      void isLocalUploadReachable(cloudClean);
+      if (localClean && !localClean.startsWith('/uploads/')) {
+        return localClean;
+      }
+    }
+  }
+  return cloudClean;
+}
 
 export function toFirestoreDocId(rawId: string): string {
   const cleaned = String(rawId || 'item')
@@ -445,7 +604,7 @@ function mergeCollectionWithTombstones(
     } else {
       const existingTs = String(existing.updatedAt || existing.createdAt || '');
       const cloudTs = String(raw.updatedAt || docItem.updatedAt || '');
-      if (!existingTs || (Boolean(cloudTs) && cloudTs > existingTs)) {
+      if (!existingTs || (Boolean(cloudTs) && cloudTs >= existingTs)) {
         map.set(key, raw);
       }
     }
@@ -454,8 +613,228 @@ function mergeCollectionWithTombstones(
   return Array.from(map.values());
 }
 
+type CloudDocEntry = { id: string; data: any; updatedAt: string };
+
+interface LiveSnapshotStoreState {
+  siteConfigDocs: Map<string, CloudDocEntry>;
+  collections: Record<PublicCollectionName, Map<string, CloudDocEntry>>;
+  deletedKeysDuringSession: Set<string>;
+}
+
+function createEmptySnapshotStore(): LiveSnapshotStoreState {
+  return {
+    siteConfigDocs: new Map(),
+    collections: {
+      party_leaders: new Map(),
+      secretariat_leaders: new Map(),
+      secretariats: new Map(),
+      secretariat_members: new Map(),
+      initiatives: new Map(),
+      news: new Map(),
+      events: new Map(),
+      media: new Map(),
+      pages: new Map()
+    },
+    deletedKeysDuringSession: new Set()
+  };
+}
+
+const sharedLiveStore: LiveSnapshotStoreState = createEmptySnapshotStore();
+let hasAnyLiveSnapshotData = false;
+
+function logStructuredFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
+  try {
+    const errInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo:
+          auth.currentUser?.providerData?.map(provider => ({
+            providerId: provider.providerId,
+            email: provider.email
+          })) || []
+      },
+      operationType,
+      path
+    };
+    console.warn('Firestore Error: ', JSON.stringify(errInfo));
+  } catch {
+    console.warn('Firestore Error:', error);
+  }
+}
+
+function mergeSnapshotStoreIntoPortalData(
+  baseData: PublicPortalData,
+  store: LiveSnapshotStoreState
+): PublicPortalData {
+  const tombstones = new Set<string>();
+  const tombDoc = store.siteConfigDocs.get('portal_tombstones');
+  const rawCloudTombs = tombDoc?.data?.deletedKeys;
+  if (Array.isArray(rawCloudTombs)) {
+    for (const k of rawCloudTombs) {
+      if (typeof k === 'string' && k) tombstones.add(k);
+    }
+  }
+  if (Array.isArray(baseData.deletedTombstones)) {
+    for (const k of baseData.deletedTombstones) {
+      if (typeof k === 'string' && k) tombstones.add(k);
+    }
+  }
+  for (const k of store.deletedKeysDuringSession) {
+    tombstones.add(k);
+  }
+
+  let nextSettings: SiteSettings = { ...baseData.settings };
+  let nextLiveStream: LiveStream = baseData.liveStream
+    ? { ...baseData.liveStream }
+    : { id: 'live-1', title: '', description: '', streamUrl: '', isActive: false, platform: 'youtube' };
+
+  const publicCfg = store.siteConfigDocs.get('public');
+  if (publicCfg?.data) {
+    const cloudSettings = publicCfg.data as Partial<SiteSettings>;
+    const cloudUpdated = String(cloudSettings.updatedAt || publicCfg.updatedAt || '');
+    const localUpdated = String(nextSettings.updatedAt || '');
+    const isPreUpgradeSnapshot =
+      (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < SEO_UPGRADE_CUTOFF_ISO);
+    const isNewerThanLocal = !localUpdated || (Boolean(cloudUpdated) && cloudUpdated >= localUpdated);
+    if (isNewerThanLocal) {
+      const safeHeroVideoUrl = resolveHeroVideoSync(
+        String(cloudSettings.heroVideoUrl || ''),
+        String(nextSettings.heroVideoUrl || '')
+      );
+      nextSettings = {
+        ...nextSettings,
+        ...cloudSettings,
+        heroVideoUrl: safeHeroVideoUrl,
+        seoTitle: isPreUpgradeSnapshot ? nextSettings.seoTitle : (cloudSettings.seoTitle || nextSettings.seoTitle),
+        officialSiteUrl: isPreUpgradeSnapshot ? nextSettings.officialSiteUrl : (cloudSettings.officialSiteUrl || nextSettings.officialSiteUrl),
+        googleAnalyticsId: cloudSettings.googleAnalyticsId || nextSettings.googleAnalyticsId,
+        googleTagManagerId: cloudSettings.googleTagManagerId || nextSettings.googleTagManagerId,
+        googleSiteVerification: cloudSettings.googleSiteVerification || nextSettings.googleSiteVerification
+      };
+    }
+  }
+
+  const liveCfg = store.siteConfigDocs.get('livestream');
+  if (liveCfg?.data) {
+    const cloudLiveUpdated = String(liveCfg.data.updatedAt || liveCfg.updatedAt || '');
+    const localLiveUpdated = String(nextLiveStream.updatedAt || '');
+    if (!localLiveUpdated || (Boolean(cloudLiveUpdated) && cloudLiveUpdated >= localLiveUpdated)) {
+      nextLiveStream = { ...nextLiveStream, ...liveCfg.data };
+    }
+  }
+
+  const getCloudList = (col: PublicCollectionName) => Array.from(store.collections[col].values());
+
+  const partyLeaders = mergeCollectionWithTombstones(
+    'party_leaders',
+    baseData.partyLeaders,
+    getCloudList('party_leaders'),
+    tombstones
+  )
+    .filter(l => l.isVisible !== false)
+    .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
+
+  const secretariatLeaders = mergeCollectionWithTombstones(
+    'secretariat_leaders',
+    baseData.secretariatLeaders,
+    getCloudList('secretariat_leaders'),
+    tombstones
+  )
+    .filter(l => l.isVisible !== false)
+    .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
+
+  const specializedSecretariats = mergeCollectionWithTombstones(
+    'secretariats',
+    baseData.specializedSecretariats,
+    getCloudList('secretariats'),
+    tombstones,
+    true
+  )
+    .filter(s => s.isActive !== false)
+    .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
+
+  const secretariatMembers = mergeCollectionWithTombstones(
+    'secretariat_members',
+    baseData.secretariatMembers,
+    getCloudList('secretariat_members'),
+    tombstones
+  );
+
+  const initiatives = mergeCollectionWithTombstones(
+    'initiatives',
+    baseData.initiatives,
+    getCloudList('initiatives'),
+    tombstones
+  ).filter(i => i.isVisible !== false);
+
+  const news = mergeCollectionWithTombstones(
+    'news',
+    baseData.news,
+    getCloudList('news'),
+    tombstones
+  )
+    .filter(n => !n.isDraft)
+    .sort((a, b) => new Date(b.publishDate || b.createdAt || 0).getTime() - new Date(a.publishDate || a.createdAt || 0).getTime());
+
+  const events = mergeCollectionWithTombstones(
+    'events',
+    baseData.events,
+    getCloudList('events'),
+    tombstones
+  )
+    .filter(e => e.isVisible !== false)
+    .sort((a, b) => new Date(b.dateTime || b.createdAt || 0).getTime() - new Date(a.dateTime || a.createdAt || 0).getTime());
+
+  const media = mergeCollectionWithTombstones(
+    'media',
+    baseData.media,
+    getCloudList('media'),
+    tombstones
+  )
+    .filter(m => m.isVisible !== false)
+    .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
+
+  const pages = mergeCollectionWithTombstones(
+    'pages',
+    baseData.pages || [],
+    getCloudList('pages'),
+    tombstones
+  ).filter(p => p.isPublished !== false);
+
+  return {
+    ...baseData,
+    settings: nextSettings,
+    liveStream: nextLiveStream,
+    partyLeaders,
+    secretariatLeaders,
+    specializedSecretariats,
+    secretariatMembers,
+    initiatives,
+    news,
+    events,
+    media,
+    pages,
+    deletedTombstones: Array.from(tombstones)
+  };
+}
+
+export function mergeWithCurrentLiveSnapshots(baseData: PublicPortalData): PublicPortalData {
+  if (!hasAnyLiveSnapshotData) return baseData;
+  return mergeSnapshotStoreIntoPortalData(baseData, sharedLiveStore);
+}
+
 export async function hydratePortalDataFromFirestore(baseData: PublicPortalData): Promise<PublicPortalData> {
   try {
+    const heroUrlCandidate = String(baseData.settings?.heroVideoUrl || '').trim();
+    if (heroUrlCandidate.startsWith('/uploads/')) {
+      await isLocalUploadReachable(heroUrlCandidate);
+    }
+
     const tombstones = await readTombstoneSet();
     if (Array.isArray(baseData.deletedTombstones)) {
       for (const k of baseData.deletedTombstones) {
@@ -490,76 +869,196 @@ export async function hydratePortalDataFromFirestore(baseData: PublicPortalData)
     const toRecords = (snap: Awaited<ReturnType<typeof getDocs>>) =>
       snap.docs.map(d => {
         const v: any = d.data();
-        return { id: v.id || d.id, data: v.data || {}, updatedAt: String(v.updatedAt || '') };
+        return { id: String(v.id || d.id), data: v.data || {}, updatedAt: String(v.updatedAt || '') };
       });
 
-    let nextSettings: SiteSettings = { ...baseData.settings };
-    let nextLiveStream: LiveStream = baseData.liveStream
-      ? { ...baseData.liveStream }
-      : { id: 'live-1', title: '', description: '', streamUrl: '', isActive: false, platform: 'youtube' };
+    sharedLiveStore.siteConfigDocs.clear();
+    for (const d of siteConfigSnap.docs) {
+      const v: any = d.data();
+      sharedLiveStore.siteConfigDocs.set(d.id, {
+        id: String(v.id || d.id),
+        data: v.data || {},
+        updatedAt: String(v.updatedAt || '')
+      });
+    }
 
-    for (const cfgDoc of siteConfigSnap.docs) {
-      const cfg: any = cfgDoc.data();
-      if (cfgDoc.id === 'public' && cfg.data) {
-        const cloudSettings = cfg.data as Partial<SiteSettings>;
-        const cloudUpdated = String(cloudSettings.updatedAt || cfg.updatedAt || '');
-        const localUpdated = String(nextSettings.updatedAt || '');
-        const isPreUpgradeSnapshot =
-          (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < SEO_UPGRADE_CUTOFF_ISO);
-        const isNewerThanLocal = !localUpdated || (Boolean(cloudUpdated) && cloudUpdated > localUpdated);
-        if (isNewerThanLocal) {
-          nextSettings = {
-            ...nextSettings,
-            ...cloudSettings,
-            seoTitle: isPreUpgradeSnapshot ? nextSettings.seoTitle : (cloudSettings.seoTitle || nextSettings.seoTitle),
-            officialSiteUrl: isPreUpgradeSnapshot ? nextSettings.officialSiteUrl : (cloudSettings.officialSiteUrl || nextSettings.officialSiteUrl),
-            googleAnalyticsId: cloudSettings.googleAnalyticsId || nextSettings.googleAnalyticsId,
-            googleTagManagerId: cloudSettings.googleTagManagerId || nextSettings.googleTagManagerId,
-            googleSiteVerification: cloudSettings.googleSiteVerification || nextSettings.googleSiteVerification
-          };
-        }
-      } else if (cfgDoc.id === 'livestream' && cfg.data) {
-        const cloudLiveUpdated = String(cfg.data.updatedAt || cfg.updatedAt || '');
-        const localLiveUpdated = String(nextLiveStream.updatedAt || '');
-        if (!localLiveUpdated || (Boolean(cloudLiveUpdated) && cloudLiveUpdated > localLiveUpdated)) {
-          nextLiveStream = { ...nextLiveStream, ...cfg.data };
-        }
+    const snapMap: Record<PublicCollectionName, Awaited<ReturnType<typeof getDocs>>> = {
+      party_leaders: partyLeadersSnap,
+      secretariat_leaders: secretariatLeadersSnap,
+      secretariats: secretariatsSnap,
+      secretariat_members: secretariatMembersSnap,
+      initiatives: initiativesSnap,
+      news: newsSnap,
+      events: eventsSnap,
+      media: mediaSnap,
+      pages: pagesSnap
+    };
+
+    for (const colName of PUBLIC_COLLECTIONS) {
+      const colMap = sharedLiveStore.collections[colName];
+      colMap.clear();
+      for (const rec of toRecords(snapMap[colName])) {
+        colMap.set(rec.id, rec);
+      }
+    }
+    hasAnyLiveSnapshotData = true;
+
+    const publicDoc = sharedLiveStore.siteConfigDocs.get('public');
+    const cloudHeroUrl = String(publicDoc?.data?.heroVideoUrl || '').trim();
+    if (cloudHeroUrl.startsWith('/uploads/')) {
+      await isLocalUploadReachable(cloudHeroUrl);
+    }
+
+    return mergeSnapshotStoreIntoPortalData(
+      {
+        ...baseData,
+        deletedTombstones: Array.from(tombstones)
+      },
+      sharedLiveStore
+    );
+  } catch (error) {
+    logStructuredFirestoreError(error, OperationType.LIST, 'public_portal_hydration');
+    return baseData;
+  }
+}
+
+export function subscribeLivePortalData(
+  getBaseData: () => PublicPortalData | null,
+  onMergedData: (nextData: PublicPortalData) => void
+): Unsubscribe {
+  const unsubs: Unsubscribe[] = [];
+  let disposed = false;
+  let flushQueued = false;
+
+  const flushNow = () => {
+    flushQueued = false;
+    if (disposed) return;
+    const base = getBaseData();
+    if (!base) return;
+
+    const publicDoc = sharedLiveStore.siteConfigDocs.get('public');
+    const cloudHeroUrl = String(publicDoc?.data?.heroVideoUrl || '').trim();
+    if (cloudHeroUrl.startsWith('/uploads/')) {
+      const cleanPath = cloudHeroUrl.split('?')[0];
+      if (!localUploadReachableCache.has(cleanPath)) {
+        void isLocalUploadReachable(cloudHeroUrl).then(reachable => {
+          if (!disposed && !reachable) {
+            scheduleFlush();
+          }
+        });
       }
     }
 
-    return {
-      ...baseData,
-      settings: nextSettings,
-      liveStream: nextLiveStream,
-      partyLeaders: mergeCollectionWithTombstones('party_leaders', baseData.partyLeaders, toRecords(partyLeadersSnap), tombstones)
-        .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
-      secretariatLeaders: mergeCollectionWithTombstones('secretariat_leaders', baseData.secretariatLeaders, toRecords(secretariatLeadersSnap), tombstones)
-        .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
-      specializedSecretariats: mergeCollectionWithTombstones('secretariats', baseData.specializedSecretariats, toRecords(secretariatsSnap), tombstones, true)
-        .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
-      secretariatMembers: mergeCollectionWithTombstones('secretariat_members', baseData.secretariatMembers, toRecords(secretariatMembersSnap), tombstones),
-      initiatives: mergeCollectionWithTombstones('initiatives', baseData.initiatives, toRecords(initiativesSnap), tombstones),
-      news: mergeCollectionWithTombstones('news', baseData.news, toRecords(newsSnap), tombstones),
-      events: mergeCollectionWithTombstones('events', baseData.events, toRecords(eventsSnap), tombstones),
-      media: mergeCollectionWithTombstones('media', baseData.media, toRecords(mediaSnap), tombstones),
-      pages: mergeCollectionWithTombstones('pages', baseData.pages || [], toRecords(pagesSnap), tombstones)
-    };
+    const merged = mergeSnapshotStoreIntoPortalData(base, sharedLiveStore);
+    onMergedData(merged);
+  };
+
+  const scheduleFlush = () => {
+    if (disposed || flushQueued) return;
+    flushQueued = true;
+    queueMicrotask(flushNow);
+  };
+
+  try {
+    const siteCfgQuery = query(collection(db, 'site_config'), where('isPublic', '==', true));
+    const uSite = onSnapshot(
+      siteCfgQuery,
+      snap => {
+        for (const change of snap.docChanges()) {
+          const docId = change.doc.id;
+          if (change.type === 'removed') {
+            sharedLiveStore.siteConfigDocs.delete(docId);
+          } else {
+            const v: any = change.doc.data();
+            sharedLiveStore.siteConfigDocs.set(docId, {
+              id: String(v.id || docId),
+              data: v.data || {},
+              updatedAt: String(v.updatedAt || '')
+            });
+          }
+        }
+        hasAnyLiveSnapshotData = true;
+        scheduleFlush();
+      },
+      err => {
+        logStructuredFirestoreError(err, OperationType.GET, 'site_config');
+      }
+    );
+    unsubs.push(uSite);
   } catch (error) {
-    console.warn('Firestore hydration fallback to server data:', error);
-    return baseData;
+    logStructuredFirestoreError(error, OperationType.GET, 'site_config');
   }
+
+  for (const colName of PUBLIC_COLLECTIONS) {
+    try {
+      const q = query(collection(db, colName), where('isPublic', '==', true));
+      let hasReceivedInitial = false;
+      const u = onSnapshot(
+        q,
+        snap => {
+          const colMap = sharedLiveStore.collections[colName];
+          if (!hasReceivedInitial) {
+            colMap.clear();
+            for (const d of snap.docs) {
+              const v: any = d.data();
+              const recId = String(v.id || d.id);
+              colMap.set(recId, {
+                id: recId,
+                data: v.data || {},
+                updatedAt: String(v.updatedAt || '')
+              });
+            }
+            hasReceivedInitial = true;
+          } else {
+            for (const change of snap.docChanges()) {
+              const v: any = change.doc.data();
+              const docKey = String(v?.id || change.doc.id);
+              const rawItemId = String(v?.data?.id || docKey);
+              if (change.type === 'removed') {
+                colMap.delete(docKey);
+                sharedLiveStore.deletedKeysDuringSession.add(`${colName}:${rawItemId}`);
+                sharedLiveStore.deletedKeysDuringSession.add(`${colName}:${toFirestoreDocId(rawItemId)}`);
+              } else {
+                colMap.set(docKey, {
+                  id: docKey,
+                  data: v.data || {},
+                  updatedAt: String(v.updatedAt || '')
+                });
+                sharedLiveStore.deletedKeysDuringSession.delete(`${colName}:${rawItemId}`);
+                sharedLiveStore.deletedKeysDuringSession.delete(`${colName}:${toFirestoreDocId(rawItemId)}`);
+              }
+            }
+          }
+          hasAnyLiveSnapshotData = true;
+          scheduleFlush();
+        },
+        err => {
+          logStructuredFirestoreError(err, OperationType.GET, colName);
+        }
+      );
+      unsubs.push(u);
+    } catch (error) {
+      logStructuredFirestoreError(error, OperationType.GET, colName);
+    }
+  }
+
+  return () => {
+    disposed = true;
+    flushQueued = false;
+    unsubs.forEach(u => u());
+  };
 }
 
 export function subscribePublicFirestoreChanges(onChange: () => void): Unsubscribe {
   const unsubs: Unsubscribe[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let initialBurst = new Set<string>();
+  const initialBurst = new Set<string>();
 
   const scheduleRefresh = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       onChange();
-    }, 350);
+    }, 150);
   };
 
   const watchCols = ['site_config', ...PUBLIC_COLLECTIONS];
@@ -576,12 +1075,87 @@ export function subscribePublicFirestoreChanges(onChange: () => void): Unsubscri
           scheduleRefresh();
         },
         err => {
-          console.warn(`Firestore listener notice (${colName}):`, err?.message || err);
+          logStructuredFirestoreError(err, OperationType.GET, colName);
         }
       );
       unsubs.push(u);
-    } catch {
-      // ignore
+    } catch (error) {
+      logStructuredFirestoreError(error, OperationType.GET, colName);
+    }
+  }
+
+  return () => {
+    if (timer) clearTimeout(timer);
+    unsubs.forEach(u => u());
+  };
+}
+
+export function subscribeAdminFirestoreChanges(
+  includePrivateCollections: boolean,
+  onChange: (collectionName: string) => void
+): Unsubscribe {
+  const unsubs: Unsubscribe[] = [];
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingCol = 'all';
+  const initialBurst = new Set<string>();
+
+  const trigger = (col: string) => {
+    pendingCol = col;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      onChange(pendingCol);
+    }, 180);
+  };
+
+  for (const colName of ['site_config', ...PUBLIC_COLLECTIONS]) {
+    try {
+      const q = query(collection(db, colName), where('isPublic', '==', true));
+      const u = onSnapshot(
+        q,
+        () => {
+          if (!initialBurst.has(colName)) {
+            initialBurst.add(colName);
+            return;
+          }
+          trigger(colName);
+        },
+        err => {
+          logStructuredFirestoreError(err, OperationType.LIST, colName);
+        }
+      );
+      unsubs.push(u);
+    } catch (error) {
+      logStructuredFirestoreError(error, OperationType.LIST, colName);
+    }
+  }
+
+  if (includePrivateCollections && isFirebaseAdminReady()) {
+    const privateCols: PrivateCollectionName[] = [
+      'applications',
+      'members',
+      'roles',
+      'admin_users',
+      'audit_logs'
+    ];
+    for (const colName of privateCols) {
+      try {
+        const u = onSnapshot(
+          collection(db, colName),
+          () => {
+            if (!initialBurst.has(colName)) {
+              initialBurst.add(colName);
+              return;
+            }
+            trigger(colName);
+          },
+          err => {
+            logStructuredFirestoreError(err, OperationType.LIST, colName);
+          }
+        );
+        unsubs.push(u);
+      } catch (error) {
+        logStructuredFirestoreError(error, OperationType.LIST, colName);
+      }
     }
   }
 

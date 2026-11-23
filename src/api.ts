@@ -30,7 +30,8 @@ import {
   syncSiteConfigToFirestore,
   syncPrivateRecordToFirestore,
   deletePrivateRecordFromFirestore,
-  isFirebaseAdminReady
+  isFirebaseAdminReady,
+  broadcastLiveSyncEvent
 } from './utils/firestoreSync';
 
 const TOKEN_KEY = 'nfp_admin_token';
@@ -58,7 +59,9 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  const method = String(options.method || 'GET').toUpperCase();
   const res = await fetch(endpoint, {
+    cache: method === 'GET' ? 'no-store' : options.cache,
     ...options,
     headers
   });
@@ -81,6 +84,25 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
       throw new Error('حجم الصورة أو البيانات المرسلة كبير جداً، يرجى تقليل حجم الصور ثم المحاولة مجدداً');
     }
     throw new Error(data.error || `حدث خطأ أثناء معالجة الطلب (${res.status})`);
+  }
+
+  if (
+    method !== 'GET' &&
+    !endpoint.includes('/analytics/') &&
+    !endpoint.includes('/inquire') &&
+    !endpoint.includes('/login') &&
+    !endpoint.includes('/logout') &&
+    !endpoint.includes('/seo/audit')
+  ) {
+    const isAdminOnly =
+      endpoint.includes('/applications') ||
+      endpoint.includes('/members') ||
+      endpoint.includes('/users') ||
+      endpoint.includes('/roles') ||
+      endpoint.includes('/subscribers') ||
+      endpoint.includes('/public/apply') ||
+      endpoint.includes('/public/subscribe');
+    broadcastLiveSyncEvent(isAdminOnly ? 'admin' : 'all', endpoint);
   }
 
   return data as T;

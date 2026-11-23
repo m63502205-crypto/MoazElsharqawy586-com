@@ -1267,10 +1267,19 @@
       ],
       "isActive": true,
       "createdAt": "2026-11-23T14:44:04.684Z",
-      "lastLogin": "2026-11-23T15:53:24.858Z"
+      "lastLogin": "2026-11-23T16:04:21.670Z"
     }
   ],
   "auditLogs": [
+    {
+      "id": "log-1795449861689-io6kv",
+      "adminEmail": "aymanmoussadunes67@gmail.com",
+      "adminName": "أ.أيمن موسى",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-23T16:04:21.689Z"
+    },
     {
       "id": "log-1795449204876-b6ws9",
       "adminEmail": "aymanmoussadunes67@gmail.com",

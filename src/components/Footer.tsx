@@ -54,6 +54,41 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
           كيان سياسي مصري يسعى لتعزيز قيم العدالة الاجتماعية والحرية وسيادة القانون، مع التركيز على تمكين المشاركة الشعبية وبناء مستقبل مشرق لكل أبناء الوطن.
         </p>
 
+        {/* Internal Navigation & Sitemap Links (Crawlable for Search Engines & Users) */}
+        <nav aria-label="أقسام الموقع وخريطة الصفحات" className="w-full max-w-3xl mt-6 pt-5 border-t border-stone-800/80">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs font-bold text-stone-400">
+            {[
+              { id: 'home', href: '/', label: 'الرئيسية' },
+              { id: 'about', href: '/about', label: 'عن الحزب' },
+              { id: 'party-leaders', href: '/party-leaders', label: 'قيادات الحزب' },
+              { id: 'secretariat-leaders', href: '/secretariat-leaders', label: 'قيادات الأمانة' },
+              { id: 'secretariats', href: '/secretariats', label: 'الأمانات التخصصية' },
+              { id: 'initiatives', href: '/initiatives', label: 'المبادرات' },
+              { id: 'news', href: '/news', label: 'الأخبار' },
+              { id: 'events', href: '/events', label: 'الفعاليات' },
+              { id: 'live', href: '/live', label: 'البث المباشر' },
+              { id: 'join', href: '/join', label: 'طلب العضوية' },
+              { id: 'contact', href: '/contact', label: 'تواصل معنا' },
+              { id: 'sitemap', href: '/sitemap', label: 'خريطة الموقع' }
+            ].map(item => (
+              <a
+                key={item.id}
+                href={item.href}
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                    e.preventDefault();
+                    setCurrentView(item.id);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
+                }}
+                className="hover:text-amber-400 transition-colors"
+              >
+                {item.label}
+              </a>
+            ))}
+          </div>
+        </nav>
+
         {/* Separator */}
         <div className="w-24 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent my-6" />
 

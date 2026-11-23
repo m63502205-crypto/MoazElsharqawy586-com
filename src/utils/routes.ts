@@ -57,6 +57,8 @@ export function getViewPath(
       return '/join';
     case 'contact':
       return '/contact';
+    case 'sitemap':
+      return '/sitemap';
     case 'cms-page':
       return options?.slug ? `/page/${encodeURIComponent(options.slug)}` : '/';
     case 'admin':
@@ -136,7 +138,8 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
         'events',
         'live',
         'join',
-        'contact'
+        'contact',
+        'sitemap'
       ].includes(cleanView)
     ) {
       return { view: cleanView };
@@ -161,7 +164,8 @@ export function parseLocationToRoute(loc: Location = window.location): ParsedRou
       '/events',
       '/live',
       '/join',
-      '/contact'
+      '/contact',
+      '/sitemap'
     ].includes(pathname)
   ) {
     return { view: pathname.slice(1) };
@@ -463,6 +467,18 @@ export function getPageSeoMeta(
     return {
       title: `تواصل معنا ومقر الأمانة | ${siteBrand}`,
       description: 'طرق التواصل المباشرة ومقر أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.',
+      keywords: siteKeywords,
+      siteName: SITE_BRAND_NAME,
+      canonicalUrl,
+      ogImage: defaultShareImg,
+      ogType: 'website',
+      robots
+    };
+  }
+  if (view === 'sitemap') {
+    return {
+      title: `خريطة الموقع الكاملة | ${siteBrand}`,
+      description: 'دليل وخريطة جميع صفحات الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر من أمانات تخصصية ومبادرات وأخبار وفعاليات.',
       keywords: siteKeywords,
       siteName: SITE_BRAND_NAME,
       canonicalUrl,

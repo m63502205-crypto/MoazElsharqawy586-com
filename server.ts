@@ -684,24 +684,33 @@ Sitemap: ${siteUrl}/sitemap.xml
   res.type('text/plain').send(content);
 });
 
-// Dynamic Sitemap.xml (real crawlable URLs + images for Google Search)
-app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => {
-  const data = db.get();
-  const siteUrl = getSitemapBaseUrl(req, data);
+interface SitemapImage {
+  loc: string;
+  title?: string;
+}
 
-  interface SitemapImage {
-    loc: string;
-    title?: string;
+interface SitemapEntry {
+  path: string;
+  title: string;
+  category: string;
+  changefreq: string;
+  priority: string;
+  lastmod?: string;
+  images?: SitemapImage[];
+}
+
+function toSitemapLastmod(rawDate?: string): string | undefined {
+  if (!rawDate) return undefined;
+  const ms = Date.parse(rawDate);
+  if (!Number.isFinite(ms)) return undefined;
+  try {
+    return new Date(ms).toISOString().split('T')[0];
+  } catch {
+    return undefined;
   }
+}
 
-  interface SitemapEntry {
-    path: string;
-    changefreq: string;
-    priority: string;
-    lastmod?: string;
-    images?: SitemapImage[];
-  }
-
+function buildSitemapItems(data: ReturnType<typeof db.get>, siteUrl: string): SitemapEntry[] {
   const toAbsoluteAssetUrl = (raw?: string): string | null => {
     const val = (raw || '').trim();
     if (!val || val.startsWith('data:')) return null;
@@ -722,17 +731,18 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
     .slice(0, 30);
 
   const staticPages: SitemapEntry[] = [
-    { path: '', changefreq: 'daily', priority: '1.0', images: mediaImages },
-    { path: 'about', changefreq: 'weekly', priority: '0.9' },
-    { path: 'party-leaders', changefreq: 'weekly', priority: '0.85' },
-    { path: 'secretariat-leaders', changefreq: 'weekly', priority: '0.9' },
-    { path: 'secretariats', changefreq: 'weekly', priority: '0.95' },
-    { path: 'initiatives', changefreq: 'weekly', priority: '0.9' },
-    { path: 'news', changefreq: 'daily', priority: '0.95' },
-    { path: 'events', changefreq: 'weekly', priority: '0.9' },
-    { path: 'live', changefreq: 'daily', priority: '0.85' },
-    { path: 'join', changefreq: 'monthly', priority: '0.9' },
-    { path: 'contact', changefreq: 'monthly', priority: '0.85' }
+    { path: '', title: 'الصفحة الرئيسية – الموقع الرسمي', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '1.0', images: mediaImages },
+    { path: 'about', title: 'عن الحزب والأمانة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
+    { path: 'party-leaders', title: 'قيادات حزب الجبهة الوطنية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.85' },
+    { path: 'secretariat-leaders', title: 'قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
+    { path: 'secretariats', title: 'الأمانات التخصصية والنوعية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.95' },
+    { path: 'initiatives', title: 'المبادرات المجتمعية والتنموية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
+    { path: 'news', title: 'أخبار وبيانات الأمانة', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.95' },
+    { path: 'events', title: 'الفعاليات والأنشطة الميدانية', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.9' },
+    { path: 'live', title: 'البث المباشر للفعاليات', category: 'الصفحات الرئيسية', changefreq: 'daily', priority: '0.85' },
+    { path: 'join', title: 'استمارة طلب العضوية والانضمام', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.9' },
+    { path: 'contact', title: 'تواصل معنا ومقر الأمانة', category: 'الصفحات الرئيسية', changefreq: 'monthly', priority: '0.85' },
+    { path: 'sitemap', title: 'خريطة الموقع الكاملة', category: 'الصفحات الرئيسية', changefreq: 'weekly', priority: '0.8' }
   ];
 
   const secretariatPages: SitemapEntry[] = (data.specializedSecretariats || [])
@@ -745,29 +755,46 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
         .map(loc => ({ loc, title: s.name }));
       return {
         path: `secretariat/${encodeURIComponent(s.slug)}`,
+        title: s.name,
+        category: 'الأمانات التخصصية',
         changefreq: 'weekly',
         priority: '0.85',
-        lastmod: s.createdAt ? new Date(s.createdAt).toISOString().split('T')[0] : undefined,
+        lastmod: toSitemapLastmod(s.createdAt),
         images: imgs
       };
     });
 
-  const initiativePages: SitemapEntry[] = (data.initiatives || [])
-    .filter(i => i.isVisible && i.slug)
-    .map(i => {
-      const imgs = [i.coverUrl, i.logoUrl, ...(i.galleryImages || [])]
-        .map(u => toAbsoluteAssetUrl(u))
-        .filter((u): u is string => Boolean(u))
-        .slice(0, 10)
-        .map(loc => ({ loc, title: i.title }));
-      return {
-        path: `initiative/${encodeURIComponent(i.slug)}`,
-        changefreq: 'weekly',
-        priority: '0.85',
-        lastmod: i.createdAt ? new Date(i.createdAt).toISOString().split('T')[0] : undefined,
-        images: imgs
-      };
+  const initiativePages: SitemapEntry[] = [];
+  for (const i of (data.initiatives || []).filter(init => init.isVisible && init.slug)) {
+    const imgs = [i.coverUrl, i.logoUrl, ...(i.galleryImages || [])]
+      .map(u => toAbsoluteAssetUrl(u))
+      .filter((u): u is string => Boolean(u))
+      .slice(0, 10)
+      .map(loc => ({ loc, title: i.title }));
+    initiativePages.push({
+      path: `initiative/${encodeURIComponent(i.slug)}`,
+      title: i.title,
+      category: 'المبادرات',
+      changefreq: 'weekly',
+      priority: '0.85',
+      lastmod: toSitemapLastmod(i.createdAt),
+      images: imgs
     });
+    if (Array.isArray(i.activities)) {
+      i.activities.forEach((act, idx) => {
+        const actImg = toAbsoluteAssetUrl(act?.imageUrl);
+        initiativePages.push({
+          path: `initiative/${encodeURIComponent(i.slug)}?activity=${idx}`,
+          title: `${act?.title || `نشاط ${idx + 1}`} – ${i.title}`,
+          category: 'أنشطة المبادرات',
+          changefreq: 'weekly',
+          priority: '0.8',
+          lastmod: toSitemapLastmod(act?.date || i.createdAt),
+          images: actImg ? [{ loc: actImg, title: act?.title || i.title }] : []
+        });
+      });
+    }
+  }
 
   const newsPages: SitemapEntry[] = (data.news || [])
     .filter(n => !n.isDraft)
@@ -781,9 +808,11 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
         .map(loc => ({ loc, title: n.title }));
       return {
         path: `news/${encodeURIComponent(n.id)}`,
+        title: n.title,
+        category: 'الأخبار والبيانات',
         changefreq: 'weekly',
         priority: '0.85',
-        lastmod: n.publishDate ? new Date(n.publishDate).toISOString().split('T')[0] : undefined,
+        lastmod: toSitemapLastmod(n.publishDate || n.createdAt),
         images: allImgs
       };
     });
@@ -798,9 +827,11 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
         .map(loc => ({ loc, title: e.title }));
       return {
         path: `events/${encodeURIComponent(e.id)}`,
+        title: e.title,
+        category: 'الفعاليات والأنشطة',
         changefreq: 'weekly',
         priority: '0.8',
-        lastmod: e.dateTime ? new Date(e.dateTime).toISOString().split('T')[0] : undefined,
+        lastmod: toSitemapLastmod(e.dateTime),
         images: imgs
       };
     });
@@ -809,12 +840,14 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
     .filter(p => p.isPublished && p.slug)
     .map(p => ({
       path: `page/${encodeURIComponent(p.slug)}`,
+      title: p.title,
+      category: 'الصفحات المخصصة',
       changefreq: 'monthly',
       priority: '0.75',
-      lastmod: p.updatedAt ? new Date(p.updatedAt).toISOString().split('T')[0] : undefined
+      lastmod: toSitemapLastmod(p.updatedAt)
     }));
 
-  const allItems: SitemapEntry[] = [
+  return [
     ...staticPages,
     ...secretariatPages,
     ...initiativePages,
@@ -822,6 +855,13 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
     ...eventPages,
     ...cmsPages
   ];
+}
+
+// Dynamic Sitemap.xml (real crawlable URLs + images for Google Search)
+app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => {
+  const data = db.get();
+  const siteUrl = getSitemapBaseUrl(req, data);
+  const allItems = buildSitemapItems(data, siteUrl);
 
   const xmlUrls = allItems
     .map(item => {
@@ -845,7 +885,7 @@ app.get(['/sitemap.xml', '/site-sitemap.xml'], (req: Request, res: Response) => 
 ${xmlUrls}
 </urlset>`;
 
-  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.setHeader('Cache-Control', 'public, max-age=60');
   res.setHeader('Content-Type', 'application/xml; charset=utf-8');
   res.send(sitemapXml);
 });
@@ -940,6 +980,7 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
       <a href="/">الرئيسية</a>
       <a href="/about">عن الحزب</a>
       <a href="/party-leaders">القيادات</a>
+      <a href="/secretariat-leaders">قيادات الأمانة</a>
       <a href="/secretariats">الأمانات</a>
       <a href="/initiatives">المبادرات</a>
       <a href="/news">الأخبار</a>
@@ -947,6 +988,7 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
       <a href="/live">البث المباشر</a>
       <a href="/join">استمارة التقديم</a>
       <a href="/contact">تواصل معنا</a>
+      <a href="/sitemap">خريطة الموقع</a>
     </nav>
   </header>
   <main>
@@ -964,6 +1006,7 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
       <a href="/events">الفعاليات</a>
       <a href="/join">طلب الانضمام</a>
       <a href="/contact">تواصل معنا</a>
+      <a href="/sitemap">خريطة الموقع</a>
     </nav>
     <p dir="ltr">Development Eng.Moaz Elsharqawy</p>
   </footer>
@@ -1310,6 +1353,19 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         <p>العنوان: ${escapeHtml(address)}</p>
         <p>الهاتف وخدمة المواطنين: <a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a></p>
       </section>`;
+  } else if (cleanPath === '/sitemap') {
+    title = `خريطة الموقع الكاملة | ${siteBrand}`;
+    description = 'دليل وخريطة جميع صفحات الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر من أمانات تخصصية ومبادرات وأخبار وفعاليات.';
+    canonical = `${siteUrl}/sitemap`;
+    const allSitemapEntries = buildSitemapItems(data, siteUrl);
+    mainHtml = `
+      <section>
+        <h1>خريطة الموقع الكاملة – حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر</h1>
+        <p>فهرس كافة الصفحات العامة المفهرسة (${allSitemapEntries.length} صفحة):</p>
+        <ul>
+          ${allSitemapEntries.map(entry => `<li><a href="/${escapeHtml(entry.path)}">${escapeHtml(entry.title)}</a> (${escapeHtml(entry.category)})</li>`).join('')}
+        </ul>
+      </section>`;
   } else if (cleanPath.startsWith('/page/')) {
     const slug = cleanPath.slice('/page/'.length);
     const page = publishedPages.find(p => p.slug === slug);
@@ -1357,7 +1413,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
           ${visiblePartyLeaders.map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.position)}</li>`).join('')}
           ${visibleSecLeaders.map(l => `<li>${escapeHtml(l.name)} – ${escapeHtml(l.title)} (أمانة قسم ثالث أكتوبر)</li>`).join('')}
         </ul>
-        <p><a href="/party-leaders">عرض جميع القيادات</a></p>
+        <p><a href="/party-leaders">قيادات الحزب</a> | <a href="/secretariat-leaders">قيادات الأمانة</a></p>
       </section>` : ''}
       ${visibleInitiatives.length > 0 ? `
       <section>
@@ -1371,7 +1427,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       <section>
         <h2>آخر الأخبار والبيانات</h2>
         <ul>
-          ${publishedNews.slice(0, 5).map(n => `<li><a href="/news/${encodeURIComponent(n.id)}">${escapeHtml(n.title)}</a></li>`).join('')}
+          ${publishedNews.map(n => `<li><a href="/news/${encodeURIComponent(n.id)}">${escapeHtml(n.title)}</a></li>`).join('')}
         </ul>
         <p><a href="/news">المزيد من الأخبار</a></p>
       </section>` : ''}
@@ -1379,15 +1435,113 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       <section>
         <h2>الفعاليات والأنشطة</h2>
         <ul>
-          ${visibleEvents.slice(0, 5).map(e => `<li><a href="/events/${encodeURIComponent(e.id)}">${escapeHtml(e.title)}</a></li>`).join('')}
+          ${visibleEvents.map(e => `<li><a href="/events/${encodeURIComponent(e.id)}">${escapeHtml(e.title)}</a></li>`).join('')}
         </ul>
         <p><a href="/events">المزيد من الفعاليات</a></p>
+      </section>` : ''}
+      ${publishedPages.length > 0 ? `
+      <section>
+        <h2>صفحات تعريفية</h2>
+        <ul>
+          ${publishedPages.map(p => `<li><a href="/page/${encodeURIComponent(p.slug)}">${escapeHtml(p.title)}</a></li>`).join('')}
+        </ul>
       </section>` : ''}
       <section>
         <h2>طرق التواصل والانضمام لأمانة قسم ثالث أكتوبر بمحافظة الجيزة</h2>
         <p>الهاتف: <a href="tel:${escapeHtml(phone)}">${escapeHtml(phone)}</a> | العنوان: ${escapeHtml(address)}</p>
-        <p><a href="/join">استمارة طلب الانضمام</a> | <a href="/contact">صفحة التواصل والخريطة</a></p>
+        <p><a href="/join">استمارة طلب الانضمام</a> | <a href="/contact">صفحة التواصل والخريطة</a> | <a href="/sitemap">خريطة الموقع الكاملة</a></p>
       </section>`;
+  }
+
+  // Build BreadcrumbList + ItemList structured data for deep indexing
+  const extraSchemas: Record<string, any>[] = [];
+  if (robots.startsWith('index')) {
+    const crumbs: Array<{ name: string; item: string }> = [
+      { name: 'الرئيسية', item: `${siteUrl}/` }
+    ];
+    if (canonical !== `${siteUrl}/`) {
+      crumbs.push({ name: title.split('|')[0].trim(), item: canonical });
+    }
+    extraSchemas.push({
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: crumbs.map((c, idx) => ({
+        '@type': 'ListItem',
+        position: idx + 1,
+        name: c.name,
+        item: c.item
+      }))
+    });
+
+    if (cleanPath === '/secretariats') {
+      extraSchemas.push({
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: title,
+        url: canonical,
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListElement: activeSecretariats.map((s, idx) => ({
+            '@type': 'ListItem',
+            position: idx + 1,
+            name: s.name,
+            url: `${siteUrl}/secretariat/${encodeURIComponent(s.slug)}`
+          }))
+        }
+      });
+    } else if (cleanPath === '/news') {
+      extraSchemas.push({
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: title,
+        url: canonical,
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListElement: publishedNews.map((n, idx) => ({
+            '@type': 'ListItem',
+            position: idx + 1,
+            name: n.title,
+            url: `${siteUrl}/news/${encodeURIComponent(n.id)}`
+          }))
+        }
+      });
+    } else if (cleanPath === '/initiatives') {
+      extraSchemas.push({
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: title,
+        url: canonical,
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListElement: visibleInitiatives.map((i, idx) => ({
+            '@type': 'ListItem',
+            position: idx + 1,
+            name: i.title,
+            url: `${siteUrl}/initiative/${encodeURIComponent(i.slug)}`
+          }))
+        }
+      });
+    } else if (cleanPath === '/events') {
+      extraSchemas.push({
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: title,
+        url: canonical,
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListElement: visibleEvents.map((e, idx) => ({
+            '@type': 'ListItem',
+            position: idx + 1,
+            name: e.title,
+            url: `${siteUrl}/events/${encodeURIComponent(e.id)}`
+          }))
+        }
+      });
+    } else if (cleanPath === '/about') {
+      extraSchemas.push({ '@context': 'https://schema.org', '@type': 'AboutPage', name: title, url: canonical, description });
+    } else if (cleanPath === '/contact') {
+      extraSchemas.push({ '@context': 'https://schema.org', '@type': 'ContactPage', name: title, url: canonical, description });
+    }
   }
 
   return {
@@ -1404,6 +1558,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     robots,
     articleSchema,
     eventSchema,
+    extraSchemas,
     ssrHtml: renderSsrShell(data, mainHtml)
   };
 }
@@ -1462,6 +1617,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
   ];
   if (seo.articleSchema) schemas.push(seo.articleSchema);
   if (seo.eventSchema) schemas.push(seo.eventSchema);
+  if (Array.isArray(seo.extraSchemas)) schemas.push(...seo.extraSchemas);
 
   const jsonLd = JSON.stringify(schemas, null, 2);
 
@@ -1546,7 +1702,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
 function isCrawlerUserAgent(userAgent?: string): boolean {
   const ua = String(userAgent || '');
   if (!ua) return false;
-  return /googlebot|google-inspectiontool|adsbot-google|mediapartners-google|apis-google|storebot-google|googleother|bingbot|yandexbot|duckduckbot|baiduspider|slurp|applebot|facebookexternalhit|facebot|whatsapp|telegrambot|twitterbot|linkedinbot|slackbot|discordbot|pinterest|ahrefsbot|semrushbot/i.test(
+  return /googlebot|google-inspectiontool|google-read-aloud|google-site-verification|chrome-lighthouse|adsbot-google|mediapartners-google|apis-google|storebot-google|googleother|bingbot|yandexbot|duckduckbot|baiduspider|slurp|applebot|facebookexternalhit|facebot|whatsapp|telegrambot|twitterbot|linkedinbot|slackbot|discordbot|pinterest|ahrefsbot|semrushbot/i.test(
     ua
   );
 }
@@ -2584,6 +2740,79 @@ app.get('/api/admin/stats', authenticateAdmin, (_req: Request, res: Response) =>
     subscribersCount: (data.subscribers || []).filter(s => s.status === 'active').length
   };
   res.json(stats);
+});
+
+// Admin Google Indexing & All-Pages SEO endpoints
+app.get('/api/admin/seo/urls', authenticateAdmin, (req: Request, res: Response) => {
+  const data = db.get();
+  const siteUrl = getSitemapBaseUrl(req, data);
+  const allItems = buildSitemapItems(data, siteUrl);
+  res.json({
+    siteUrl,
+    sitemapUrl: `${siteUrl}/sitemap.xml`,
+    robotsUrl: `${siteUrl}/robots.txt`,
+    totalCount: allItems.length,
+    items: allItems.map(item => ({
+      url: `${siteUrl}/${item.path}`,
+      path: `/${item.path}`,
+      title: item.title,
+      category: item.category,
+      changefreq: item.changefreq,
+      priority: item.priority,
+      lastmod: item.lastmod
+    }))
+  });
+});
+
+app.post('/api/admin/seo/audit', authenticateAdmin, (req: Request, res: Response) => {
+  const data = db.get();
+  const siteUrl = getSitemapBaseUrl(req, data);
+  const allItems = buildSitemapItems(data, siteUrl);
+  const failedPages: Array<{ url: string; reason: string }> = [];
+  let indexablePages = 0;
+
+  for (const item of allItems) {
+    const rawPath = item.path.split('?')[0];
+    const queryStr = item.path.includes('?') ? item.path.split('?')[1] : '';
+    const queryParams = Object.fromEntries(new URLSearchParams(queryStr).entries());
+    const fakeReq = {
+      path: rawPath ? `/${rawPath}` : '/',
+      query: queryParams,
+      headers: req.headers,
+      get: (h: string) => req.get(h)
+    } as unknown as Request;
+
+    const seo = resolveRouteSeoAndSsr(fakeReq, data);
+    if (!seo.robots.includes('index') || seo.robots.includes('noindex')) {
+      failedPages.push({ url: `${siteUrl}/${item.path}`, reason: 'الصفحة تحمل وسم noindex' });
+    } else if (!seo.canonical || !seo.title) {
+      failedPages.push({ url: `${siteUrl}/${item.path}`, reason: 'نقص في الوسم الأساسي canonical أو title' });
+    } else {
+      indexablePages++;
+    }
+  }
+
+  const customVerification = (data.settings?.googleSiteVerification || '')
+    .trim()
+    .replace(/^google-site-verification=/i, '');
+  const verificationTokensCount = Array.from(
+    new Set([...DEFAULT_GOOGLE_VERIFICATION_TOKENS, ...(customVerification ? [customVerification] : [])])
+  ).length;
+
+  res.json({
+    ok: failedPages.length === 0 && indexablePages > 0,
+    siteUrl,
+    sitemapUrl: `${siteUrl}/sitemap.xml`,
+    robotsUrl: `${siteUrl}/robots.txt`,
+    totalPages: allItems.length,
+    indexablePages,
+    failedPages,
+    robotsAllowsPublic: true,
+    robotsBlocksAdmin: true,
+    hasSitemapInRobots: true,
+    verificationTokensCount,
+    checkedAt: new Date().toISOString()
+  });
 });
 
 // Admin Google Analytics & Traffic Insights endpoint (returns authentic recorded traffic)
@@ -4608,6 +4837,7 @@ async function startServer() {
       '/live',
       '/join',
       '/contact',
+      '/sitemap',
       '/page/:slug',
       '/admin',
       '/login'

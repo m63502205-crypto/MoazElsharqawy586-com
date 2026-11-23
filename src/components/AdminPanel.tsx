@@ -172,6 +172,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [copiedSitemapUrl, setCopiedSitemapUrl] = useState(false);
   const [copiedRobotsUrl, setCopiedRobotsUrl] = useState(false);
   const [seoCheckStatus, setSeoCheckStatus] = useState<string | null>(null);
+  const [seoPagesList, setSeoPagesList] = useState<Array<{
+    url: string;
+    path: string;
+    title: string;
+    category: string;
+    changefreq: string;
+    priority: string;
+    lastmod?: string;
+  }>>([]);
+  const [loadingSeoPages, setLoadingSeoPages] = useState(false);
+  const [seoUrlsSearch, setSeoUrlsSearch] = useState('');
+  const [seoCategoryFilter, setSeoCategoryFilter] = useState('الكل');
+  const [copiedAllSeoUrls, setCopiedAllSeoUrls] = useState(false);
+  const [runningSeoAudit, setRunningSeoAudit] = useState(false);
+  const [seoAuditReport, setSeoAuditReport] = useState<{
+    ok: boolean;
+    totalPages: number;
+    indexablePages: number;
+    failedPages: Array<{ url: string; reason: string }>;
+    robotsAllowsPublic: boolean;
+    robotsBlocksAdmin: boolean;
+    hasSitemapInRobots: boolean;
+    verificationTokensCount: number;
+    checkedAt: string;
+  } | null>(null);
 
   // Modals & sub-state
   const [selectedApp, setSelectedApp] = useState<MembershipApplication | null>(null);
@@ -378,6 +403,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       loadAdminData();
     }
   }, [user, firebaseReady]);
+
+  useEffect(() => {
+    if (user && activeTab === 'seo') {
+      setLoadingSeoPages(true);
+      api.getAdminSeoUrls()
+        .then(res => {
+          if (Array.isArray(res?.items)) {
+            setSeoPagesList(res.items);
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => setLoadingSeoPages(false));
+    }
+  }, [user, activeTab]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -5549,23 +5588,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       </div>
                     </div>
 
-                    {/* 4. Sitemap.xml & Robots.txt Links + Live Diagnostics */}
-                    <div className="p-5 bg-emerald-50/40 border border-emerald-200 rounded-3xl space-y-4">
-                      <div className="border-b border-emerald-200/70 pb-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    {/* 4. Google Search Console All-Pages Indexing Center & Live Diagnostics */}
+                    <div className="p-5 bg-emerald-50/40 border border-emerald-200 rounded-3xl space-y-5">
+                      <div className="border-b border-emerald-200/70 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div>
-                          <h3 className="text-sm font-black text-stone-900">
-                            خريطة الموقع (Sitemap.xml) وملف Robots.txt
+                          <h3 className="text-sm sm:text-base font-black text-stone-900 flex items-center gap-2">
+                            <Globe className="w-4 h-4 text-emerald-700" />
+                            <span>إضافة وفهرسة جميع صفحات الموقع في جوجل ({seoPagesList.length || '...'} صفحة)</span>
                           </h3>
                           <p className="text-[11px] text-stone-600 mt-0.5">
-                            يتم تحديث ملف Sitemap تلقائياً عند نشر أي أخبار أو فعاليات أو مبادرات أو صفحات جديدة، مع منع فهرسة لوحة الإدارة وصفحات تسجيل الدخول.
+                            يتم توليد خريطة الموقع (sitemap.xml) وخريطة الصفحات (/sitemap) تلقائياً بكل الصفحات والأمانات والمبادرات والأخبار والفعاليات، مع منع فهرسة لوحة الإدارة.
                           </p>
                         </div>
+                        <a
+                          href={`https://search.google.com/search-console/sitemaps?resource_id=${encodeURIComponent(`${activeOfficialUrl}/`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black px-3.5 py-2 rounded-xl shadow-xs shrink-0 transition"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>فتح قسم Sitemaps في Search Console</span>
+                        </a>
+                      </div>
+
+                      {/* Crucial Anti-Quota-Exceeded Instruction Box */}
+                      <div className="p-4 bg-white border-2 border-amber-300 rounded-2xl space-y-2 text-xs text-stone-800">
+                        <div className="font-black text-amber-900 flex items-center gap-2">
+                          <span>💡 الطريقة الصحيحة لإضافة جميع صفحات الموقع إلى جوجل دفعة واحدة (بدون رسالة Quota Exceeded):</span>
+                        </div>
+                        <ol className="list-decimal list-inside space-y-1.5 text-stone-700 leading-relaxed pr-1">
+                          <li>
+                            <strong>لا تضع</strong> رابط <code className="bg-stone-100 px-1.5 py-0.5 rounded font-mono text-red-700" dir="ltr">sitemap.xml</code> في شريط <strong>«فحص أي عنوان URL»</strong> بالأعلى (لأن هذا الشريط مخصص لفحص صفحة واحدة فقط ويستهلك الحد اليومي بسرعة).
+                          </li>
+                          <li>
+                            افتح قائمة <strong>ملفات Sitemap (Sitemaps)</strong> من القائمة الجانبية في Google Search Console، واكتب كلمة <code className="bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-mono font-bold text-emerald-900" dir="ltr">sitemap.xml</code> ثم اضغط <strong>إرسال (Submit)</strong>.
+                          </li>
+                          <li>
+                            سيقوم جوجل تلقائياً بسحب وأرشفة <strong>جميع صفحات الموقع ({seoPagesList.length || 'كافة'} صفحة)</strong> مع كل خبر أو فعالية أو مبادرة جديدة تضاف مستقبلاً.
+                          </li>
+                        </ol>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {/* Sitemap URL Box */}
                         <div className="bg-white border border-stone-200 rounded-2xl p-3.5 space-y-2">
-                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Sitemap التلقائي</span>
+                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Sitemap.xml التلقائي (أضفه في قسم Sitemaps)</span>
                           <div className="flex items-center gap-2">
                             <code className="flex-1 text-xs font-mono text-stone-900 bg-stone-50 border border-stone-200 px-3 py-2 rounded-xl truncate" dir="ltr">
                               {sitemapFullUrl}
@@ -5596,7 +5663,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
                         {/* Robots.txt URL Box */}
                         <div className="bg-white border border-stone-200 rounded-2xl p-3.5 space-y-2">
-                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Robots.txt</span>
+                          <span className="text-xs font-bold text-stone-800 block">رابط ملف Robots.txt وخريطة الموقع HTML (/sitemap)</span>
                           <div className="flex items-center gap-2">
                             <code className="flex-1 text-xs font-mono text-stone-900 bg-stone-50 border border-stone-200 px-3 py-2 rounded-xl truncate" dir="ltr">
                               {robotsFullUrl}
@@ -5614,50 +5681,86 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               <span>{copiedRobotsUrl ? 'تم النسخ' : 'نسخ'}</span>
                             </button>
                             <a
-                              href="/robots.txt"
+                              href="/sitemap"
                               target="_blank"
                               rel="noopener noreferrer"
                               className="px-3 py-2 bg-stone-800 hover:bg-stone-900 text-white rounded-xl text-xs font-bold shrink-0 flex items-center gap-1"
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
-                              <span>فتح</span>
+                              <span>/sitemap</span>
                             </a>
                           </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
+                      {/* Audit & Bulk Copy Action Buttons */}
+                      <div className="flex flex-wrap items-center gap-2.5">
                         <button
                           type="button"
+                          disabled={runningSeoAudit}
                           onClick={async () => {
+                            setRunningSeoAudit(true);
                             try {
-                              const [robRes, mapRes, adminRes] = await Promise.all([
-                                fetch('/robots.txt'),
-                                fetch('/sitemap.xml'),
-                                fetch('/admin')
+                              const [audit, urlsRes] = await Promise.all([
+                                api.runAdminSeoAudit(),
+                                api.getAdminSeoUrls()
                               ]);
-                              const robText = await robRes.text();
-                              const mapText = await mapRes.text();
-                              const urlCount = (mapText.match(/<url>/g) || []).length;
-                              const blocksAdmin = robText.includes('Disallow: /admin') && robText.includes('Disallow: /login');
-                              const adminRobotsHeader = (adminRes.headers.get('x-robots-tag') || '').includes('noindex');
-                              if (robRes.ok && mapRes.ok && urlCount > 0 && blocksAdmin) {
-                                setSeoCheckStatus(
-                                  `تم التحقق بنجاح: Sitemap يضم ${urlCount} رابطاً عاماً، وRobots.txt يمنع فهرسة /admin و/login${adminRobotsHeader ? '، وحماية X-Robots-Tag noindex مفعلة' : ''}.`
-                                );
-                              } else {
-                                setSeoCheckStatus('يرجى مراجعة استجابة ملفات الفهرسة.');
+                              setSeoAuditReport(audit);
+                              if (Array.isArray(urlsRes?.items)) {
+                                setSeoPagesList(urlsRes.items);
                               }
+                              setSeoCheckStatus(
+                                audit.ok
+                                  ? `تم الفحص بنجاح: جميع صفحات الموقع (${audit.indexablePages} من ${audit.totalPages}) جاهزة ومسموح بفهرستها في بحث جوجل، ولوحة الإدارة محمية بـ noindex.`
+                                  : `تم الفحص: ${audit.indexablePages} صفحة جاهزة و${audit.failedPages.length} صفحة تحتاج مراجعة.`
+                              );
                             } catch {
-                              setSeoCheckStatus('تعذر فحص الملفات حالياً.');
+                              setSeoCheckStatus('تعذر إتمام الفحص الشامل حالياً.');
+                            } finally {
+                              setRunningSeoAudit(false);
                             }
-                            setTimeout(() => setSeoCheckStatus(null), 8000);
                           }}
-                          className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
+                          className="inline-flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white text-xs font-black px-4 py-2.5 rounded-xl transition cursor-pointer shadow-xs"
                         >
                           <CheckCircle2 className="w-4 h-4" />
-                          <span>فحص حالة Sitemap و Robots.txt وحماية الإدارة</span>
+                          <span>{runningSeoAudit ? 'جاري فحص جميع الصفحات...' : 'فحص جاهزية جميع صفحات الموقع لجوجل'}</span>
                         </button>
+
+                        {seoPagesList.length > 0 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const allText = seoPagesList.map(i => i.url).join('\n');
+                                navigator.clipboard.writeText(allText);
+                                setCopiedAllSeoUrls(true);
+                                setTimeout(() => setCopiedAllSeoUrls(false), 3000);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-white hover:bg-stone-100 text-stone-900 border border-stone-300 text-xs font-bold px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>{copiedAllSeoUrls ? `تم نسخ ${seoPagesList.length} رابطاً!` : `نسخ جميع روابط الموقع (${seoPagesList.length})`}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const content = seoPagesList.map(i => i.url).join('\n');
+                                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = 'nfp-october3-all-urls.txt';
+                                a.click();
+                                URL.revokeObjectURL(url);
+                              }}
+                              className="inline-flex items-center gap-1.5 bg-white hover:bg-stone-100 text-stone-900 border border-stone-300 text-xs font-bold px-3.5 py-2.5 rounded-xl transition cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-amber-700" />
+                              <span>تحميل قائمة الروابط (.txt)</span>
+                            </button>
+                          </>
+                        )}
                       </div>
 
                       {seoCheckStatus && (
@@ -5666,6 +5769,108 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <span>{seoCheckStatus}</span>
                         </div>
                       )}
+
+                      {seoAuditReport && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                          <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                            <span className="text-[10px] text-stone-500 block">الصفحات الجاهزة للأرشفة</span>
+                            <span className="text-base font-black text-emerald-700">{seoAuditReport.indexablePages} / {seoAuditReport.totalPages}</span>
+                          </div>
+                          <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                            <span className="text-[10px] text-stone-500 block">حالة Robots.txt</span>
+                            <span className="text-xs font-black text-emerald-700">{seoAuditReport.robotsAllowsPublic && seoAuditReport.robotsBlocksAdmin ? 'سليم (يسمح للعامة ويحجب الإدارة)' : 'يحتاج مراجعة'}</span>
+                          </div>
+                          <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                            <span className="text-[10px] text-stone-500 block">إثبات ملكية جوجل</span>
+                            <span className="text-xs font-black text-emerald-700">{seoAuditReport.verificationTokensCount} أكواد مفعلة</span>
+                          </div>
+                          <div className="bg-white border border-emerald-200 rounded-xl p-3">
+                            <span className="text-[10px] text-stone-500 block">الصفحات المتعثرة</span>
+                            <span className="text-base font-black text-stone-900">{seoAuditReport.failedPages.length}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live All-Pages URL Directory */}
+                      <div className="bg-white border border-stone-200 rounded-2xl p-4 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <h4 className="text-xs sm:text-sm font-black text-stone-900">
+                            قائمة جميع صفحات الموقع المدرجة في خريطة جوجل ({seoPagesList.length})
+                          </h4>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              value={seoUrlsSearch}
+                              onChange={e => setSeoUrlsSearch(e.target.value)}
+                              placeholder="بحث باسم الصفحة أو الرابط..."
+                              className="border border-stone-300 rounded-xl px-3 py-1.5 text-xs bg-stone-50 focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                            />
+                            <select
+                              value={seoCategoryFilter}
+                              onChange={e => setSeoCategoryFilter(e.target.value)}
+                              className="border border-stone-300 rounded-xl px-2.5 py-1.5 text-xs bg-stone-50 font-bold text-stone-700"
+                            >
+                              <option value="الكل">كل الأقسام ({seoPagesList.length})</option>
+                              {Array.from(new Set(seoPagesList.map(i => i.category))).map(cat => (
+                                <option key={cat} value={cat}>
+                                  {cat} ({seoPagesList.filter(i => i.category === cat).length})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {loadingSeoPages ? (
+                          <p className="text-xs text-stone-500 py-4 text-center">جاري تحميل روابط صفحات الموقع...</p>
+                        ) : (
+                          <div className="max-h-72 overflow-y-auto divide-y divide-stone-100 border border-stone-200 rounded-xl">
+                            {seoPagesList
+                              .filter(item => {
+                                if (seoCategoryFilter !== 'الكل' && item.category !== seoCategoryFilter) return false;
+                                if (!seoUrlsSearch.trim()) return true;
+                                const q = seoUrlsSearch.trim().toLowerCase();
+                                return item.title.toLowerCase().includes(q) || item.url.toLowerCase().includes(q);
+                              })
+                              .map((item, idx) => (
+                                <div key={`${item.url}-${idx}`} className="px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-stone-50 text-xs">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-bold text-stone-900 truncate">{item.title}</span>
+                                      <span className="text-[10px] font-bold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-md shrink-0">
+                                        {item.category}
+                                      </span>
+                                    </div>
+                                    <code className="text-[11px] font-mono text-emerald-800 block truncate" dir="ltr">
+                                      {item.url}
+                                    </code>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(item.url);
+                                        showBanner('success', `تم نسخ الرابط: ${item.path}`);
+                                      }}
+                                      className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Copy className="w-3 h-3" />
+                                      <span>نسخ</span>
+                                    </button>
+                                    <a
+                                      href={item.path}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-[11px] font-bold flex items-center gap-1"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                      <span>فتح</span>
+                                    </a>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Save Bar */}

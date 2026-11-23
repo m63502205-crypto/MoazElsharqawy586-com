@@ -1126,20 +1126,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
 
                 <div className="pt-4 border-t border-stone-200/80 flex flex-wrap items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onNavigate) onNavigate('about');
-                      else {
-                        setCurrentView('about');
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                  <a
+                    href="/about"
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        if (onNavigate) onNavigate('about');
+                        else {
+                          setCurrentView('about');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
                       }
                     }}
                     className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-black text-red-700 hover:text-red-800 cursor-pointer"
                   >
                     <span>المزيد عن الحزب ورؤيتنا ومبادئنا</span>
                     <ChevronLeft className="w-4 h-4" />
-                  </button>
+                  </a>
                   <a
                     href="/join"
                     onClick={(e) => {
@@ -1176,19 +1179,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       محافظة الجيزة · {data.settings.slogan || 'مصر للجميع'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onNavigate) onNavigate('contact');
-                      else {
-                        setCurrentView('contact');
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                  <a
+                    href="/contact"
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        if (onNavigate) onNavigate('contact');
+                        else {
+                          setCurrentView('contact');
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
                       }
                     }}
                     className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-[11px] font-black px-3 py-1.5 rounded-lg cursor-pointer shrink-0"
                   >
                     الموقع والخريطة
-                  </button>
+                  </a>
                 </div>
               </div>
             </div>
@@ -1427,7 +1433,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </div>
 
                     <h3 className="font-extrabold text-stone-900 text-lg group-hover:text-red-700 transition-colors mb-2">
-                      {sec.name}
+                      <a
+                        href={`/secretariat/${encodeURIComponent(sec.slug)}`}
+                        onClick={(e) => {
+                          if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openSecretariat(sec.slug);
+                          }
+                        }}
+                        className="hover:underline"
+                      >
+                        {sec.name}
+                      </a>
                     </h3>
 
                     <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-4">
@@ -1505,10 +1523,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         </div>
                       )}
                     </div>
-                    <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
+                    <a
+                      href={`/secretariat/${encodeURIComponent(sec.slug)}`}
+                      onClick={(e) => {
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openSecretariat(sec.slug);
+                        }
+                      }}
+                      className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0"
+                    >
                       <span>التفاصيل</span>
                       <ChevronLeft className="w-3.5 h-3.5" />
-                    </span>
+                    </a>
                   </div>
                 </div>
                 );
@@ -1602,7 +1630,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           </div>
 
                           <h3 className="text-xl font-bold text-white group-hover:text-amber-300 transition-colors mb-2">
-                            {init.title}
+                            <a
+                              href={`/initiative/${encodeURIComponent(init.slug)}`}
+                              onClick={(e) => {
+                                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openInitiative(init.slug);
+                                }
+                              }}
+                              className="hover:underline"
+                            >
+                              {init.title}
+                            </a>
                           </h3>
                           <p className="text-xs sm:text-sm text-stone-300 leading-relaxed line-clamp-3">
                             {init.description}
@@ -1666,10 +1706,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           dark
                         />
 
-                        <div className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10">
+                        <a
+                          href={`/initiative/${encodeURIComponent(init.slug)}`}
+                          onClick={(e) => {
+                            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openInitiative(init.slug);
+                            }
+                          }}
+                          className="flex items-center justify-between text-xs text-amber-400 font-bold pt-3 border-t border-white/10 hover:text-amber-300"
+                        >
                           <span>استعراض أنشطة وفعاليات المبادرة</span>
                           <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
-                        </div>
+                        </a>
                       </div>
                     </div>
                   );
@@ -1759,7 +1809,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             <span className="font-medium">{item.publishDate}</span>
                           </div>
                           <h4 className="font-bold text-stone-900 text-sm group-hover:text-red-700 transition-colors line-clamp-2">
-                            {item.title}
+                            <a
+                              href={`/news/${encodeURIComponent(item.id)}`}
+                              onClick={(e) => {
+                                if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setSelectedNews(item);
+                                  if (onNavigate) {
+                                    onNavigate('news', { newsId: item.id });
+                                  } else {
+                                    setCurrentView('news');
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }
+                                }
+                              }}
+                              className="hover:underline"
+                            >
+                              {item.title}
+                            </a>
                           </h4>
                           <p className="text-xs text-stone-500 line-clamp-2 mt-1">
                             {item.excerpt}
@@ -1891,7 +1959,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                               </span>
                             </div>
                             <h4 className="font-bold text-stone-900 text-sm mb-1 group-hover:text-red-700 transition-colors">
-                              {event.title}
+                              <a
+                                href={`/events/${encodeURIComponent(event.id)}`}
+                                onClick={(e) => {
+                                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setSelectedEvent(event);
+                                    if (onNavigate) {
+                                      onNavigate('events', { eventId: event.id });
+                                    }
+                                  }
+                                }}
+                                className="hover:underline"
+                              >
+                                {event.title}
+                              </a>
                             </h4>
                             <p className="text-xs text-stone-600 line-clamp-2">
                               {event.description}
@@ -2475,7 +2558,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
 
                   <h2 className="font-extrabold text-stone-900 text-xl group-hover:text-red-700 transition-colors mb-2">
-                    {sec.name}
+                    <a
+                      href={`/secretariat/${encodeURIComponent(sec.slug)}`}
+                      onClick={(e) => {
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openSecretariat(sec.slug);
+                        }
+                      }}
+                      className="hover:underline"
+                    >
+                      {sec.name}
+                    </a>
                   </h2>
 
                   <p className="text-xs text-stone-600 leading-relaxed line-clamp-3 mb-5">
@@ -2562,10 +2657,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       </div>
                     )}
                   </div>
-                  <span className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0">
+                  <a
+                    href={`/secretariat/${encodeURIComponent(sec.slug)}`}
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openSecretariat(sec.slug);
+                      }
+                    }}
+                    className="text-red-700 font-bold group-hover:translate-x-[-4px] transition-transform flex items-center gap-1 shrink-0"
+                  >
                     <span>التفاصيل</span>
                     <ChevronLeft className="w-4 h-4" />
-                  </span>
+                  </a>
                 </div>
               </div>
               );
@@ -3359,7 +3464,19 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </div>
 
                     <h2 className="text-2xl font-black text-stone-900 group-hover:text-red-700 transition-colors">
-                      {init.title}
+                      <a
+                        href={`/initiative/${encodeURIComponent(init.slug)}`}
+                        onClick={(e) => {
+                          if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openInitiative(init.slug);
+                          }
+                        }}
+                        className="hover:underline"
+                      >
+                        {init.title}
+                      </a>
                     </h2>
 
                     <p className="text-xs sm:text-sm text-stone-600 leading-relaxed line-clamp-3">
@@ -3435,10 +3552,20 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     compact
                   />
 
-                  <div className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold">
+                  <a
+                    href={`/initiative/${encodeURIComponent(init.slug)}`}
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openInitiative(init.slug);
+                      }
+                    }}
+                    className="pt-2 border-t border-stone-100 flex items-center justify-between text-xs text-red-700 font-bold hover:underline"
+                  >
                     <span>استعراض أنشطة وفعاليات المبادرة كاملة</span>
                     <ChevronLeft className="w-4 h-4 group-hover:translate-x-[-4px] transition-transform" />
-                  </div>
+                  </a>
                 </div>
               </div>
             );
@@ -3609,17 +3736,43 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           <div className="flex-1 space-y-2 min-w-0 w-full">
                             <div className="flex items-center justify-between gap-2 flex-wrap">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-sm font-extrabold text-stone-900 group-hover:text-red-700 transition-colors">
+                                <a
+                                  href={`/initiative/${encodeURIComponent(init.slug || init.id)}?activity=${i}`}
+                                  onClick={(e) => {
+                                    if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setSelectedActivity({ init, act, index: i });
+                                      if (onNavigate) {
+                                        onNavigate('initiative-detail', { slug: init.slug || init.id, activity: i });
+                                      }
+                                    }
+                                  }}
+                                  className="text-sm font-extrabold text-stone-900 group-hover:text-red-700 transition-colors hover:underline"
+                                >
                                   {act.title}
-                                </span>
+                                </a>
                                 <span className="text-[11px] text-amber-800 font-semibold bg-amber-100/80 px-2.5 py-0.5 rounded-md">
                                   {act.date}
                                 </span>
                               </div>
-                              <span className="text-[11px] font-bold text-red-700 inline-flex items-center gap-1 group-hover:underline">
+                              <a
+                                href={`/initiative/${encodeURIComponent(init.slug || init.id)}?activity=${i}`}
+                                onClick={(e) => {
+                                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setSelectedActivity({ init, act, index: i });
+                                    if (onNavigate) {
+                                      onNavigate('initiative-detail', { slug: init.slug || init.id, activity: i });
+                                    }
+                                  }
+                                }}
+                                className="text-[11px] font-bold text-red-700 inline-flex items-center gap-1 group-hover:underline"
+                              >
                                 <span>تفاصيل النشاط</span>
                                 <ChevronLeft className="w-3.5 h-3.5" />
-                              </span>
+                              </a>
                             </div>
 
                             <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">{act.description}</p>
@@ -3829,7 +3982,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     </span>
                   </div>
                   <h3 className="font-extrabold text-stone-900 text-lg group-hover:text-red-700 transition-colors line-clamp-2">
-                    {item.title}
+                    <a
+                      href={`/news/${encodeURIComponent(item.id)}`}
+                      onClick={(e) => {
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedNews(item);
+                          if (onNavigate) {
+                            onNavigate('news', { newsId: item.id });
+                          }
+                        }
+                      }}
+                      className="hover:underline"
+                    >
+                      {item.title}
+                    </a>
                   </h3>
                   <p className="text-xs text-stone-600 line-clamp-3 leading-relaxed">
                     {item.excerpt}
@@ -3858,10 +4026,23 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
               <div className="p-6 pt-0 space-y-3">
                 <div className="text-left">
-                  <span className="text-xs font-bold text-red-700 flex items-center gap-1 group-hover:underline">
+                  <a
+                    href={`/news/${encodeURIComponent(item.id)}`}
+                    onClick={(e) => {
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSelectedNews(item);
+                        if (onNavigate) {
+                          onNavigate('news', { newsId: item.id });
+                        }
+                      }
+                    }}
+                    className="text-xs font-bold text-red-700 flex items-center gap-1 group-hover:underline"
+                  >
                     <span>قراءة الخبر كاملاً</span>
                     <ChevronLeft className="w-3.5 h-3.5" />
-                  </span>
+                  </a>
                 </div>
                 <SocialShareButtons
                   title={item.title}
@@ -3996,7 +4177,22 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         {event.status === 'upcoming' ? 'فعالية قادمة' : (event.status === 'completed' ? 'فعالية منتهية' : 'جارية')}
                       </span>
                       <h3 className="text-xl sm:text-2xl font-black text-stone-900 mt-2 group-hover:text-red-700 transition-colors">
-                        {event.title}
+                        <a
+                          href={`/events/${encodeURIComponent(event.id)}`}
+                          onClick={(e) => {
+                            if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSelectedEvent(event);
+                              if (onNavigate) {
+                                onNavigate('events', { eventId: event.id });
+                              }
+                            }
+                          }}
+                          className="hover:underline"
+                        >
+                          {event.title}
+                        </a>
                       </h3>
                     </div>
 
@@ -5527,6 +5723,210 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // 14. HTML SITEMAP DIRECTORY (/sitemap)
+  // -------------------------------------------------------------
+  if (currentView === 'sitemap') {
+    const coreSections = [
+      { view: 'home', href: '/', title: 'الصفحة الرئيسية – الموقع الرسمي' },
+      { view: 'about', href: '/about', title: 'عن الحزب والأمانة' },
+      { view: 'party-leaders', href: '/party-leaders', title: 'قيادات حزب الجبهة الوطنية' },
+      { view: 'secretariat-leaders', href: '/secretariat-leaders', title: 'قيادات وهيئة مكتب أمانة قسم ثالث أكتوبر' },
+      { view: 'secretariats', href: '/secretariats', title: `الأمانات التخصصية (${data.specializedSecretariats.length})` },
+      { view: 'initiatives', href: '/initiatives', title: `المبادرات المجتمعية (${data.initiatives.length})` },
+      { view: 'news', href: '/news', title: `الأخبار والبيانات (${data.news.length})` },
+      { view: 'events', href: '/events', title: `الفعاليات والأنشطة (${data.events.length})` },
+      { view: 'live', href: '/live', title: 'البث المباشر' },
+      { view: 'join', href: '/join', title: 'استمارة طلب العضوية والانضمام' },
+      { view: 'contact', href: '/contact', title: 'تواصل معنا ومقر الأمانة' }
+    ];
+
+    const goSpa = (e: React.MouseEvent, targetView: string, opts?: { slug?: string; newsId?: string; eventId?: string; activity?: number }) => {
+      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        if (onNavigate) {
+          onNavigate(targetView, opts);
+        } else {
+          if (opts?.slug && setSelectedSlug) setSelectedSlug(opts.slug);
+          setCurrentView(targetView);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
+    };
+
+    return (
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10 text-right">
+        <div className="text-center space-y-3">
+          <span className="text-xs font-bold text-red-700 uppercase tracking-widest">
+            فهرس البوابة الرسمية
+          </span>
+          <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
+            خريطة الموقع الكاملة – أمانة قسم ثالث أكتوبر
+          </h1>
+          <p className="text-xs sm:text-sm text-stone-500 max-w-2xl mx-auto">
+            دليل شامل لكافة الصفحات والأقسام والأمانات التخصصية والمبادرات والأخبار والفعاليات المخصصة للأرشفة السريعة والوصول المباشر.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Core Pages */}
+          <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-4 shadow-xs">
+            <h2 className="text-lg font-black text-stone-900 border-b border-stone-100 pb-3">
+              الأقسام والصفحات الرئيسية
+            </h2>
+            <ul className="space-y-2 text-sm">
+              {coreSections.map(sec => (
+                <li key={sec.href}>
+                  <a
+                    href={sec.href}
+                    onClick={e => goSpa(e, sec.view)}
+                    className="flex items-center justify-between text-stone-800 hover:text-red-700 font-bold py-1.5 border-b border-stone-100/70"
+                  >
+                    <span>{sec.title}</span>
+                    <ChevronLeft className="w-4 h-4 text-red-700" />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* News, Events, Initiatives & Custom Pages */}
+          <div className="space-y-6">
+            {data.initiatives.length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-3 shadow-xs">
+                <h2 className="text-lg font-black text-stone-900 border-b border-stone-100 pb-2">
+                  المبادرات والأنشطة الميدانية ({data.initiatives.length})
+                </h2>
+                <ul className="space-y-2 text-xs sm:text-sm">
+                  {data.initiatives.map(init => (
+                    <li key={init.id} className="space-y-1">
+                      <a
+                        href={`/initiative/${encodeURIComponent(init.slug)}`}
+                        onClick={e => goSpa(e, 'initiative-detail', { slug: init.slug })}
+                        className="font-bold text-red-700 hover:underline block"
+                      >
+                        {init.title}
+                      </a>
+                      {(init.activities || []).length > 0 && (
+                        <ul className="pr-4 space-y-1 border-r-2 border-amber-300">
+                          {(init.activities || []).map((act, idx) => (
+                            <li key={idx}>
+                              <a
+                                href={`/initiative/${encodeURIComponent(init.slug)}?activity=${idx}`}
+                                onClick={e => goSpa(e, 'initiative-detail', { slug: init.slug, activity: idx })}
+                                className="text-xs text-stone-600 hover:text-red-700 hover:underline"
+                              >
+                                {act.title || `نشاط ${idx + 1}`}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {data.news.length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-3 shadow-xs">
+                <h2 className="text-lg font-black text-stone-900 border-b border-stone-100 pb-2">
+                  الأخبار والبيانات ({data.news.length})
+                </h2>
+                <ul className="space-y-2 text-xs sm:text-sm">
+                  {data.news.map(item => (
+                    <li key={item.id}>
+                      <a
+                        href={`/news/${encodeURIComponent(item.id)}`}
+                        onClick={e => goSpa(e, 'news', { newsId: item.id })}
+                        className="font-bold text-stone-800 hover:text-red-700 hover:underline block"
+                      >
+                        {item.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {data.events.length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-3 shadow-xs">
+                <h2 className="text-lg font-black text-stone-900 border-b border-stone-100 pb-2">
+                  الفعاليات واللقاءات ({data.events.length})
+                </h2>
+                <ul className="space-y-2 text-xs sm:text-sm">
+                  {data.events.map(ev => (
+                    <li key={ev.id}>
+                      <a
+                        href={`/events/${encodeURIComponent(ev.id)}`}
+                        onClick={e => goSpa(e, 'events', { eventId: ev.id })}
+                        className="font-bold text-stone-800 hover:text-red-700 hover:underline block"
+                      >
+                        {ev.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {(data.pages || []).length > 0 && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-3 shadow-xs">
+                <h2 className="text-lg font-black text-stone-900 border-b border-stone-100 pb-2">
+                  الصفحات التعريفية الإضافية ({data.pages.length})
+                </h2>
+                <ul className="space-y-2 text-xs sm:text-sm">
+                  {data.pages.map(pg => (
+                    <li key={pg.id}>
+                      <a
+                        href={`/page/${encodeURIComponent(pg.slug)}`}
+                        onClick={e => goSpa(e, 'cms-page', { slug: pg.slug })}
+                        className="font-bold text-stone-800 hover:text-red-700 hover:underline block"
+                      >
+                        {pg.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* All Specialized Secretariats */}
+        <div className="bg-white rounded-2xl border border-stone-200 p-6 space-y-4 shadow-xs">
+          <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+            <h2 className="text-lg font-black text-stone-900">
+              الأمانات التخصصية والنوعية ({data.specializedSecretariats.length} أمانة)
+            </h2>
+            <a
+              href="/sitemap.xml"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-mono text-emerald-700 hover:underline"
+              dir="ltr"
+            >
+              /sitemap.xml
+            </a>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs sm:text-sm">
+            {data.specializedSecretariats.map(sec => (
+              <a
+                key={sec.id}
+                href={`/secretariat/${encodeURIComponent(sec.slug)}`}
+                onClick={e => goSpa(e, 'secretariat-detail', { slug: sec.slug })}
+                className="flex items-center justify-between p-3 rounded-xl bg-stone-50 hover:bg-red-50 border border-stone-200 hover:border-red-300 font-bold text-stone-800 hover:text-red-700 transition-colors"
+              >
+                <span className="truncate">{sec.name}</span>
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+              </a>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }

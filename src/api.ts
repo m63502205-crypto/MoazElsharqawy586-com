@@ -587,5 +587,41 @@ export const api = {
     apiFetch<{ success: boolean; result: NotificationDispatchResult }>('/api/admin/subscribers/dispatch-item', {
       method: 'POST',
       body: JSON.stringify({ itemType, itemId })
+    }),
+
+  // Google Search Indexing & All-Pages SEO Audit
+  getAdminSeoUrls: () =>
+    apiFetch<{
+      siteUrl: string;
+      sitemapUrl: string;
+      robotsUrl: string;
+      totalCount: number;
+      items: Array<{
+        url: string;
+        path: string;
+        title: string;
+        category: string;
+        changefreq: string;
+        priority: string;
+        lastmod?: string;
+      }>;
+    }>('/api/admin/seo/urls'),
+
+  runAdminSeoAudit: () =>
+    apiFetch<{
+      ok: boolean;
+      siteUrl: string;
+      sitemapUrl: string;
+      robotsUrl: string;
+      totalPages: number;
+      indexablePages: number;
+      failedPages: Array<{ url: string; reason: string }>;
+      robotsAllowsPublic: boolean;
+      robotsBlocksAdmin: boolean;
+      hasSitemapInRobots: boolean;
+      verificationTokensCount: number;
+      checkedAt: string;
+    }>('/api/admin/seo/audit', {
+      method: 'POST'
     })
 };

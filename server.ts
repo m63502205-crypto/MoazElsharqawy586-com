@@ -3,12 +3,16 @@ import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
 import { db, hashPassword } from './src/server/db.ts';
 import type { AdminUser, MembershipApplication, MemberRecord, EmailSubscriber } from './src/server/db.ts';
 import { dispatchSubscriberNotifications, getSmtpStatus } from './src/server/mailer.ts';
 import { initializeApp as initFirebaseAdminApp, getApps as getFirebaseAdminApps, getApp as getFirebaseAdminApp } from 'firebase-admin/app';
 import { getAuth as getFirebaseAdminAuth } from 'firebase-admin/auth';
+
+const execFileAsync = promisify(execFile);
 
 const app = express();
 app.set('trust proxy', true);
@@ -59,6 +63,83 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 app.use('/uploads', express.static(uploadsDir));
+
+const publicAssetsDir = path.resolve(process.cwd(), 'public', 'assets');
+const heroAudioExtractionInFlight = new Map<string, Promise<string | null>>();
+
+function resolveSafeLocalMediaFile(rawUrl?: string | null): string | null {
+  const clean = String(rawUrl || '').split('?')[0].trim();
+  if (!clean) return null;
+  if (clean.startsWith('/uploads/')) {
+    const rel = clean.slice('/uploads/'.length);
+    if (!rel || rel.includes('..')) return null;
+    const target = path.resolve(uploadsDir, rel);
+    if (!target.startsWith(uploadsDir + path.sep)) return null;
+    return fs.existsSync(target) && fs.statSync(target).isFile() ? target : null;
+  }
+  if (clean.startsWith('/assets/')) {
+    const rel = clean.slice('/assets/'.length);
+    if (!rel || rel.includes('..')) return null;
+    const target = path.resolve(publicAssetsDir, rel);
+    if (!target.startsWith(publicAssetsDir + path.sep)) return null;
+    return fs.existsSync(target) && fs.statSync(target).isFile() ? target : null;
+  }
+  return null;
+}
+
+async function ensureHeroAudioMp3(rawVideoUrl?: string | null): Promise<string | null> {
+  const clean = String(rawVideoUrl || '').split('?')[0].trim();
+  if (!clean) return null;
+  if (clean === '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4') {
+    const bundled = path.resolve(publicAssetsDir, 'aistudio', 'hero-audio.mp3');
+    if (fs.existsSync(bundled)) return bundled;
+  }
+
+  const videoPath = resolveSafeLocalMediaFile(clean);
+  if (!videoPath) return null;
+
+  const stat = fs.statSync(videoPath);
+  const hash = crypto
+    .createHash('sha1')
+    .update(`${videoPath}:${stat.size}:${stat.mtimeMs}`)
+    .digest('hex')
+    .slice(0, 16);
+  const outMp3 = path.join(uploadsDir, `hero_audio_${hash}.mp3`);
+  if (fs.existsSync(outMp3) && fs.statSync(outMp3).size > 256) {
+    return outMp3;
+  }
+
+  const existingTask = heroAudioExtractionInFlight.get(outMp3);
+  if (existingTask) return existingTask;
+
+  const task = (async () => {
+    const tmpMp3 = `${outMp3}.tmp.${Date.now()}.mp3`;
+    try {
+      await execFileAsync(
+        'ffmpeg',
+        ['-y', '-i', videoPath, '-vn', '-acodec', 'libmp3lame', '-ar', '44100', '-ac', '2', '-b:a', '96k', tmpMp3],
+        { timeout: 60000 }
+      );
+      if (fs.existsSync(tmpMp3) && fs.statSync(tmpMp3).size > 256) {
+        fs.renameSync(tmpMp3, outMp3);
+        return outMp3;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      try {
+        if (fs.existsSync(tmpMp3)) fs.unlinkSync(tmpMp3);
+      } catch {
+        // ignore temp cleanup failure
+      }
+      heroAudioExtractionInFlight.delete(outMp3);
+    }
+  })();
+
+  heroAudioExtractionInFlight.set(outMp3, task);
+  return task;
+}
 
 // Firebase project config (loaded from firebase-applet-config.json)
 let firebaseRuntimeConfig: {
@@ -249,7 +330,7 @@ async function hydrateDbFromPublicFirestoreRest(force = false): Promise<boolean>
           } else {
             const existingTs = String(existing.updatedAt || existing.createdAt || '');
             const cloudTs = String(item.updatedAt || c.updatedAt || '');
-            if (!existingTs || cloudTs >= existingTs) {
+            if (!existingTs || (Boolean(cloudTs) && cloudTs > existingTs)) {
               map.set(k, item);
             }
           }
@@ -280,9 +361,16 @@ async function hydrateDbFromPublicFirestoreRest(force = false): Promise<boolean>
         const isPreUpgrade = (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < cutoffIso);
         const isCloudNewer = !localUpdated || (Boolean(cloudUpdated) && cloudUpdated > localUpdated);
         if (isCloudNewer) {
+          const cloudHeroVideo = String(cloudSettings.heroVideoUrl || '');
+          const localHeroVideo = String(data.settings?.heroVideoUrl || '');
+          const safeHeroVideoUrl =
+            cloudHeroVideo.startsWith('/uploads/') && !resolveSafeLocalMediaFile(cloudHeroVideo)
+              ? (resolveSafeLocalMediaFile(localHeroVideo) ? localHeroVideo : '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4')
+              : (cloudHeroVideo || localHeroVideo);
           const nextSettings = {
             ...data.settings,
             ...cloudSettings,
+            heroVideoUrl: safeHeroVideoUrl,
             seoTitle: isPreUpgrade ? data.settings.seoTitle : (cloudSettings.seoTitle || data.settings.seoTitle),
             officialSiteUrl: isPreUpgrade ? data.settings.officialSiteUrl : (cloudSettings.officialSiteUrl || data.settings.officialSiteUrl),
             rosterVersion: Math.max(Number(data.settings?.rosterVersion || 0), Number(cloudSettings.rosterVersion || 0))
@@ -330,7 +418,10 @@ function recordLocalTombstone(data: ReturnType<typeof db.get>, col: string, rawI
   data.deletedTombstones = Array.from(current);
 }
 
-app.use('/api/admin', (req: Request, _res: Response, next: NextFunction) => {
+app.use('/api/admin', (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   if (req.method !== 'GET' && req.path !== '/login' && req.path !== '/google-login' && req.path !== '/logout') {
     lastLocalAdminMutationAt = Date.now();
   }
@@ -1485,7 +1576,16 @@ function buildPublicPortalPayload(
   options?: { externalizeInlineImages?: boolean }
 ) {
   const ext = Boolean(options?.externalizeInlineImages);
-  const rawSettings = data.settings || ({} as any);
+  const rawSettingsInput = data.settings || ({} as any);
+  const rawHeroVideoUrl = String(rawSettingsInput.heroVideoUrl || '').trim();
+  const resolvedHeroVideoUrl =
+    rawHeroVideoUrl.startsWith('/uploads/') && !resolveSafeLocalMediaFile(rawHeroVideoUrl)
+      ? '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
+      : rawSettingsInput.heroVideoUrl;
+  const rawSettings = {
+    ...rawSettingsInput,
+    heroVideoUrl: resolvedHeroVideoUrl
+  };
   const settings = ext
     ? {
         ...rawSettings,
@@ -1882,10 +1982,25 @@ app.get('/api/public/firestore-asset/:assetId', async (req: Request, res: Respon
   return res.redirect('/og-logo.jpg');
 });
 
+// Extracted lightweight MP3 track for custom hero videos (prevents mobile OS lockscreen media bars)
+app.get('/api/public/hero-audio', async (req: Request, res: Response) => {
+  const src = typeof req.query?.src === 'string' ? req.query.src : '';
+  const mp3Path = await ensureHeroAudioMp3(src);
+  if (!mp3Path || !fs.existsSync(mp3Path)) {
+    return res.status(404).json({ error: 'Audio track not available' });
+  }
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(mp3Path);
+});
+
 // 1. Get all public portal data
 app.get('/api/public/data', async (_req: Request, res: Response) => {
   await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
   const data = db.get();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.json(buildPublicPortalPayload(data, { externalizeInlineImages: true }));
 });
 
@@ -4253,6 +4368,9 @@ app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) =
     return res.status(400).json({ error: 'لم يتم إرسال أي ملف' });
   }
   const url = persistDataUrlIfAny(fileData, 'upload');
+  if (typeof url === 'string' && /\.(mp4|webm|mov|ogg)$/i.test(url)) {
+    void ensureHeroAudioMp3(url);
+  }
   res.json({ success: true, url });
 });
 
@@ -4285,6 +4403,9 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
     updatedAt: new Date().toISOString()
   };
   db.save();
+  if (data.settings.heroVideoUrl) {
+    void ensureHeroAudioMp3(data.settings.heroVideoUrl);
+  }
   db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل وSEO للمنصة');
   res.json({ success: true, settings: data.settings });
 });
@@ -4462,6 +4583,7 @@ app.get(['/api/news/:id/image', '/api/events/:id/image', '/api/initiatives/:id/i
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   await hydrateDbFromPublicFirestoreRest(true).catch(() => undefined);
+  void ensureHeroAudioMp3(db.get().settings?.heroVideoUrl);
 
   if (!isProduction) {
     const vite = await createViteServer({
@@ -4499,7 +4621,13 @@ async function startServer() {
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
         res
           .status(200)
-          .set({ 'Content-Type': 'text/html; charset=utf-8', Vary: 'User-Agent' })
+          .set({
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+            Vary: 'User-Agent'
+          })
           .end(injectDynamicSiteMeta(transformed, req));
       } catch (err) {
         next(err);
@@ -4520,7 +4648,13 @@ async function startServer() {
         : '<!doctype html><html><head></head><body><div id="root"></div></body></html>';
       res
         .status(200)
-        .set({ 'Content-Type': 'text/html; charset=utf-8', Vary: 'User-Agent' })
+        .set({
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
+          Vary: 'User-Agent'
+        })
         .end(injectDynamicSiteMeta(rawHtml, req));
     });
   }

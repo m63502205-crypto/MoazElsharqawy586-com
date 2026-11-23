@@ -1267,10 +1267,46 @@
       ],
       "isActive": true,
       "createdAt": "2026-11-23T14:44:04.684Z",
-      "lastLogin": "2026-11-23T15:26:45.613Z"
+      "lastLogin": "2026-11-23T15:53:24.858Z"
     }
   ],
   "auditLogs": [
+    {
+      "id": "log-1795449204876-b6ws9",
+      "adminEmail": "aymanmoussadunes67@gmail.com",
+      "adminName": "أ.أيمن موسى",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-23T15:53:24.876Z"
+    },
+    {
+      "id": "log-1795448956493-kndww",
+      "adminEmail": "aymanmoussadunes67@gmail.com",
+      "adminName": "أ.أيمن موسى",
+      "action": "تحديث إعدادات المنصة",
+      "entityType": "Settings",
+      "details": "تم تعديل إعدادات وهوية وبيانات التواصل وSEO للمنصة",
+      "timestamp": "2026-11-23T15:49:16.493Z"
+    },
+    {
+      "id": "log-1795448955435-cdfi7",
+      "adminEmail": "aymanmoussadunes67@gmail.com",
+      "adminName": "أ.أيمن موسى",
+      "action": "تحديث إعدادات المنصة",
+      "entityType": "Settings",
+      "details": "تم تعديل إعدادات وهوية وبيانات التواصل وSEO للمنصة",
+      "timestamp": "2026-11-23T15:49:15.435Z"
+    },
+    {
+      "id": "log-1795448906609-czkf7",
+      "adminEmail": "aymanmoussadunes67@gmail.com",
+      "adminName": "أ.أيمن موسى",
+      "action": "تسجيل دخول إداري",
+      "entityType": "Auth",
+      "details": "تم تسجيل الدخول بنجاح إلى لوحة التحكم",
+      "timestamp": "2026-11-23T15:48:26.609Z"
+    },
     {
       "id": "log-1795447605633-h4n70",
       "adminEmail": "aymanmoussadunes67@gmail.com",
@@ -1750,7 +1786,7 @@
     "mapEmbedUrl": "https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed",
     "coordinates": "29.980836, 30.840788",
     "entranceImageUrl": "/assets/aistudio/______________________________20261114_203911_a06570e5.jpg",
-    "heroVideoUrl": "/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4",
+    "heroVideoUrl": "/uploads/upload_1795448950483_jc5wcz9.mp4",
     "heroMediaType": "video",
     "heroDefaultMuted": false,
     "googleAnalyticsId": "G-NX1MQ9NHXW",
@@ -1804,7 +1840,8 @@
     },
     "heroSlides": [],
     "heroImages": [],
-    "updatedAt": "2026-11-23T13:41:55.509Z"
+    "updatedAt": "2026-11-23T15:49:16.479Z",
+    "heroPosterUrl": ""
   },
   "analytics": {
     "daily": {
@@ -1816,24 +1853,34 @@
         "pageViews": 2,
         "mobile": 1,
         "desktop": 1
+      },
+      "2026-11-23": {
+        "visitors": [
+          "5e14c6fb0319e0"
+        ],
+        "pageViews": 1,
+        "mobile": 1,
+        "desktop": 0
       }
     },
     "pages": {
       "/": {
         "path": "/",
-        "title": "أمانة حزب الجبهة الوطنية قسم ثالث أكتوبر | الموقع الرسمي",
-        "views": 2,
+        "title": "حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي",
+        "views": 3,
         "visitors": [
           "b8f2aaf1a94f33",
-          "9ea705c57b4c41"
+          "9ea705c57b4c41",
+          "5e14c6fb0319e0"
         ],
-        "lastVisitedAt": "2026-11-22T23:10:13.175Z"
+        "lastVisitedAt": "2026-11-23T15:52:13.237Z"
       }
     },
     "sources": {
-      "زيارة مباشرة (Direct)": 2
+      "زيارة مباشرة (Direct)": 2,
+      "بحث Google": 1
     },
-    "updatedAt": "2026-11-22T23:10:13.175Z"
+    "updatedAt": "2026-11-23T15:52:13.237Z"
   },
   "deletedTombstones": []
 }

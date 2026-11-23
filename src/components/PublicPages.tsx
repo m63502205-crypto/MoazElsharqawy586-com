@@ -235,9 +235,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
   const adminLockedMute = Boolean(data.settings.heroDefaultMuted);
   const [visitorMuted, setVisitorMuted] = useState<boolean>(adminLockedMute);
-  const [useNativeHeroVideoAudio, setUseNativeHeroVideoAudio] = useState(false);
   const effectiveHeroMuted = adminLockedMute || visitorMuted;
-  const wantNativeHeroAudio = !effectiveHeroMuted && useNativeHeroVideoAudio;
 
   useEffect(() => {
     setVisitorMuted(Boolean(data.settings.heroDefaultMuted));
@@ -327,17 +325,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       if (!vid || document.hidden || currentView !== 'home') return;
       vid.setAttribute('playsinline', '');
       vid.setAttribute('webkit-playsinline', '');
-      if (wantNativeHeroAudio) {
-        vid.removeAttribute('muted');
-        vid.muted = false;
-        vid.defaultMuted = false;
-        vid.volume = 1;
-      } else {
-        vid.setAttribute('muted', '');
-        vid.muted = true;
-        vid.defaultMuted = true;
-        vid.volume = 0;
-      }
+      vid.setAttribute('muted', '');
+      vid.muted = true;
+      vid.defaultMuted = true;
+      vid.volume = 0;
       if (vid.paused) {
         vid.play().catch(() => {});
       }
@@ -356,8 +347,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     syncHeroAudioState({
       enabled: isVideoSlide && !effectiveHeroMuted,
       videoUrl: activeSlide?.url || null,
-      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0,
-      onFallbackChange: setUseNativeHeroVideoAudio
+      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
     });
 
     const handleVisibilityOrFocus = () => {
@@ -386,7 +376,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       window.removeEventListener('pageshow', handleVisibilityOrFocus);
       syncHeroAudioState({ enabled: false });
     };
-  }, [currentView, heroSlideIndex, heroSlides, effectiveHeroMuted, wantNativeHeroAudio]);
+  }, [currentView, heroSlideIndex, heroSlides, effectiveHeroMuted]);
 
   // Auto-flip effect every 5 seconds (only when more than 1 slide)
   useEffect(() => {
@@ -949,7 +939,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         ref={isActive ? heroVideoRef : undefined}
                         src={slide.url}
                         autoPlay
-                        muted={!wantNativeHeroAudio}
+                        muted
                         loop
                         playsInline
                         preload="auto"
@@ -961,27 +951,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         controlsList="nodownload noplaybackrate noremoteplayback"
                         onContextMenu={(e) => e.preventDefault()}
                         onLoadedData={(e) => {
-                          if (!wantNativeHeroAudio) {
-                            e.currentTarget.muted = true;
-                            e.currentTarget.volume = 0;
-                          } else {
-                            e.currentTarget.muted = false;
-                            e.currentTarget.volume = 1;
-                          }
+                          e.currentTarget.muted = true;
+                          e.currentTarget.defaultMuted = true;
+                          e.currentTarget.volume = 0;
                           if (!document.hidden && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
                           }
                         }}
                         onCanPlay={(e) => {
-                          if (!wantNativeHeroAudio) {
-                            e.currentTarget.muted = true;
-                            e.currentTarget.volume = 0;
-                          } else {
-                            e.currentTarget.muted = false;
-                            e.currentTarget.volume = 1;
-                          }
+                          e.currentTarget.muted = true;
+                          e.currentTarget.defaultMuted = true;
+                          e.currentTarget.volume = 0;
                           if (!document.hidden && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
+                          }
+                        }}
+                        onPlaying={() => {
+                          clearBrowserMediaSession();
+                          if (!effectiveHeroMuted) {
+                            void unlockHeroAudioNow();
                           }
                         }}
                         onPause={(e) => {
@@ -990,8 +978,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           }
                         }}
                         onVolumeChange={(e) => {
-                          if (!wantNativeHeroAudio && (!e.currentTarget.muted || e.currentTarget.volume !== 0)) {
+                          if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
                             e.currentTarget.muted = true;
+                            e.currentTarget.defaultMuted = true;
                             e.currentTarget.volume = 0;
                           }
                         }}
@@ -1065,15 +1054,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       const nextMuted = !visitorMuted;
                       setVisitorMuted(nextMuted);
                       if (!nextMuted) {
-                        unlockHeroAudioNow();
-                        const vid = heroVideoRef.current;
-                        if (vid && useNativeHeroVideoAudio) {
-                          vid.removeAttribute('muted');
-                          vid.muted = false;
-                          vid.defaultMuted = false;
-                          vid.volume = 1;
-                          vid.play().catch(() => {});
-                        }
+                        void unlockHeroAudioNow();
                       }
                     }}
                     className={`absolute bottom-3 right-3 z-30 border backdrop-blur-xs text-xs font-black px-3.5 py-2 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-lg ${

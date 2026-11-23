@@ -445,7 +445,7 @@ function mergeCollectionWithTombstones(
     } else {
       const existingTs = String(existing.updatedAt || existing.createdAt || '');
       const cloudTs = String(raw.updatedAt || docItem.updatedAt || '');
-      if (!existingTs || cloudTs >= existingTs) {
+      if (!existingTs || (Boolean(cloudTs) && cloudTs > existingTs)) {
         map.set(key, raw);
       }
     }

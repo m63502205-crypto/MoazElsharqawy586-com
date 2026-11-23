@@ -3698,13 +3698,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <div className="flex items-center gap-2 flex-wrap">
                             <button
                               type="button"
-                              onClick={() => {
-                                setSettings({
+                              onClick={async () => {
+                                const updated = {
                                   ...settings,
                                   heroVideoUrl: '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4',
                                   heroPosterUrl: settings.heroPosterUrl || '',
                                   heroMediaType: settings.heroMediaType || 'video'
-                                });
+                                };
+                                setSettings(updated);
+                                try {
+                                  await api.updateSettings(updated);
+                                  await loadAdminData();
+                                  onRefreshPublicData();
+                                  showBanner('success', 'تم تعيين وحفظ الفيديو المعتمد للأمانة فوراً');
+                                } catch (err: any) {
+                                  showBanner('error', err?.message || 'تعذر حفظ إعداد الفيديو');
+                                }
                               }}
                               className="bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-black px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
                             >
@@ -3736,13 +3745,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                   reader.onload = async () => {
                                     try {
                                       const res = await api.uploadMedia(reader.result as string, file.name);
-                                      setSettings({
+                                      const updated = {
                                         ...settings,
                                         heroVideoUrl: res.url
-                                      });
-                                      alert('تم رفع وحفظ ملف الفيديو بنجاح على الخادم');
+                                      };
+                                      setSettings(updated);
+                                      await api.updateSettings(updated);
+                                      await loadAdminData();
+                                      onRefreshPublicData();
+                                      showBanner('success', 'تم رفع وحفظ ملف الفيديو وتجهيز صوته بنجاح');
                                     } catch (err: any) {
-                                      alert(`فشل رفع الفيديو: ${err.message || 'حدث خطأ'}`);
+                                      showBanner('error', `فشل رفع الفيديو: ${err.message || 'حدث خطأ'}`);
                                     } finally {
                                       setIsUploadingHeroMedia(false);
                                     }
@@ -7264,12 +7277,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
         <MediaPickerModal
           isOpen={true}
           onClose={() => setShowHeroVideoPicker(false)}
-          onSelect={(selectedUrls) => {
+          onSelect={async (selectedUrls) => {
             const url = selectedUrls[0] || '';
-            if (url) {
-              setSettings({ ...settings, heroVideoUrl: url });
-            }
             setShowHeroVideoPicker(false);
+            if (url) {
+              const updated = { ...settings, heroVideoUrl: url };
+              setSettings(updated);
+              try {
+                await api.updateSettings(updated);
+                await loadAdminData();
+                onRefreshPublicData();
+                showBanner('success', 'تم اختيار وحفظ فيديو الواجهة الرئيسية بنجاح');
+              } catch (err: any) {
+                showBanner('error', err?.message || 'تعذر حفظ الفيديو المختار');
+              }
+            }
           }}
           media={media.filter(m => m.type === 'video')}
           onMediaCreated={handleMediaCreated}

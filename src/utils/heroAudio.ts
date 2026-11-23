@@ -1,6 +1,6 @@
 // Singleton Web Audio soundtrack controller for the homepage visual reel.
-// Starts preloading and attempts immediate AudioContext unlock from app boot,
-// while keeping <video> muted so mobile browsers never spawn OS lockscreen media bars.
+// Plays extracted lightweight MP3 audio via Web Audio API while keeping <video>
+// permanently muted so mobile browsers never spawn OS lockscreen media bars.
 
 const DEFAULT_HERO_VIDEO_URL = '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
 const DEFAULT_HERO_AUDIO_URL = '/assets/aistudio/hero-audio.mp3';
@@ -16,7 +16,6 @@ let initializedEarly = false;
 const decodedBuffers = new Map<string, AudioBuffer>();
 const failedDecodeUrls = new Set<string>();
 const pendingFetches = new Map<string, Promise<AudioBuffer | null>>();
-let fallbackChangeHandler: ((useNative: boolean) => void) | null = null;
 
 function getAudioContextClass(): typeof AudioContext | undefined {
   if (typeof window === 'undefined') return undefined;
@@ -31,6 +30,11 @@ function getOrCreateAudioContext(): AudioContext | null {
   if (!Ctx) return null;
   if (!audioCtx || audioCtx.state === 'closed') {
     audioCtx = new Ctx();
+    audioCtx.onstatechange = () => {
+      if (audioCtx?.state === 'running' && desiredEnabled && desiredAudioUrl && !document.hidden) {
+        startDecodedBufferNow();
+      }
+    };
   }
   return audioCtx;
 }
@@ -60,13 +64,32 @@ function stopCurrentSource(): void {
 }
 
 export function resolveHeroAudioUrl(videoUrl: string): string {
-  return videoUrl === DEFAULT_HERO_VIDEO_URL ? DEFAULT_HERO_AUDIO_URL : videoUrl;
+  const trimmed = String(videoUrl || '').trim();
+  if (!trimmed || trimmed === DEFAULT_HERO_VIDEO_URL) {
+    return DEFAULT_HERO_AUDIO_URL;
+  }
+  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('/assets/')) {
+    return `/api/public/hero-audio?src=${encodeURIComponent(trimmed)}`;
+  }
+  return trimmed;
 }
 
-export function shouldUseNativeVideoAudio(videoUrl?: string | null): boolean {
-  if (!videoUrl) return false;
-  const audioUrl = resolveHeroAudioUrl(videoUrl);
-  return audioUrl !== DEFAULT_HERO_AUDIO_URL && failedDecodeUrls.has(audioUrl);
+function readBootHeroSettings(): { heroVideoUrl: string; heroDefaultMuted: boolean; heroMediaType: string } | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const el = document.getElementById('__NFP_INITIAL_DATA__');
+    if (!el || !el.textContent) return null;
+    const parsed = JSON.parse(el.textContent);
+    const s = parsed?.settings;
+    if (!s || typeof s !== 'object') return null;
+    return {
+      heroVideoUrl: String(s.heroVideoUrl || DEFAULT_HERO_VIDEO_URL),
+      heroDefaultMuted: Boolean(s.heroDefaultMuted),
+      heroMediaType: String(s.heroMediaType || 'video')
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
@@ -101,9 +124,6 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
     .catch(() => {
       failedDecodeUrls.add(url);
       pendingFetches.delete(url);
-      if (desiredEnabled && desiredAudioUrl === url && url !== DEFAULT_HERO_AUDIO_URL) {
-        fallbackChangeHandler?.(true);
-      }
       return null;
     });
 
@@ -111,36 +131,26 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
   return task;
 }
 
-async function tryStartPlayback(): Promise<void> {
+function startDecodedBufferNow(): boolean {
   clearBrowserMediaSession();
 
   if (!desiredEnabled || !desiredAudioUrl || (typeof document !== 'undefined' && document.hidden)) {
-    return;
+    return false;
   }
 
   const ctx = getOrCreateAudioContext();
-  if (!ctx) return;
-
-  if (ctx.state === 'suspended') {
-    try {
-      await ctx.resume();
-    } catch {
-      return;
-    }
-  }
-
-  if (!desiredEnabled || !desiredAudioUrl || document.hidden || ctx.state !== 'running') {
-    return;
-  }
+  if (!ctx) return false;
 
   const targetUrl = desiredAudioUrl;
-  const buffer = decodedBuffers.get(targetUrl) || (await fetchAndDecodeAudio(targetUrl));
-  if (!buffer || !desiredEnabled || desiredAudioUrl !== targetUrl || document.hidden || ctx.state !== 'running') {
-    return;
+  const buffer = decodedBuffers.get(targetUrl);
+  if (!buffer) return false;
+
+  if (currentPlayingUrl === targetUrl && currentSource && ctx.state === 'running') {
+    return true;
   }
 
-  if (currentPlayingUrl === targetUrl && currentSource) {
-    return;
+  if (ctx.state !== 'running') {
+    return false;
   }
 
   stopCurrentSource();
@@ -163,21 +173,73 @@ async function tryStartPlayback(): Promise<void> {
         currentPlayingUrl = null;
       }
     };
+    return true;
   } catch {
-    // Ignore audio start restrictions
+    return false;
   }
+}
+
+async function tryStartPlayback(): Promise<void> {
+  clearBrowserMediaSession();
+
+  if (!desiredEnabled || !desiredAudioUrl || (typeof document !== 'undefined' && document.hidden)) {
+    return;
+  }
+
+  const ctx = getOrCreateAudioContext();
+  if (!ctx) return;
+
+  // Attempt synchronous start first if already decoded & running
+  if (ctx.state === 'running' && startDecodedBufferNow()) {
+    return;
+  }
+
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      // Browser autoplay policy waiting for first interaction
+    }
+  }
+
+  if (!desiredEnabled || !desiredAudioUrl || document.hidden) {
+    return;
+  }
+
+  const targetUrl = desiredAudioUrl;
+  if (!decodedBuffers.has(targetUrl)) {
+    await fetchAndDecodeAudio(targetUrl);
+  }
+
+  if (!desiredEnabled || desiredAudioUrl !== targetUrl || document.hidden) {
+    return;
+  }
+
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      return;
+    }
+  }
+
+  startDecodedBufferNow();
 }
 
 export async function unlockHeroAudioNow(): Promise<void> {
   const ctx = getOrCreateAudioContext();
   if (!ctx) return;
+
+  // Synchronously kick resume + buffer playback inside user gesture when buffer is cached
   if (ctx.state === 'suspended') {
-    try {
-      await ctx.resume();
-    } catch {
-      // ignore
+    const resumePromise = ctx.resume().catch(() => undefined);
+    if (desiredEnabled && desiredAudioUrl && !document.hidden && decodedBuffers.has(desiredAudioUrl)) {
+      // If browser transitions state synchronously or on microtask, try immediately
+      startDecodedBufferNow();
     }
+    await resumePromise;
   }
+
   if (desiredEnabled && desiredAudioUrl && !document.hidden) {
     await tryStartPlayback();
   }
@@ -191,12 +253,16 @@ function handleEarlyOrGlobalGesture(): void {
     ctx.resume()
       .then(() => {
         if (desiredEnabled && desiredAudioUrl && !document.hidden) {
-          tryStartPlayback();
+          if (!startDecodedBufferNow()) {
+            void tryStartPlayback();
+          }
         }
       })
       .catch(() => {});
   } else if (desiredEnabled && desiredAudioUrl && !document.hidden) {
-    tryStartPlayback();
+    if (!startDecodedBufferNow()) {
+      void tryStartPlayback();
+    }
   }
 }
 
@@ -208,7 +274,7 @@ function handleVisibility(): void {
       audioCtx.suspend().catch(() => {});
     }
   } else if (desiredEnabled && desiredAudioUrl) {
-    tryStartPlayback();
+    void tryStartPlayback();
   }
 }
 
@@ -216,12 +282,25 @@ export function initHeroAudioEarly(): void {
   if (initializedEarly || typeof window === 'undefined' || typeof document === 'undefined') return;
   initializedEarly = true;
 
-  // Avoid preloading hero audio on admin routes
   const isAdminRoute = window.location.pathname.startsWith('/admin') || window.location.hash.includes('admin');
   if (!isAdminRoute) {
+    const boot = readBootHeroSettings();
+    const preloadUrl = boot ? resolveHeroAudioUrl(boot.heroVideoUrl) : DEFAULT_HERO_AUDIO_URL;
+
+    if (boot && !boot.heroDefaultMuted && boot.heroMediaType !== 'images') {
+      desiredEnabled = true;
+      desiredAudioUrl = preloadUrl;
+    }
+
     const ctx = getOrCreateAudioContext();
     ctx?.resume().catch(() => {});
-    fetchAndDecodeAudio(DEFAULT_HERO_AUDIO_URL).catch(() => {});
+    fetchAndDecodeAudio(preloadUrl)
+      .then((buf) => {
+        if (buf && desiredEnabled && desiredAudioUrl === preloadUrl) {
+          void tryStartPlayback();
+        }
+      })
+      .catch(() => {});
   }
 
   const events: Array<keyof WindowEventMap> = [
@@ -229,22 +308,33 @@ export function initHeroAudioEarly(): void {
     'pointerup',
     'touchstart',
     'touchend',
+    'touchmove',
     'mousedown',
     'mouseup',
     'click',
-    'keydown'
+    'keydown',
+    'wheel'
   ];
   events.forEach((evt) => {
     window.addEventListener(evt, handleEarlyOrGlobalGesture, { capture: true, passive: true });
   });
   document.addEventListener('visibilitychange', handleVisibility);
+  window.addEventListener('focus', () => {
+    if (desiredEnabled && desiredAudioUrl && !document.hidden) {
+      void tryStartPlayback();
+    }
+  });
+  window.addEventListener('pageshow', () => {
+    if (desiredEnabled && desiredAudioUrl && !document.hidden) {
+      void tryStartPlayback();
+    }
+  });
 }
 
 export function syncHeroAudioState(options: {
   enabled: boolean;
   videoUrl?: string | null;
   getCurrentVideoTime?: () => number;
-  onFallbackChange?: (useNative: boolean) => void;
 }): void {
   initHeroAudioEarly();
   clearBrowserMediaSession();
@@ -252,39 +342,25 @@ export function syncHeroAudioState(options: {
   desiredEnabled = options.enabled;
   desiredAudioUrl = options.enabled && options.videoUrl ? resolveHeroAudioUrl(options.videoUrl) : null;
   videoTimeProvider = options.getCurrentVideoTime || null;
-  fallbackChangeHandler = options.onFallbackChange || null;
 
   if (!desiredEnabled || !desiredAudioUrl) {
     stopCurrentSource();
-    fallbackChangeHandler?.(false);
     return;
   }
 
-  if (failedDecodeUrls.has(desiredAudioUrl) && desiredAudioUrl !== DEFAULT_HERO_AUDIO_URL) {
-    stopCurrentSource();
-    fallbackChangeHandler?.(true);
-    return;
-  }
-
-  fallbackChangeHandler?.(false);
-
-  // Warm cache & start immediately whenever AudioContext is allowed/running
-  fetchAndDecodeAudio(desiredAudioUrl).then((buf) => {
-    if (desiredEnabled && desiredAudioUrl) {
-      if (!buf && desiredAudioUrl !== DEFAULT_HERO_AUDIO_URL) {
-        fallbackChangeHandler?.(true);
-      } else if (buf) {
-        fallbackChangeHandler?.(false);
-        tryStartPlayback();
+  const targetUrl = desiredAudioUrl;
+  fetchAndDecodeAudio(targetUrl).then((buf) => {
+    if (buf && desiredEnabled && desiredAudioUrl === targetUrl && !document.hidden) {
+      if (!startDecodedBufferNow()) {
+        void tryStartPlayback();
       }
     }
   });
-  tryStartPlayback();
+  void tryStartPlayback();
 }
 
 export function stopHeroAudio(): void {
   desiredEnabled = false;
   desiredAudioUrl = null;
-  fallbackChangeHandler = null;
   stopCurrentSource();
 }

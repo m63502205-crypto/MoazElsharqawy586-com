@@ -4,22 +4,11 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
-import { db, hashPassword, runWithFirebaseToken, getCurrentFirebaseToken } from './src/server/db.ts';
+import { db, hashPassword } from './src/server/db.ts';
 import type { AdminUser, MembershipApplication, MemberRecord, EmailSubscriber } from './src/server/db.ts';
 import { dispatchSubscriberNotifications, getSmtpStatus } from './src/server/mailer.ts';
-import {
-  verifyFirebaseIdToken,
-  ensureAdminRegistryDoc,
-  syncAdminFullWithFirestore,
-  pullPublicFromFirestore,
-  refreshPublicIfStale,
-  syncUploadAssetToFirestore,
-  fetchUploadAssetFromFirestore,
-  hasPendingLocalChanges,
-  isCloudConfigured,
-  isCloudInitialized,
-  markLocalDeletion
-} from './src/server/firestoreSync.ts';
+import { initializeApp as initFirebaseAdminApp, getApps as getFirebaseAdminApps, getApp as getFirebaseAdminApp } from 'firebase-admin/app';
+import { getAuth as getFirebaseAdminAuth } from 'firebase-admin/auth';
 
 const app = express();
 app.set('trust proxy', true);
@@ -37,6 +26,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       cleanReqPath === '/site-sitemap.xml' ||
       cleanReqPath === '/robots.txt' ||
       cleanReqPath === '/favicon.ico' ||
+      cleanReqPath === '/favicon-48x48.png' ||
+      cleanReqPath === '/favicon-96x96.png' ||
+      cleanReqPath === '/favicon-192x192.png' ||
+      cleanReqPath === '/site-icon.png' ||
       cleanReqPath === '/site-icon.jpg' ||
       cleanReqPath === '/apple-touch-icon.png' ||
       cleanReqPath === '/apple-touch-icon.jpg' ||
@@ -60,39 +53,289 @@ const PORT =
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Bind optional Firebase ID Token from client into AsyncLocalStorage for automatic Firestore diff sync on db.save()
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  const headerToken = req.headers['x-firebase-id-token'];
-  const fbToken = typeof headerToken === 'string' && headerToken.trim() ? headerToken.trim() : undefined;
-  runWithFirebaseToken(fbToken, () => next());
-});
-
-// Static uploads directory + transparent Firestore fallback for cross-instance uploads
+// Static uploads directory
 const uploadsDir = path.resolve(process.cwd(), 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-app.get('/uploads/:filename', async (req: Request, res: Response, next: NextFunction) => {
-  const safeName = path.basename(req.params.filename || '');
-  if (!safeName) return next();
-  const localPath = path.join(uploadsDir, safeName);
-  if (fs.existsSync(localPath)) {
-    return next();
-  }
-  const cloudAsset = await fetchUploadAssetFromFirestore(safeName);
-  if (cloudAsset) {
-    try {
-      fs.writeFileSync(localPath, cloudAsset.buffer);
-    } catch {
-      // ignore local cache write error
-    }
-    res.setHeader('Content-Type', cloudAsset.mime);
-    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-    return res.send(cloudAsset.buffer);
-  }
-  return next();
-});
 app.use('/uploads', express.static(uploadsDir));
+
+// Firebase project config (loaded from firebase-applet-config.json)
+let firebaseRuntimeConfig: {
+  projectId: string;
+  apiKey: string;
+  firestoreDatabaseId: string;
+} | null = null;
+
+try {
+  const fbCfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(fbCfgPath)) {
+    const parsed = JSON.parse(fs.readFileSync(fbCfgPath, 'utf-8'));
+    if (parsed?.projectId && parsed.projectId !== 'remixed-project-id' && parsed?.apiKey && parsed?.firestoreDatabaseId) {
+      firebaseRuntimeConfig = {
+        projectId: String(parsed.projectId),
+        apiKey: String(parsed.apiKey),
+        firestoreDatabaseId: String(parsed.firestoreDatabaseId)
+      };
+    }
+  }
+} catch {
+  firebaseRuntimeConfig = null;
+}
+
+function getFirebaseTokenVerifier() {
+  if (!firebaseRuntimeConfig) return null;
+  const fbApp = getFirebaseAdminApps().length
+    ? getFirebaseAdminApp()
+    : initFirebaseAdminApp({ projectId: firebaseRuntimeConfig.projectId });
+  return getFirebaseAdminAuth(fbApp);
+}
+
+let lastLocalAdminMutationAt = 0;
+let lastFirestoreHydrateAt = 0;
+let firestoreHydrateInFlight: Promise<boolean> | null = null;
+
+function decodeFirestoreRestValue(val: any): any {
+  if (!val || typeof val !== 'object') return undefined;
+  if ('nullValue' in val) return null;
+  if ('booleanValue' in val) return Boolean(val.booleanValue);
+  if ('integerValue' in val) return Number(val.integerValue);
+  if ('doubleValue' in val) return Number(val.doubleValue);
+  if ('timestampValue' in val) return String(val.timestampValue);
+  if ('stringValue' in val) return String(val.stringValue);
+  if ('arrayValue' in val) {
+    const vals = Array.isArray(val.arrayValue?.values) ? val.arrayValue.values : [];
+    return vals.map(decodeFirestoreRestValue);
+  }
+  if ('mapValue' in val) {
+    const fields = val.mapValue?.fields || {};
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(fields)) {
+      const decoded = decodeFirestoreRestValue(v);
+      if (decoded !== undefined) out[k] = decoded;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+async function fetchPublicFirestoreCollectionRest(colName: string): Promise<Array<{ id: string; data: any; updatedAt: string }>> {
+  if (!firebaseRuntimeConfig) return [];
+  const { projectId, firestoreDatabaseId, apiKey } = firebaseRuntimeConfig;
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents:runQuery?key=${encodeURIComponent(apiKey)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: colName }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'isPublic' },
+              op: 'EQUAL',
+              value: { booleanValue: true }
+            }
+          }
+        }
+      })
+    });
+    if (!res.ok) return [];
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    const docs: Array<{ id: string; data: any; updatedAt: string }> = [];
+    for (const row of rows) {
+      const docObj = row?.document;
+      if (!docObj?.fields) continue;
+      const decoded = decodeFirestoreRestValue({ mapValue: { fields: docObj.fields } }) || {};
+      const docNameId = String(docObj.name || '').split('/').pop() || '';
+      docs.push({
+        id: String(decoded.id || docNameId),
+        data: decoded.data || {},
+        updatedAt: String(decoded.updatedAt || '')
+      });
+    }
+    return docs;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function hydrateDbFromPublicFirestoreRest(force = false): Promise<boolean> {
+  if (!firebaseRuntimeConfig) return false;
+  const now = Date.now();
+  if (now - lastLocalAdminMutationAt < 5000) return false;
+  if (!force && now - lastFirestoreHydrateAt < 20000) return false;
+  if (firestoreHydrateInFlight) return firestoreHydrateInFlight;
+
+  firestoreHydrateInFlight = (async () => {
+    try {
+      const [
+        siteConfigs,
+        partyLeadersDocs,
+        secLeadersDocs,
+        secretariatsDocs,
+        secMembersDocs,
+        initiativesDocs,
+        newsDocs,
+        eventsDocs,
+        mediaDocs,
+        pagesDocs
+      ] = await Promise.all([
+        fetchPublicFirestoreCollectionRest('site_config'),
+        fetchPublicFirestoreCollectionRest('party_leaders'),
+        fetchPublicFirestoreCollectionRest('secretariat_leaders'),
+        fetchPublicFirestoreCollectionRest('secretariats'),
+        fetchPublicFirestoreCollectionRest('secretariat_members'),
+        fetchPublicFirestoreCollectionRest('initiatives'),
+        fetchPublicFirestoreCollectionRest('news'),
+        fetchPublicFirestoreCollectionRest('events'),
+        fetchPublicFirestoreCollectionRest('media'),
+        fetchPublicFirestoreCollectionRest('pages')
+      ]);
+
+      lastFirestoreHydrateAt = Date.now();
+      const totalFetched =
+        siteConfigs.length +
+        partyLeadersDocs.length +
+        secLeadersDocs.length +
+        secretariatsDocs.length +
+        secMembersDocs.length +
+        initiativesDocs.length +
+        newsDocs.length +
+        eventsDocs.length +
+        mediaDocs.length +
+        pagesDocs.length;
+      if (totalFetched === 0) return false;
+
+      const data = db.get();
+      let changed = false;
+
+      const tombDoc = siteConfigs.find(d => d.id === 'portal_tombstones');
+      const tombSet = new Set<string>(
+        Array.isArray(tombDoc?.data?.deletedKeys)
+          ? tombDoc!.data.deletedKeys.filter((x: unknown): x is string => typeof x === 'string')
+          : []
+      );
+      if (Array.isArray(data.deletedTombstones)) {
+        for (const k of data.deletedTombstones) {
+          if (typeof k === 'string' && k) tombSet.add(k);
+        }
+      }
+      const toSafeId = (id: string) => String(id || '').trim().replace(/[^a-zA-Z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 128);
+      const isTombstoned = (col: string, id: string) =>
+        tombSet.has(`${col}:${id}`) || tombSet.has(`${col}:${toSafeId(id)}`);
+
+      const mergeArr = (col: string, currentArr: any[], cloudDocs: Array<{ id: string; data: any; updatedAt: string }>, bySlug = false) => {
+        const beforeStr = JSON.stringify(currentArr);
+        const map = new Map<string, any>();
+        for (const item of currentArr || []) {
+          if (!item || !item.id || isTombstoned(col, item.id)) continue;
+          const k = bySlug && item.slug ? `slug:${item.slug}` : `id:${item.id}`;
+          map.set(k, item);
+        }
+        for (const c of cloudDocs) {
+          const item = c.data;
+          if (!item || !item.id || isTombstoned(col, item.id)) continue;
+          const k = bySlug && item.slug ? `slug:${item.slug}` : `id:${item.id}`;
+          const existing = map.get(k);
+          if (!existing) {
+            map.set(k, item);
+          } else {
+            const existingTs = String(existing.updatedAt || existing.createdAt || '');
+            const cloudTs = String(item.updatedAt || c.updatedAt || '');
+            if (!existingTs || cloudTs >= existingTs) {
+              map.set(k, item);
+            }
+          }
+        }
+        const merged = Array.from(map.values());
+        if (JSON.stringify(merged) !== beforeStr) {
+          changed = true;
+        }
+        return merged;
+      };
+
+      data.partyLeaders = mergeArr('party_leaders', data.partyLeaders, partyLeadersDocs);
+      data.secretariatLeaders = mergeArr('secretariat_leaders', data.secretariatLeaders, secLeadersDocs);
+      data.specializedSecretariats = mergeArr('secretariats', data.specializedSecretariats, secretariatsDocs, true);
+      data.secretariatMembers = mergeArr('secretariat_members', data.secretariatMembers, secMembersDocs);
+      data.initiatives = mergeArr('initiatives', data.initiatives, initiativesDocs);
+      data.news = mergeArr('news', data.news, newsDocs);
+      data.events = mergeArr('events', data.events, eventsDocs);
+      data.media = mergeArr('media', data.media, mediaDocs);
+      data.pages = mergeArr('pages', data.pages || [], pagesDocs);
+
+      const publicCfg = siteConfigs.find(d => d.id === 'public');
+      if (publicCfg?.data) {
+        const cloudSettings = publicCfg.data;
+        const cutoffIso = '2026-11-23T15:00:00.000Z';
+        const cloudUpdated = String(cloudSettings.updatedAt || publicCfg.updatedAt || '');
+        const localUpdated = String(data.settings?.updatedAt || '');
+        const isPreUpgrade = (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < cutoffIso);
+        const isCloudNewer = !localUpdated || (Boolean(cloudUpdated) && cloudUpdated > localUpdated);
+        if (isCloudNewer) {
+          const nextSettings = {
+            ...data.settings,
+            ...cloudSettings,
+            seoTitle: isPreUpgrade ? data.settings.seoTitle : (cloudSettings.seoTitle || data.settings.seoTitle),
+            officialSiteUrl: isPreUpgrade ? data.settings.officialSiteUrl : (cloudSettings.officialSiteUrl || data.settings.officialSiteUrl),
+            rosterVersion: Math.max(Number(data.settings?.rosterVersion || 0), Number(cloudSettings.rosterVersion || 0))
+          };
+          if (JSON.stringify(nextSettings) !== JSON.stringify(data.settings)) {
+            data.settings = nextSettings;
+            changed = true;
+          }
+        }
+      }
+
+      const liveCfg = siteConfigs.find(d => d.id === 'livestream');
+      if (liveCfg?.data) {
+        const cloudLiveUpdated = String(liveCfg.data.updatedAt || liveCfg.updatedAt || '');
+        const localLiveUpdated = String(data.liveStream?.updatedAt || '');
+        if (!localLiveUpdated || (Boolean(cloudLiveUpdated) && cloudLiveUpdated > localLiveUpdated)) {
+          const nextLive = { ...data.liveStream, ...liveCfg.data };
+          if (JSON.stringify(nextLive) !== JSON.stringify(data.liveStream)) {
+            data.liveStream = nextLive;
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        db.save();
+      }
+      return changed;
+    } catch {
+      return false;
+    } finally {
+      firestoreHydrateInFlight = null;
+    }
+  })();
+
+  return firestoreHydrateInFlight;
+}
+
+function recordLocalTombstone(data: ReturnType<typeof db.get>, col: string, rawId: string) {
+  if (!rawId) return;
+  const safeId = String(rawId || '').trim().replace(/[^a-zA-Z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 128);
+  const current = new Set<string>(Array.isArray(data.deletedTombstones) ? data.deletedTombstones : []);
+  current.add(`${col}:${rawId}`);
+  if (safeId) current.add(`${col}:${safeId}`);
+  data.deletedTombstones = Array.from(current);
+}
+
+app.use('/api/admin', (req: Request, _res: Response, next: NextFunction) => {
+  if (req.method !== 'GET' && req.path !== '/login' && req.path !== '/google-login' && req.path !== '/logout') {
+    lastLocalAdminMutationAt = Date.now();
+  }
+  next();
+});
 
 // Helper to persist base64 data URLs to disk in data/uploads
 export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): string {
@@ -118,12 +361,6 @@ export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): str
     const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
     const filePath = path.join(uploadsDir, filename);
     fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
-    const activeToken = getCurrentFirebaseToken();
-    if (activeToken && mime.startsWith('image/')) {
-      syncUploadAssetToFirestore(filename, mime, base64Data, activeToken).catch(err => {
-        console.error('Error syncing upload asset to Firestore:', err);
-      });
-    }
     return `/uploads/${filename}`;
   } catch (err) {
     console.error('Error persisting data URL to disk:', err);
@@ -292,9 +529,10 @@ app.get(/^\/(google[a-zA-Z0-9_-]+\.html)$/, (req: Request, res: Response, next: 
 });
 
 const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
-const HOME_SEO_TITLE = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+const SITE_BRAND_NAME = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر';
+const HOME_SEO_TITLE = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي';
 const HOME_SEO_DESCRIPTION =
-  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.';
 const HOME_SEO_KEYWORDS =
   'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
 const DEFAULT_GA4_ID = 'G-NX1MQ9NHXW';
@@ -329,11 +567,19 @@ function getSitemapBaseUrl(req: Request, data: ReturnType<typeof db.get>): strin
   return getOfficialSiteUrl(data);
 }
 
-// Robots.txt
+// Robots.txt (explicitly welcomes Googlebot & crawlers for public pages; blocks admin/login/private APIs)
 app.get('/robots.txt', (req: Request, res: Response) => {
   const data = db.get();
   const siteUrl = getSitemapBaseUrl(req, data);
-  const content = `User-agent: *
+  const content = `User-agent: Googlebot
+Allow: /
+Disallow: /admin
+Disallow: /admin/
+Disallow: /login
+Disallow: /api/admin
+Disallow: /api/admin/
+
+User-agent: *
 Allow: /
 Disallow: /admin
 Disallow: /admin/
@@ -596,8 +842,8 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
   return `<div dir="rtl" lang="ar" style="font-family:Cairo,Tajawal,sans-serif;background:#fafaf9;color:#1c1917;">
   <header>
     <a href="/">
-      <img src="${escapeHtml(logoSrc)}" alt="شعار حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر" width="52" height="52" />
-      <span>حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة</span>
+      <img src="${escapeHtml(logoSrc)}" alt="شعار حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر" width="52" height="52" />
+      <span>حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر</span>
     </a>
     <nav aria-label="التنقل الرئيسي">
       <a href="/">الرئيسية</a>
@@ -656,11 +902,13 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   const phone = settings.phone || '01003070108';
   const address = settings.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
   const siteUrl = getOfficialSiteUrl(data);
-  const siteName = (settings.seoTitle || '').trim() || HOME_SEO_TITLE;
+  const siteTitle = (settings.seoTitle || '').trim() || HOME_SEO_TITLE;
+  const siteBrand = siteTitle.replace(/\s*\|\s*الموقع الرسمي\s*$/, '').trim() || SITE_BRAND_NAME;
+  const siteName = SITE_BRAND_NAME;
   const siteDescription = (settings.seoDescription || '').trim() || HOME_SEO_DESCRIPTION;
   const keywords = (settings.seoKeywords || '').trim() || HOME_SEO_KEYWORDS;
 
-  let title = siteName;
+  let title = siteTitle;
   let description = siteDescription;
   let canonical = `${siteUrl}/`;
   let ogType = 'website';
@@ -672,11 +920,11 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   let eventSchema: Record<string, any> | null = null;
 
   if (cleanPath === '/admin' || cleanPath.startsWith('/admin/') || cleanPath === '/login') {
-    title = `لوحة التحكم | ${siteName}`;
+    title = `لوحة التحكم | ${siteBrand}`;
     robots = 'noindex, nofollow';
     mainHtml = '<section><h1>لوحة الإدارة – أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر</h1></section>';
   } else if (cleanPath === '/about') {
-    title = `عن الحزب والأمانة | ${siteName}`;
+    title = `عن الحزب والأمانة | ${siteBrand}`;
     description = 'تعرف على رؤية ورسالة ومبادئ حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورها المجتمعي والتنموي.';
     canonical = `${siteUrl}/about`;
     mainHtml = `
@@ -689,7 +937,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         <p>خدمة المواطنين، دعم الشباب والمرأة، المبادرات التنموية والصحية، والتواصل الميداني المباشر.</p>
       </section>`;
   } else if (cleanPath === '/party-leaders') {
-    title = `قيادات الحزب | ${siteName}`;
+    title = `قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر | ${siteBrand}`;
     description = 'تعرف على قيادات حزب الجبهة الوطنية وقيادات وهيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورهم في العمل الوطني والمجتمعي.';
     canonical = `${siteUrl}/party-leaders`;
     const combinedLeadersCount = visiblePartyLeaders.length + visibleSecLeaders.length;
@@ -706,7 +954,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         }
       </section>`;
   } else if (cleanPath === '/secretariat-leaders') {
-    title = `قيادات الأمانة | ${siteName}`;
+    title = `قيادات أمانة قسم ثالث أكتوبر – هيئة المكتب | ${siteBrand}`;
     description = 'قيادات وهيئة مكتب أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/secretariat-leaders`;
     mainHtml = `
@@ -719,7 +967,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         }
       </section>`;
   } else if (cleanPath === '/secretariats') {
-    title = `الأمانات التخصصية | ${siteName}`;
+    title = `الأمانات التخصصية والنوعية – قسم ثالث أكتوبر | ${siteBrand}`;
     description = 'استعرض الأمانات التخصصية لحزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر بمحافظة الجيزة ومهامها وأمناءها.';
     canonical = `${siteUrl}/secretariats`;
     mainHtml = `
@@ -737,7 +985,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const slug = cleanPath.slice('/secretariat/'.length);
     const sec = activeSecretariats.find(s => s.slug === slug || s.id === slug) || activeSecretariats[0];
     if (sec) {
-      title = `${sec.name} | ${siteName}`;
+      title = `${sec.name} – أمانة قسم ثالث أكتوبر | ${siteBrand}`;
       description = sec.description
         ? `${sec.name} – ${sec.description.slice(0, 140)}`
         : siteDescription;
@@ -758,7 +1006,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         </article>`;
     }
   } else if (cleanPath === '/initiatives') {
-    title = `المبادرات المجتمعية والتنموية | ${siteName}`;
+    title = `المبادرات المجتمعية والتنموية | ${siteBrand}`;
     description = 'تابع المبادرات الميدانية والتنموية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/initiatives`;
     mainHtml = `
@@ -782,7 +1030,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
 
       ogType = 'article';
       if (act) {
-        title = `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteName}`;
+        title = `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteBrand}`;
         description = (act.description || init.description || siteDescription).slice(0, 160);
         canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}?activity=${actIdx}`;
         ogImage = resolvePublicImageUrl(
@@ -795,7 +1043,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         );
         ogImageAlt = act.title || init.title;
       } else {
-        title = `${init.title} | ${siteName}`;
+        title = `${init.title} | ${siteBrand}`;
         description = (init.description || siteDescription).slice(0, 160);
         canonical = `${siteUrl}/initiative/${encodeURIComponent(init.slug)}`;
         ogImage = resolvePublicImageUrl(
@@ -819,7 +1067,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         </article>`;
     }
   } else if (cleanPath === '/news') {
-    title = `الأخبار والبيانات الرسمية | ${siteName}`;
+    title = `أخبار وبيانات أمانة قسم ثالث أكتوبر | ${siteBrand}`;
     description = 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/news`;
     mainHtml = `
@@ -837,7 +1085,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const newsId = cleanPath.startsWith('/news/') ? cleanPath.slice('/news/'.length) : queryNewsId;
     const item = publishedNews.find(n => n.id === newsId || (n as any).slug === newsId);
     if (item) {
-      title = `${item.title} | ${siteName}`;
+      title = `${item.title} | ${siteBrand}`;
       description = (item.excerpt || item.content || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/news/${encodeURIComponent(item.id)}`;
       ogType = 'article';
@@ -879,7 +1127,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         </article>`;
     }
   } else if (cleanPath === '/events') {
-    title = `الفعاليات والأنشطة | ${siteName}`;
+    title = `الفعاليات والأنشطة – أمانة قسم ثالث أكتوبر | ${siteBrand}`;
     description = 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/events`;
     mainHtml = `
@@ -897,7 +1145,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const evId = cleanPath.slice('/events/'.length);
     const ev = visibleEvents.find(e => e.id === evId || (e as any).slug === evId);
     if (ev) {
-      title = `${ev.title} | ${siteName}`;
+      title = `${ev.title} | ${siteBrand}`;
       description = (ev.description || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/events/${encodeURIComponent(ev.id)}`;
       ogType = 'article';
@@ -938,7 +1186,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     }
   } else if (cleanPath === '/live') {
     const ls = data.liveStream;
-    title = `البث المباشر | ${siteName}`;
+    title = `البث المباشر | ${siteBrand}`;
     description = ls?.description || 'البث المباشر لفعاليات ومؤتمرات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.';
     canonical = `${siteUrl}/live`;
     mainHtml = `
@@ -949,7 +1197,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         ${ls?.streamUrl ? `<p><a href="${escapeHtml(ls.streamUrl)}">رابط البث المباشر</a></p>` : ''}
       </section>`;
   } else if (cleanPath === '/join') {
-    title = `طلب الانضمام والعضوية | ${siteName}`;
+    title = `طلب العضوية والانضمام | ${siteBrand}`;
     description = 'التقديم الإلكتروني لعضوية حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة والاستعلام عن حالة الطلب.';
     canonical = `${siteUrl}/join`;
     mainHtml = `
@@ -960,7 +1208,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
         <p>إدخال البيانات الشخصية والرقم القومي والتواصل عبر استمارة العضوية الإلكترونية المعتمدة.</p>
       </section>`;
   } else if (cleanPath === '/contact') {
-    title = `تواصل معنا ومقر الأمانة | ${siteName}`;
+    title = `تواصل معنا ومقر الأمانة | ${siteBrand}`;
     description = 'طرق التواصل المباشرة ومقر أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.';
     canonical = `${siteUrl}/contact`;
     mainHtml = `
@@ -975,7 +1223,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     const slug = cleanPath.slice('/page/'.length);
     const page = publishedPages.find(p => p.slug === slug);
     if (page) {
-      title = `${page.title} | ${siteName}`;
+      title = `${page.title} | ${siteBrand}`;
       description = page.metaDescription || page.subtitle || (page.content || siteDescription).slice(0, 160);
       canonical = `${siteUrl}/page/${encodeURIComponent(page.slug)}`;
       ogImage = resolvePublicImageUrl(page.coverImage, assetBaseUrl, undefined, undefined, '', defaultOgImage);
@@ -991,12 +1239,12 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
 
   // Default Home SSR markup (for '/' or unmatched SPA paths falling back to Home)
   if (!mainHtml) {
-    title = siteName;
+    title = siteTitle;
     description = siteDescription;
     canonical = `${siteUrl}/`;
     mainHtml = `
       <section>
-        <h1>معاً نبني مستقبلاً مشرقاً لمصر</h1>
+        <h1>حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر</h1>
         <p>${escapeHtml(siteDescription)}</p>
         <p>حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يهدف إلى تعزيز المشاركة الشعبية الفاعلة وتحقيق العدالة الاجتماعية والتنمية المستدامة لخدمة أهالي قسم ثالث أكتوبر ومحافظة الجيزة.</p>
       </section>
@@ -1079,8 +1327,6 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
   const streetAddress = settings?.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020';
 
   const siteUrl = getOfficialSiteUrl(data);
-  const assetBaseUrl = getPublicBaseUrl(req);
-  const schemaLogoUrl = resolveSiteShareImageUrl(settings, assetBaseUrl);
 
   const organizationSchema: Record<string, any> = {
     '@context': 'https://schema.org',
@@ -1088,7 +1334,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     name: seo.siteName,
     url: `${siteUrl}/`,
     description: seo.siteDescription,
-    logo: schemaLogoUrl,
+    logo: `${siteUrl}/site-icon.png`,
     telephone: phoneIntl,
     address: {
       '@type': 'PostalAddress',
@@ -1116,7 +1362,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
       name: seo.siteName,
-      alternateName: ['حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
+      alternateName: ['أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر', 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
       url: `${siteUrl}/`,
       description: seo.siteDescription,
       inLanguage: 'ar'
@@ -1163,6 +1409,8 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     `\n    ${verificationMetaTags}`
   );
 
+  out = out.replace(/<meta\s+name="application-name"\s+content="[^"]*"\s*\/?>/i, `<meta name="application-name" content="${escapeHtml(seo.siteName)}" />`);
+  out = out.replace(/<meta\s+name="apple-mobile-web-app-title"\s+content="[^"]*"\s*\/?>/i, `<meta name="apple-mobile-web-app-title" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+property="og:type"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:type" content="${escapeHtml(seo.ogType)}" />`);
   out = out.replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(seo.ogUrl)}" />`);
@@ -1183,20 +1431,277 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     `<script type="application/ld+json">\n${jsonLd}\n    </script>`
   );
 
-  // Keep #root clean so browsers render the styled React app without flashing unstyled fallback text
+  // Always embed lean initial public data synchronously so browsers & Googlebot WRS never wait on an async spinner
+  const bootstrapPayload = buildPublicPortalPayload(data, { externalizeInlineImages: true });
+  const serializedBootstrap = serializeJsonForHtmlScript(bootstrapPayload);
+  const bootstrapScript = `<script id="__NFP_INITIAL_DATA__" type="application/json">${serializedBootstrap}</script>`;
+  if (out.includes('<script type="module"')) {
+    out = out.replace('<script type="module"', `${bootstrapScript}\n    <script type="module"`);
+  } else if (out.includes('</body>')) {
+    out = out.replace('</body>', `  ${bootstrapScript}\n  </body>`);
+  }
+
+  // Inject semantic SSR HTML into #root ONLY for search/social crawlers (keeps human mobile browsers 100% free of unstyled text flash)
+  const cleanReqPath = decodeURIComponent(req.path || '/').replace(/\/+$/, '') || '/';
+  const isPrivateAdminPath =
+    cleanReqPath === '/admin' || cleanReqPath.startsWith('/admin/') || cleanReqPath === '/login';
+  if (!isPrivateAdminPath && isCrawlerUserAgent(req.headers['user-agent'] as string | undefined)) {
+    out = out.replace(/<div id="root"><\/div>/i, `<div id="root">${seo.ssrHtml}</div>`);
+  }
+
   return out;
 }
 
+function isCrawlerUserAgent(userAgent?: string): boolean {
+  const ua = String(userAgent || '');
+  if (!ua) return false;
+  return /googlebot|google-inspectiontool|adsbot-google|mediapartners-google|apis-google|storebot-google|googleother|bingbot|yandexbot|duckduckbot|baiduspider|slurp|applebot|facebookexternalhit|facebot|whatsapp|telegrambot|twitterbot|linkedinbot|slackbot|discordbot|pinterest|ahrefsbot|semrushbot/i.test(
+    ua
+  );
+}
+
+function serializeJsonForHtmlScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function toInlineAssetUrl(
+  raw: string | undefined,
+  collection: string,
+  id: string,
+  field: string
+): string | undefined {
+  if (!raw || typeof raw !== 'string') return raw;
+  if (!raw.startsWith('data:image/')) return raw;
+  return `/api/public/inline-asset/${encodeURIComponent(collection)}/${encodeURIComponent(id)}/${encodeURIComponent(field)}`;
+}
+
+function buildPublicPortalPayload(
+  data: ReturnType<typeof db.get>,
+  options?: { externalizeInlineImages?: boolean }
+) {
+  const ext = Boolean(options?.externalizeInlineImages);
+  const rawSettings = data.settings || ({} as any);
+  const settings = ext
+    ? {
+        ...rawSettings,
+        officialLogo: toInlineAssetUrl(rawSettings.officialLogo, 'settings', 'main', 'officialLogo'),
+        seoShareImage: toInlineAssetUrl(rawSettings.seoShareImage, 'settings', 'main', 'seoShareImage'),
+        heroPosterUrl: toInlineAssetUrl(rawSettings.heroPosterUrl, 'settings', 'main', 'heroPosterUrl'),
+        entranceImageUrl: toInlineAssetUrl(rawSettings.entranceImageUrl, 'settings', 'main', 'entranceImageUrl'),
+        heroImages: Array.isArray(rawSettings.heroImages)
+          ? rawSettings.heroImages.map((img: string, idx: number) =>
+              toInlineAssetUrl(img, 'settings', 'main', `heroImages_${idx}`)
+            )
+          : rawSettings.heroImages,
+        heroSlides: Array.isArray(rawSettings.heroSlides)
+          ? rawSettings.heroSlides.map((slide: any, idx: number) => ({
+              ...slide,
+              url: toInlineAssetUrl(slide?.url, 'settings', 'main', `heroSlides_${idx}_url`),
+              posterUrl: toInlineAssetUrl(slide?.posterUrl, 'settings', 'main', `heroSlides_${idx}_posterUrl`)
+            }))
+          : rawSettings.heroSlides
+      }
+    : rawSettings;
+
+  const partyLeaders = (data.partyLeaders || [])
+    .filter(l => l.isVisible)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(l =>
+      ext ? { ...l, photoUrl: toInlineAssetUrl(l.photoUrl, 'partyLeaders', l.id, 'photoUrl') || '' } : l
+    );
+
+  const secretariatLeaders = (data.secretariatLeaders || [])
+    .filter(l => l.isVisible)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(l =>
+      ext ? { ...l, photoUrl: toInlineAssetUrl(l.photoUrl, 'secretariatLeaders', l.id, 'photoUrl') || '' } : l
+    );
+
+  const specializedSecretariats = (data.specializedSecretariats || [])
+    .filter(s => s.isActive)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(s =>
+      ext
+        ? {
+            ...s,
+            logoUrl: toInlineAssetUrl(s.logoUrl, 'specializedSecretariats', s.id, 'logoUrl'),
+            coverUrl: toInlineAssetUrl(s.coverUrl, 'specializedSecretariats', s.id, 'coverUrl'),
+            secretaryPhotoUrl: toInlineAssetUrl(s.secretaryPhotoUrl, 'specializedSecretariats', s.id, 'secretaryPhotoUrl'),
+            assistantSecretaryPhotoUrl: toInlineAssetUrl(
+              s.assistantSecretaryPhotoUrl,
+              'specializedSecretariats',
+              s.id,
+              'assistantSecretaryPhotoUrl'
+            ),
+            assistantSecretaries: Array.isArray(s.assistantSecretaries)
+              ? s.assistantSecretaries.map((asst, idx) => ({
+                  ...asst,
+                  photoUrl: toInlineAssetUrl(
+                    asst.photoUrl,
+                    'specializedSecretariats',
+                    s.id,
+                    `assistantSecretaries_${idx}_photoUrl`
+                  )
+                }))
+              : s.assistantSecretaries,
+            galleryImages: Array.isArray(s.galleryImages)
+              ? s.galleryImages.map((img, idx) =>
+                  toInlineAssetUrl(img, 'specializedSecretariats', s.id, `galleryImages_${idx}`) || ''
+                )
+              : s.galleryImages
+          }
+        : s
+    );
+
+  const secretariatMembers = (data.secretariatMembers || []).map(m =>
+    ext ? { ...m, photoUrl: toInlineAssetUrl(m.photoUrl, 'secretariatMembers', m.id, 'photoUrl') } : m
+  );
+
+  const initiatives = (data.initiatives || [])
+    .filter(i => i.isVisible)
+    .map(i =>
+      ext
+        ? {
+            ...i,
+            logoUrl: toInlineAssetUrl(i.logoUrl, 'initiatives', i.id, 'logoUrl'),
+            coverUrl: toInlineAssetUrl(i.coverUrl, 'initiatives', i.id, 'coverUrl'),
+            galleryImages: Array.isArray(i.galleryImages)
+              ? i.galleryImages.map((img, idx) =>
+                  toInlineAssetUrl(img, 'initiatives', i.id, `galleryImages_${idx}`) || ''
+                )
+              : i.galleryImages,
+            activities: Array.isArray(i.activities)
+              ? i.activities.map((act, idx) => ({
+                  ...act,
+                  imageUrl: toInlineAssetUrl(act.imageUrl, 'initiatives', i.id, `activities_${idx}_imageUrl`)
+                }))
+              : i.activities
+          }
+        : i
+    );
+
+  const news = (data.news || [])
+    .filter(n => !n.isDraft)
+    .sort((a, b) => new Date(b.publishDate).getTime() - new Date(a.publishDate).getTime())
+    .map(n =>
+      ext
+        ? {
+            ...n,
+            coverImage: toInlineAssetUrl(n.coverImage, 'news', n.id, 'coverImage'),
+            galleryImages: Array.isArray(n.galleryImages)
+              ? n.galleryImages.map((img, idx) =>
+                  toInlineAssetUrl(img, 'news', n.id, `galleryImages_${idx}`) || ''
+                )
+              : n.galleryImages
+          }
+        : n
+    );
+
+  const events = (data.events || [])
+    .filter(e => e.isVisible)
+    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())
+    .map(e =>
+      ext
+        ? {
+            ...e,
+            coverUrl: toInlineAssetUrl(e.coverUrl, 'events', e.id, 'coverUrl'),
+            coverImage: toInlineAssetUrl(e.coverImage, 'events', e.id, 'coverImage'),
+            images: Array.isArray(e.images)
+              ? e.images.map((img, idx) => toInlineAssetUrl(img, 'events', e.id, `images_${idx}`) || '')
+              : e.images,
+            galleryImages: Array.isArray(e.galleryImages)
+              ? e.galleryImages.map((img, idx) =>
+                  toInlineAssetUrl(img, 'events', e.id, `galleryImages_${idx}`) || ''
+                )
+              : e.galleryImages
+          }
+        : e
+    );
+
+  const media = (data.media || [])
+    .filter(m => m.isVisible)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(m =>
+      ext
+        ? {
+            ...m,
+            url: toInlineAssetUrl(m.url, 'media', m.id, 'url') || m.url,
+            thumbnail: toInlineAssetUrl(m.thumbnail, 'media', m.id, 'thumbnail')
+          }
+        : m
+    );
+
+  const pages = (data.pages || [])
+    .filter(p => p.isPublished)
+    .map(p =>
+      ext
+        ? {
+            ...p,
+            coverImage: toInlineAssetUrl(p.coverImage, 'pages', p.id, 'coverImage'),
+            galleryImages: Array.isArray(p.galleryImages)
+              ? p.galleryImages.map((img, idx) =>
+                  toInlineAssetUrl(img, 'pages', p.id, `galleryImages_${idx}`) || ''
+                )
+              : p.galleryImages
+          }
+        : p
+    );
+
+  return {
+    settings,
+    partyLeaders,
+    secretariatLeaders,
+    specializedSecretariats,
+    secretariatMembers,
+    initiatives,
+    news,
+    events,
+    media,
+    liveStream: data.liveStream,
+    pages,
+    deletedTombstones: data.deletedTombstones || []
+  };
+}
+
 // Same-origin crawlable favicon & Apple touch icon endpoints (required by Google Search Favicon bot; avoids external noimageindex headers)
-app.get(['/favicon.ico', '/site-icon.jpg', '/apple-touch-icon.png', '/apple-touch-icon.jpg'], (_req: Request, res: Response) => {
-  const publicSiteIcon = path.resolve(process.cwd(), 'public', 'site-icon.jpg');
-  const distSiteIcon = path.resolve(process.cwd(), 'dist', 'site-icon.jpg');
-  const resolved = fs.existsSync(publicSiteIcon)
-    ? publicSiteIcon
-    : (fs.existsSync(distSiteIcon) ? distSiteIcon : getDefaultLogoPath());
+app.get([
+  '/favicon.ico',
+  '/favicon-48x48.png',
+  '/favicon-96x96.png',
+  '/favicon-192x192.png',
+  '/site-icon.png',
+  '/site-icon.jpg',
+  '/apple-touch-icon.png',
+  '/apple-touch-icon.jpg'
+], (req: Request, res: Response) => {
+  const iconMap: Record<string, { file: string; mime: string }> = {
+    '/favicon.ico': { file: 'favicon.ico', mime: 'image/x-icon' },
+    '/favicon-48x48.png': { file: 'favicon-48x48.png', mime: 'image/png' },
+    '/favicon-96x96.png': { file: 'favicon-96x96.png', mime: 'image/png' },
+    '/favicon-192x192.png': { file: 'favicon-192x192.png', mime: 'image/png' },
+    '/site-icon.png': { file: 'site-icon.png', mime: 'image/png' },
+    '/site-icon.jpg': { file: 'site-icon.jpg', mime: 'image/jpeg' },
+    '/apple-touch-icon.png': { file: 'apple-touch-icon.png', mime: 'image/png' },
+    '/apple-touch-icon.jpg': { file: 'site-icon.jpg', mime: 'image/jpeg' }
+  };
+
+  const entry = iconMap[req.path] || { file: 'site-icon.png', mime: 'image/png' };
+  const publicFile = path.resolve(process.cwd(), 'public', entry.file);
+  const distFile = path.resolve(process.cwd(), 'dist', entry.file);
+  const fallbackPublic = path.resolve(process.cwd(), 'public', 'site-icon.jpg');
+  const resolved = fs.existsSync(publicFile)
+    ? publicFile
+    : (fs.existsSync(distFile) ? distFile : (fs.existsSync(fallbackPublic) ? fallbackPublic : getDefaultLogoPath()));
 
   if (fs.existsSync(resolved)) {
-    res.setHeader('Content-Type', getLogoMimeType(resolved));
+    const ext = path.extname(resolved).toLowerCase();
+    const mime = ext === '.ico' ? 'image/x-icon' : (ext === '.png' ? 'image/png' : entry.mime || getLogoMimeType(resolved));
+    res.setHeader('Content-Type', mime);
     res.setHeader('X-Robots-Tag', 'all');
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
     return res.sendFile(resolved);
@@ -1259,34 +1764,225 @@ app.get(['/og-logo.jpg', '/api/site-logo', '/api/seo/share-image'], (req: Reques
   return res.status(404).send('Logo not found');
 });
 
-// Refresh public portal state from Firestore when stale (keeps Preview & Live synchronized)
-app.use('/api/public', async (_req: Request, _res: Response, next: NextFunction) => {
-  try {
-    await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
-  } catch {
-    // ignore transient network errors
+// Serve decoded inline data:image assets cleanly as cacheable HTTP images for ultra-fast SSR & public bootstrap
+app.get('/api/public/inline-asset/:collection/:id/:field', (req: Request, res: Response) => {
+  const { collection: col, id, field } = req.params;
+  const data = db.get();
+  let rawVal: unknown;
+
+  if (col === 'settings') {
+    const s: any = data.settings || {};
+    if (field.startsWith('heroImages_')) {
+      const idx = Number(field.slice('heroImages_'.length));
+      rawVal = Number.isInteger(idx) ? s.heroImages?.[idx] : undefined;
+    } else if (field.startsWith('heroSlides_')) {
+      const m = field.match(/^heroSlides_(\d+)_(url|posterUrl)$/);
+      rawVal = m ? s.heroSlides?.[Number(m[1])]?.[m[2]] : undefined;
+    } else {
+      rawVal = s[field];
+    }
+  } else {
+    const list: any[] = Array.isArray((data as any)[col]) ? (data as any)[col] : [];
+    const item = list.find(x => x && x.id === id);
+    if (item) {
+      if (field.startsWith('galleryImages_')) {
+        const idx = Number(field.slice('galleryImages_'.length));
+        rawVal = Number.isInteger(idx) ? item.galleryImages?.[idx] : undefined;
+      } else if (field.startsWith('images_')) {
+        const idx = Number(field.slice('images_'.length));
+        rawVal = Number.isInteger(idx) ? item.images?.[idx] : undefined;
+      } else if (field.startsWith('activities_')) {
+        const m = field.match(/^activities_(\d+)_imageUrl$/);
+        rawVal = m ? item.activities?.[Number(m[1])]?.imageUrl : undefined;
+      } else if (field.startsWith('assistantSecretaries_')) {
+        const m = field.match(/^assistantSecretaries_(\d+)_photoUrl$/);
+        rawVal = m ? item.assistantSecretaries?.[Number(m[1])]?.photoUrl : undefined;
+      } else {
+        rawVal = item[field];
+      }
+    }
   }
-  next();
+
+  if (typeof rawVal === 'string' && rawVal.startsWith('data:image/')) {
+    const match = rawVal.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      res.setHeader('Content-Type', match[1]);
+      res.setHeader('X-Robots-Tag', 'all');
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      return res.send(Buffer.from(match[2], 'base64'));
+    }
+  }
+  if (typeof rawVal === 'string' && (rawVal.startsWith('http://') || rawVal.startsWith('https://') || rawVal.startsWith('/'))) {
+    return res.redirect(rawVal);
+  }
+  return res.redirect('/og-logo.jpg');
+});
+
+// Serve persistent uploaded images stored in Firestore uploads_public (survives container restarts & syncs across Preview/Live)
+const firestoreAssetMemoryCache = new Map<string, { mime: string; buffer: Buffer }>();
+app.get('/api/public/firestore-asset/:assetId', async (req: Request, res: Response) => {
+  const assetId = String(req.params.assetId || '').trim();
+  if (!/^[a-zA-Z0-9_\-]{1,128}$/.test(assetId)) {
+    return res.status(400).send('Invalid asset ID');
+  }
+
+  const cachedMem = firestoreAssetMemoryCache.get(assetId);
+  if (cachedMem) {
+    res.setHeader('Content-Type', cachedMem.mime);
+    res.setHeader('X-Robots-Tag', 'all');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.send(cachedMem.buffer);
+  }
+
+  const diskBin = path.join(uploadsDir, `${assetId}.bin`);
+  const diskMeta = path.join(uploadsDir, `${assetId}.mime`);
+  if (fs.existsSync(diskBin) && fs.existsSync(diskMeta)) {
+    try {
+      const mime = fs.readFileSync(diskMeta, 'utf-8').trim() || 'image/jpeg';
+      const buffer = fs.readFileSync(diskBin);
+      firestoreAssetMemoryCache.set(assetId, { mime, buffer });
+      res.setHeader('Content-Type', mime);
+      res.setHeader('X-Robots-Tag', 'all');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.send(buffer);
+    } catch {
+      // fall through to Firestore fetch
+    }
+  }
+
+  if (firebaseRuntimeConfig) {
+    try {
+      const { projectId, firestoreDatabaseId, apiKey } = firebaseRuntimeConfig;
+      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents/uploads_public/${encodeURIComponent(assetId)}?key=${encodeURIComponent(apiKey)}`;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const docJson: any = await resp.json();
+        const decoded = decodeFirestoreRestValue({ mapValue: { fields: docJson?.fields || {} } });
+        if (decoded && decoded.isPublic === true && typeof decoded.dataBase64 === 'string') {
+          const mime = String(decoded.mime || 'image/jpeg');
+          const buffer = Buffer.from(decoded.dataBase64, 'base64');
+          firestoreAssetMemoryCache.set(assetId, { mime, buffer });
+          try {
+            fs.writeFileSync(diskBin, buffer);
+            fs.writeFileSync(diskMeta, mime, 'utf-8');
+          } catch {
+            // ignore disk cache error
+          }
+          res.setHeader('Content-Type', mime);
+          res.setHeader('X-Robots-Tag', 'all');
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          return res.send(buffer);
+        }
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return res.redirect('/og-logo.jpg');
 });
 
 // 1. Get all public portal data
-app.get('/api/public/data', (_req: Request, res: Response) => {
+app.get('/api/public/data', async (_req: Request, res: Response) => {
+  await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
   const data = db.get();
-  // Filter only visible leaders, active secretariats, visible initiatives, published news, upcoming/completed events, visible media, published CMS pages
-  const publicData = {
-    settings: data.settings,
-    partyLeaders: data.partyLeaders.filter(l => l.isVisible).sort((a, b) => a.sortOrder - b.sortOrder),
-    secretariatLeaders: data.secretariatLeaders.filter(l => l.isVisible).sort((a, b) => a.sortOrder - b.sortOrder),
-    specializedSecretariats: data.specializedSecretariats.filter(s => s.isActive).sort((a, b) => a.sortOrder - b.sortOrder),
-    secretariatMembers: data.secretariatMembers || [],
-    initiatives: data.initiatives.filter(i => i.isVisible),
-    news: data.news.filter(n => !n.isDraft).sort((a, b) => new Date(b.publishDate).getTime() - new Date(a.publishDate).getTime()),
-    events: data.events.filter(e => e.isVisible).sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime()),
-    media: data.media.filter(m => m.isVisible).sort((a, b) => a.sortOrder - b.sortOrder),
-    liveStream: data.liveStream,
-    pages: (data.pages || []).filter(p => p.isPublished)
-  };
-  res.json(publicData);
+  res.json(buildPublicPortalPayload(data, { externalizeInlineImages: true }));
+});
+
+// Track real public page visits for Admin Google Analytics dashboard
+app.post('/api/public/analytics/track', (req: Request, res: Response) => {
+  try {
+    const rawPath = String(req.body?.path || '/').split('?')[0].slice(0, 200) || '/';
+    if (rawPath.startsWith('/admin') || rawPath.startsWith('/login') || rawPath.startsWith('/#admin')) {
+      return res.json({ success: true, ignored: true });
+    }
+    const rawTitle = String(req.body?.title || '').trim().slice(0, 180) || rawPath;
+    const rawReferrer = String(req.body?.referrer || '').trim();
+    const rawVisitorId = String(req.body?.visitorId || '').trim();
+    const ua = String(req.headers['user-agent'] || '');
+    const device =
+      req.body?.device === 'mobile' || /Mobi|Android|iPhone|iPad|iPod/i.test(ua)
+        ? 'mobile'
+        : 'desktop';
+
+    const now = new Date();
+    const dateKey = now.toISOString().slice(0, 10);
+    const visitorSeed = rawVisitorId || `${req.ip || 'anon'}:${ua.slice(0, 60)}`;
+    const visitorHash = crypto
+      .createHash('sha1')
+      .update(`${dateKey}:${visitorSeed}`)
+      .digest('hex')
+      .slice(0, 14);
+
+    const data = db.get();
+    if (!data.analytics) {
+      data.analytics = { daily: {}, pages: {}, sources: {}, updatedAt: '' };
+    }
+
+    if (!data.analytics.daily[dateKey]) {
+      data.analytics.daily[dateKey] = { visitors: [], pageViews: 0, mobile: 0, desktop: 0 };
+    }
+    const dayBucket = data.analytics.daily[dateKey];
+    dayBucket.pageViews = (dayBucket.pageViews || 0) + 1;
+    if (device === 'mobile') dayBucket.mobile = (dayBucket.mobile || 0) + 1;
+    else dayBucket.desktop = (dayBucket.desktop || 0) + 1;
+    if (!Array.isArray(dayBucket.visitors)) dayBucket.visitors = [];
+    if (!dayBucket.visitors.includes(visitorHash) && dayBucket.visitors.length < 5000) {
+      dayBucket.visitors.push(visitorHash);
+    }
+
+    // Prune daily buckets older than 90 days
+    const dailyKeys = Object.keys(data.analytics.daily).sort();
+    if (dailyKeys.length > 90) {
+      for (const oldKey of dailyKeys.slice(0, dailyKeys.length - 90)) {
+        delete data.analytics.daily[oldKey];
+      }
+    }
+
+    if (!data.analytics.pages[rawPath]) {
+      data.analytics.pages[rawPath] = {
+        path: rawPath,
+        title: rawTitle,
+        views: 0,
+        visitors: [],
+        lastVisitedAt: now.toISOString()
+      };
+    }
+    const pageBucket = data.analytics.pages[rawPath];
+    pageBucket.views = (pageBucket.views || 0) + 1;
+    if (rawTitle) pageBucket.title = rawTitle;
+    pageBucket.lastVisitedAt = now.toISOString();
+    if (!Array.isArray(pageBucket.visitors)) pageBucket.visitors = [];
+    if (!pageBucket.visitors.includes(visitorHash) && pageBucket.visitors.length < 5000) {
+      pageBucket.visitors.push(visitorHash);
+    }
+
+    let sourceLabel = 'زيارة مباشرة (Direct)';
+    if (rawReferrer) {
+      try {
+        const refHost = new URL(rawReferrer).hostname.replace(/^www\./, '').toLowerCase();
+        const ownHost = (req.get('host') || '').split(':')[0].replace(/^www\./, '').toLowerCase();
+        if (refHost && refHost !== ownHost) {
+          if (refHost.includes('google.')) sourceLabel = 'بحث Google';
+          else if (refHost.includes('facebook.') || refHost.includes('fb.com') || refHost.includes('l.instagram.'))
+            sourceLabel = 'Facebook / Meta';
+          else if (refHost.includes('whatsapp.') || refHost.includes('wa.me')) sourceLabel = 'WhatsApp';
+          else if (refHost.includes('t.me') || refHost.includes('telegram.')) sourceLabel = 'Telegram';
+          else if (refHost.includes('bing.')) sourceLabel = 'Bing';
+          else sourceLabel = refHost;
+        }
+      } catch {
+        // invalid referrer url -> keep Direct
+      }
+    }
+    data.analytics.sources[sourceLabel] = (data.analytics.sources[sourceLabel] || 0) + 1;
+    data.analytics.updatedAt = now.toISOString();
+
+    db.save();
+    return res.json({ success: true });
+  } catch {
+    return res.json({ success: false });
+  }
 });
 
 // Single CMS Page public route
@@ -1630,20 +2326,21 @@ app.get('/api/public/unsubscribe', (req: Request, res: Response) => {
 
 app.post('/api/admin/login', (req: Request, res: Response) => {
   const { identifier, email, phone, password } = req.body || {};
-  const rawLogin = String(identifier ?? email ?? phone ?? '').trim();
-  const rawPassword = password !== undefined && password !== null ? String(password) : '';
+  const stripInvisible = (v: string) => v.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0]/g, '');
+  const rawLogin = stripInvisible(String(identifier ?? email ?? phone ?? '')).trim();
+  const rawPassword = stripInvisible(password !== undefined && password !== null ? String(password) : '');
 
   if (!rawLogin || !rawPassword) {
     return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور' });
   }
 
-  const cleanEmail = rawLogin.toLowerCase();
+  const cleanEmail = rawLogin.replace(/\s+/g, '').toLowerCase();
   const normalizedPhone = normalizeAdminPhone(rawLogin);
   const data = db.get();
 
   const admin = data.admins.find(a => {
     if (!a.isActive) return false;
-    if (a.email && a.email.toLowerCase() === cleanEmail) return true;
+    if (a.email && a.email.trim().toLowerCase() === cleanEmail) return true;
     if (a.phone && normalizedPhone && normalizeAdminPhone(a.phone) === normalizedPhone) return true;
     return false;
   });
@@ -1668,6 +2365,7 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
   // Update last login
   admin.lastLogin = new Date().toISOString();
   db.save();
+  db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تسجيل دخول إداري', 'Auth', 'تم تسجيل الدخول بنجاح إلى لوحة التحكم');
 
   // Create persistent signed session
   const token = generateToken(admin);
@@ -1675,8 +2373,6 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
     admin,
     expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
   });
-
-  db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تسجيل دخول إداري', 'Auth', 'تم تسجيل الدخول بنجاح إلى لوحة التحكم');
 
   const { passwordHash, ...safeAdmin } = admin;
   res.json({
@@ -1686,127 +2382,47 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
   });
 });
 
-// Google Firebase Admin Sign-In (verifies verified Google email & syncs cloud DB)
-app.post('/api/admin/login-google', async (req: Request, res: Response) => {
-  const { idToken } = req.body || {};
-  if (!idToken || typeof idToken !== 'string') {
-    return res.status(400).json({ error: 'لم يتم استلام رمز التحقق من جوجل' });
-  }
-
-  const verified = await verifyFirebaseIdToken(idToken);
-  if (!verified || !verified.emailVerified) {
-    return res.status(401).json({ error: 'تعذر التحقق من حساب جوجل أو البريد الإلكتروني غير موثق' });
-  }
-
-  const data = db.get();
-  const BOOTSTRAPPED_ADMIN_EMAILS = ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'];
-  let admin = data.admins.find(
-    a => (a.email || '').toLowerCase() === verified.email && a.isActive
-  );
-
-  // If bootstrapped owner logs in with Google, add a separate super_admin account without overwriting existing owner
-  if (!admin && BOOTSTRAPPED_ADMIN_EMAILS.includes(verified.email)) {
-    const newBootstrappedAdmin: AdminUser = {
-      id: 'super-admin-' + Date.now(),
-      email: verified.email,
-      name: verified.displayName || 'مدير المنصة الرئيسي',
-      passwordHash: hashPassword(crypto.randomBytes(16).toString('hex')),
-      role: 'super_admin',
-      roleId: 'role-super-admin',
-      adminScope: 'general',
-      permissions: ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'pages', 'news', 'events', 'media', 'livestream', 'roles', 'admins', 'settings', 'audit'],
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    data.admins.push(newBootstrappedAdmin);
-    db.save();
-    admin = newBootstrappedAdmin;
-  }
-
-  if (!admin) {
-    return res.status(403).json({
-      error: `الحساب (${verified.email}) غير مدرج ضمن قائمة مسؤولي المنصة المعتمدين.`
-    });
-  }
-
-  try {
-    await ensureAdminRegistryDoc(verified, idToken);
-    const syncRes = await runWithFirebaseToken(idToken, () =>
-      syncAdminFullWithFirestore(db.get(), idToken)
-    );
-    if (syncRes.pulled) {
-      db.setFromCloud(syncRes.db);
-      // Re-resolve admin object in case cloud data updated admins list
-      const refreshedAdmin = db.get().admins.find(
-        a => a.email.toLowerCase() === verified.email && a.isActive
-      );
-      if (refreshedAdmin) admin = refreshedAdmin;
-    }
-  } catch (err) {
-    console.error('[Auth] Google cloud sync error during login:', err);
-  }
-
-  admin.lastLogin = new Date().toISOString();
-  await runWithFirebaseToken(idToken, () => {
-    db.addAuditLog(admin!.email, admin!.name, 'تسجيل دخول إداري عبر جوجل', 'Auth', 'تم تسجيل الدخول وتفعيل المزامنة السحابية الدائمة');
-  });
-
-  const token = generateToken(admin);
-  sessionStore.set(token, {
-    admin,
-    expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
-  });
-
-  const { passwordHash, ...safeAdmin } = admin;
-  res.json({
-    success: true,
-    token,
-    user: safeAdmin,
-    cloudSynced: true
-  });
-});
-
-app.get('/api/admin/cloud-status', authenticateAdmin, (_req: Request, res: Response) => {
-  res.json({
-    configured: isCloudConfigured(),
-    initialized: isCloudInitialized(),
-    hasPendingChanges: hasPendingLocalChanges()
-  });
-});
-
-app.post('/api/admin/cloud-sync', authenticateAdmin, async (req: Request, res: Response) => {
-  const headerTok = req.headers['x-firebase-id-token'];
-  const idToken =
-    (typeof req.body?.idToken === 'string' && req.body.idToken) ||
-    (typeof headerTok === 'string' ? headerTok : '');
-
+// Google Sign-In Admin login (verifies Firebase ID token using projectId only — no IAM required)
+app.post('/api/admin/google-login', async (req: Request, res: Response) => {
+  const idToken = String(req.body?.idToken || '').trim();
   if (!idToken) {
-    return res.status(400).json({ error: 'يرجى ربط حساب جوجل لتفعيل المزامنة السحابية الدائمة' });
+    return res.status(400).json({ error: 'رمز التحقق من Google غير موجود' });
   }
-
-  const verified = await verifyFirebaseIdToken(idToken);
-  if (!verified || !verified.emailVerified) {
-    return res.status(401).json({ error: 'انتهت جلسة جوجل السحابية، يرجى إعادة الربط' });
+  const tokenVerifier = getFirebaseTokenVerifier();
+  if (!tokenVerifier) {
+    return res.status(503).json({ error: 'إعدادات المصادقة غير متوفرة' });
   }
-
   try {
-    await ensureAdminRegistryDoc(verified, idToken);
-    const forcePush = Boolean(req.body?.forcePush);
-    const currentDb = db.get();
-    if (forcePush) {
-      const { pushDatabaseDiffToFirestore } = await import('./src/server/firestoreSync.ts');
-      await pushDatabaseDiffToFirestore(currentDb, idToken, true);
-      return res.json({ success: true, seeded: true, pulled: false });
+    const decoded = await tokenVerifier.verifyIdToken(idToken);
+    const verifiedEmail = String(decoded.email || '').trim().toLowerCase();
+    if (!verifiedEmail || decoded.email_verified !== true) {
+      return res.status(401).json({ error: 'يجب أن يكون البريد الإلكتروني في حساب Google موثقاً ومفعلاً' });
     }
-    const result = await syncAdminFullWithFirestore(currentDb, idToken);
-    if (result.pulled) {
-      db.setFromCloud(result.db);
+
+    const data = db.get();
+    const admin = data.admins.find(a => a.isActive && a.email && a.email.trim().toLowerCase() === verifiedEmail);
+    if (!admin) {
+      return res.status(403).json({ error: `الحساب (${verifiedEmail}) غير مسجل ضمن المشرفين المعتمدين في المنصة` });
     }
-    return res.json({ success: true, seeded: result.seeded, pulled: result.pulled });
-  } catch (err: any) {
-    console.error('[CloudSync] Failed:', err);
-    return res.status(500).json({ error: err?.message || 'فشلت المزامنة مع السحابة' });
+
+    admin.lastLogin = new Date().toISOString();
+    db.save();
+    db.addAuditLog(admin.email, admin.name, 'تسجيل دخول إداري عبر Google', 'Auth', 'تم تسجيل الدخول والتحقق من الهوية عبر Google');
+
+    const token = generateToken(admin);
+    sessionStore.set(token, {
+      admin,
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
+
+    const { passwordHash, ...safeAdmin } = admin;
+    return res.json({
+      success: true,
+      token,
+      user: safeAdmin
+    });
+  } catch {
+    return res.status(401).json({ error: 'تعذر التحقق من جلسة Google، يرجى إعادة المحاولة' });
   }
 });
 
@@ -1855,23 +2471,104 @@ app.get('/api/admin/stats', authenticateAdmin, (_req: Request, res: Response) =>
   res.json(stats);
 });
 
-// Full DB for admin (pulls latest cloud snapshot if Firebase token is present)
-app.get('/api/admin/full-db', authenticateAdmin, async (req: Request, res: Response) => {
-  const headerTok = req.headers['x-firebase-id-token'];
-  const idToken = typeof headerTok === 'string' && headerTok.trim() ? headerTok.trim() : '';
-  if (idToken) {
-    try {
-      if (hasPendingLocalChanges()) {
-        await db.flushCloudSync(idToken);
-      }
-      const result = await syncAdminFullWithFirestore(db.get(), idToken);
-      if (result.pulled) {
-        db.setFromCloud(result.db);
-      }
-    } catch (err) {
-      console.error('[FullDB] Cloud pull skipped:', err);
-    }
+// Admin Google Analytics & Traffic Insights endpoint (returns authentic recorded traffic)
+app.get('/api/admin/analytics', authenticateAdmin, (req: Request, res: Response) => {
+  const data = db.get();
+  const rangeParam = String(req.query.range || '14d').toLowerCase();
+  const rangeDays = rangeParam === '7d' ? 7 : rangeParam === '30d' ? 30 : 14;
+  const analytics = data.analytics || { daily: {}, pages: {}, sources: {}, updatedAt: '' };
+
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  const daily: Array<{
+    date: string;
+    label: string;
+    visitors: number;
+    pageViews: number;
+    mobile: number;
+    desktop: number;
+  }> = [];
+
+  let totalVisits = 0;
+  let mobileVisits = 0;
+  const uniqueRangeSet = new Set<string>();
+
+  for (let i = rangeDays - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const bucket = analytics.daily[key];
+    const visitorsArr = Array.isArray(bucket?.visitors) ? bucket.visitors : [];
+    for (const v of visitorsArr) uniqueRangeSet.add(v);
+    const pageViews = Number(bucket?.pageViews || 0);
+    const mobile = Number(bucket?.mobile || 0);
+    const desktop = Number(bucket?.desktop || 0);
+    totalVisits += pageViews;
+    mobileVisits += mobile;
+
+    daily.push({
+      date: key,
+      label: d.toLocaleDateString('ar-EG', { month: 'short', day: 'numeric' }),
+      visitors: visitorsArr.length,
+      pageViews,
+      mobile,
+      desktop
+    });
   }
+
+  const todayBucket = analytics.daily[todayKey];
+  const todayVisits = Number(todayBucket?.pageViews || 0);
+  const todayUniqueVisitors = Array.isArray(todayBucket?.visitors) ? todayBucket.visitors.length : 0;
+
+  const pageEntries = Object.values(analytics.pages || {});
+  const totalPageViewsAllTime = pageEntries.reduce((sum, p) => sum + Number(p.views || 0), 0);
+  const pages = pageEntries
+    .map(p => ({
+      path: p.path,
+      title: p.title || p.path,
+      views: Number(p.views || 0),
+      uniqueVisitors: Array.isArray(p.visitors) ? p.visitors.length : 0,
+      sharePct: totalPageViewsAllTime > 0 ? Math.round((Number(p.views || 0) / totalPageViewsAllTime) * 100) : 0,
+      lastVisitedAt: p.lastVisitedAt || ''
+    }))
+    .sort((a, b) => b.views - a.views)
+    .slice(0, 15);
+
+  const sourceEntries = Object.entries(analytics.sources || {});
+  const totalSourceVisits = sourceEntries.reduce((sum, [, cnt]) => sum + Number(cnt || 0), 0);
+  const sources = sourceEntries
+    .map(([source, visits]) => ({
+      source,
+      visits: Number(visits || 0),
+      sharePct: totalSourceVisits > 0 ? Math.round((Number(visits || 0) / totalSourceVisits) * 100) : 0
+    }))
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 10);
+
+  const topPage = pages[0];
+  res.json({
+    measurementId: (data.settings?.googleAnalyticsId || '').trim() || DEFAULT_GA4_ID,
+    gtmId: (data.settings?.googleTagManagerId || '').trim() || DEFAULT_GTM_ID,
+    rangeDays,
+    summary: {
+      totalVisits,
+      uniqueVisitors: uniqueRangeSet.size,
+      todayVisits,
+      todayUniqueVisitors,
+      mobileSharePct: totalVisits > 0 ? Math.round((mobileVisits / totalVisits) * 100) : 0,
+      topPageTitle: topPage?.title || '—',
+      topPagePath: topPage?.path || '/'
+    },
+    daily,
+    pages,
+    sources,
+    updatedAt: analytics.updatedAt || new Date().toISOString()
+  });
+});
+
+// Full DB for admin
+app.get('/api/admin/full-db', authenticateAdmin, async (_req: Request, res: Response) => {
+  await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
   const data = db.get();
   const safeAdmins = data.admins.map(({ passwordHash, ...rest }) => rest);
   const sortedSecretariats = [...(data.specializedSecretariats || [])].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -1912,7 +2609,6 @@ app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leade
   data.partyLeaders.push(newLeader);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إضافة قيادة حزبية', 'PartyLeader', `تمت إضافة القيادة: ${newLeader.name} بمنصب: ${newLeader.position}`, newLeader.id);
-  await db.flushCloudSync();
   res.json({ success: true, leader: newLeader });
 });
 
@@ -1937,7 +2633,6 @@ app.put('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('le
   } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل قيادة حزبية', 'PartyLeader', `تم تحديث بيانات القيادة: ${data.partyLeaders[idx].name}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, leader: data.partyLeaders[idx] });
 });
 
@@ -1946,10 +2641,9 @@ app.delete('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission(
   const data = db.get();
   const leader = data.partyLeaders.find(l => l.id === req.params.id);
   data.partyLeaders = data.partyLeaders.filter(l => l.id !== req.params.id);
-  markLocalDeletion('party_leaders', req.params.id);
+  recordLocalTombstone(data, 'party_leaders', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف قيادة حزبية', 'PartyLeader', `تم حذف القيادة: ${leader?.name || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -1979,7 +2673,6 @@ app.post('/api/admin/secretariat-leaders', authenticateAdmin, requirePermission(
   data.secretariatLeaders.push(newLeader);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إضافة قيادة بأمانة قسم ثالث أكتوبر', 'SecretariatLeader', `تمت إضافة القيادة: ${newLeader.name} بمسمى: ${newLeader.title}`, newLeader.id);
-  await db.flushCloudSync();
   res.json({ success: true, leader: newLeader });
 });
 
@@ -2004,7 +2697,6 @@ app.put('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermissi
   } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل قيادة بأمانة قسم ثالث أكتوبر', 'SecretariatLeader', `تم تحديث بيانات: ${data.secretariatLeaders[idx].name}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, leader: data.secretariatLeaders[idx] });
 });
 
@@ -2013,10 +2705,9 @@ app.delete('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermi
   const data = db.get();
   const leader = data.secretariatLeaders.find(l => l.id === req.params.id);
   data.secretariatLeaders = data.secretariatLeaders.filter(l => l.id !== req.params.id);
-  markLocalDeletion('secretariat_leaders', req.params.id);
+  recordLocalTombstone(data, 'secretariat_leaders', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف قيادة بأمانة قسم ثالث أكتوبر', 'SecretariatLeader', `تم حذف: ${leader?.name || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2089,6 +2780,7 @@ function normalizeSecretariatPayload(body: any, existing?: any) {
     }
   }
 
+  merged.updatedAt = new Date().toISOString();
   return merged;
 }
 
@@ -2151,7 +2843,6 @@ app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secret
   data.specializedSecretariats.push(normalized);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إضافة أمانة تخصصية جديدة', 'SpecializedSecretariat', `تم إنشاء: ${normalized.name}`, normalized.id);
-  await db.flushCloudSync();
   res.json({ success: true, secretariat: normalized });
 });
 
@@ -2180,7 +2871,6 @@ app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('sec
   } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل أمانة تخصصية', 'SpecializedSecretariat', `تم تعديل بيانات أمانة: ${data.specializedSecretariats[idx].name}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, secretariat: data.specializedSecretariats[idx] });
 });
 
@@ -2194,10 +2884,9 @@ app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('
 
   // Preserve members: keep secretariatMembers intact or set their secretariatId to unassigned, without deleting person records
   data.specializedSecretariats = data.specializedSecretariats.filter(s => s.id !== req.params.id);
-  markLocalDeletion('secretariats', req.params.id);
+  recordLocalTombstone(data, 'secretariats', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف أمانة تخصصية', 'SpecializedSecretariat', `تم حذف أمانة: ${sec.name} مع الحفاظ على سجلات الأعضاء`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2230,7 +2919,6 @@ app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermissio
     'SpecializedSecretariat',
     `تم حفظ وتأكيد بيانات الأمانات التخصصية بنجاح (${data.specializedSecretariats.length} أمانة)`
   );
-  await db.flushCloudSync();
   res.json({
     success: true,
     count: data.specializedSecretariats.length,
@@ -2261,13 +2949,13 @@ app.post('/api/admin/secretariat-members', authenticateAdmin, requirePermission(
     phone: body.phone || '',
     email: body.email || '',
     assignmentDate: body.assignmentDate || '',
-    notes: body.notes || ''
+    notes: body.notes || '',
+    updatedAt: new Date().toISOString()
   };
 
   data.secretariatMembers.push(newMember);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إضافة عضو لأمانة تخصصية', 'SecretariatMember', `تمت إضافة ${newMember.name} بمسمى ${newMember.role}`, newMember.id);
-  await db.flushCloudSync();
   res.json({ success: true, member: newMember });
 });
 
@@ -2287,11 +2975,11 @@ app.put('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermissi
   data.secretariatMembers[idx] = {
     ...data.secretariatMembers[idx],
     ...nextBody,
-    id: req.params.id
+    id: req.params.id,
+    updatedAt: new Date().toISOString()
   };
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل تكليف عضو بأمانة', 'SecretariatMember', `تم تحديث تكليف: ${data.secretariatMembers[idx].name}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, member: data.secretariatMembers[idx] });
 });
 
@@ -2314,6 +3002,7 @@ app.post('/api/admin/secretariat-members/transfer', authenticateAdmin, requirePe
   member.secretariatId = targetSecretariatId;
   if (newRole) member.role = newRole;
   if (notes) member.notes = (member.notes ? member.notes + '\n' : '') + `نقل من ${oldSecName}: ${notes}`;
+  (member as any).updatedAt = new Date().toISOString();
 
   // If connected to central member record, record in assignmentHistory
   if (member.memberId) {
@@ -2335,7 +3024,6 @@ app.post('/api/admin/secretariat-members/transfer', authenticateAdmin, requirePe
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'نقل عضو بين الأمانات', 'SecretariatMember', `تم نقل ${member.name} من ${oldSecName} إلى ${targetSec.name}`, member.id);
-  await db.flushCloudSync();
   res.json({ success: true, member });
 });
 
@@ -2344,10 +3032,9 @@ app.delete('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermi
   const data = db.get();
   const member = data.secretariatMembers.find(m => m.id === req.params.id);
   data.secretariatMembers = data.secretariatMembers.filter(m => m.id !== req.params.id);
-  markLocalDeletion('secretariat_members', req.params.id);
+  recordLocalTombstone(data, 'secretariat_members', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إزالة عضو من أمانة', 'SecretariatMember', `تم إخراج ${member?.name} من تشكيل الأمانة مع بقاء ملفه الشخصي`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2432,7 +3119,6 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
       () => db.save()
     );
   }
-  await db.flushCloudSync();
   res.json({ success: true, initiative: newInit, notificationResult });
 });
 
@@ -2517,7 +3203,6 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل مبادرة', 'Initiative', `تم تعديل مبادرة: ${data.initiatives[idx].title}`, existing.id);
-  await db.flushCloudSync();
   res.json({ success: true, initiative: data.initiatives[idx] });
 });
 
@@ -2526,10 +3211,9 @@ app.delete('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('i
   const data = db.get();
   const init = data.initiatives.find(i => i.id === req.params.id);
   data.initiatives = data.initiatives.filter(i => i.id !== req.params.id);
-  markLocalDeletion('initiatives', req.params.id);
+  recordLocalTombstone(data, 'initiatives', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف مبادرة', 'Initiative', `تم حذف مبادرة: ${init?.title || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2592,7 +3276,6 @@ app.post('/api/admin/news', authenticateAdmin, requirePermission('news'), async 
       () => db.save()
     );
   }
-  await db.flushCloudSync();
   res.json({ success: true, news: newNews, notificationResult });
 });
 
@@ -2674,7 +3357,6 @@ app.put('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), asy
       () => db.save()
     );
   }
-  await db.flushCloudSync();
   res.json({ success: true, news: data.news[idx], notificationResult });
 });
 
@@ -2683,10 +3365,9 @@ app.delete('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), 
   const data = db.get();
   const news = data.news.find(n => n.id === req.params.id);
   data.news = data.news.filter(n => n.id !== req.params.id);
-  markLocalDeletion('news', req.params.id);
+  recordLocalTombstone(data, 'news', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف خبر', 'News', `تم حذف خبر: ${news?.title || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2754,7 +3435,6 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
       () => db.save()
     );
   }
-  await db.flushCloudSync();
   res.json({ success: true, event: newEvent, notificationResult });
 });
 
@@ -2808,7 +3488,6 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
   } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل فعالية', 'Event', `تم تعديل فعالية: ${data.events[idx].title}`, existing.id);
-  await db.flushCloudSync();
   res.json({ success: true, event: data.events[idx] });
 });
 
@@ -2817,10 +3496,9 @@ app.delete('/api/admin/events/:id', authenticateAdmin, requirePermission('events
   const data = db.get();
   const event = data.events.find(e => e.id === req.params.id);
   data.events = data.events.filter(e => e.id !== req.params.id);
-  markLocalDeletion('events', req.params.id);
+  recordLocalTombstone(data, 'events', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف فعالية', 'Event', `تم حذف فعالية: ${event?.title || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2862,7 +3540,6 @@ app.post('/api/admin/media', authenticateAdmin, requirePermission('media'), asyn
   data.media.unshift(newMedia);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إضافة وسيط للمعرض', 'Media', `تمت إضافة: ${newMedia.title} (${newMedia.type})`, newMedia.id);
-  await db.flushCloudSync();
   res.json({ success: true, media: newMedia });
 });
 
@@ -2893,7 +3570,6 @@ app.put('/api/admin/media/:id', authenticateAdmin, requirePermission('media'), a
   } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل وسيط بالمعرض', 'Media', `تم تحديث: ${data.media[idx].title}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, media: data.media[idx] });
 });
 
@@ -2902,10 +3578,9 @@ app.delete('/api/admin/media/:id', authenticateAdmin, requirePermission('media')
   const data = db.get();
   const media = data.media.find(m => m.id === req.params.id);
   data.media = data.media.filter(m => m.id !== req.params.id);
-  markLocalDeletion('media', req.params.id);
+  recordLocalTombstone(data, 'media', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف وسيط من المعرض', 'Media', `تم حذف: ${media?.title || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -2915,11 +3590,11 @@ app.put('/api/admin/livestream', authenticateAdmin, requirePermission('livestrea
   const data = db.get();
   data.liveStream = {
     ...data.liveStream,
-    ...req.body
+    ...req.body,
+    updatedAt: new Date().toISOString()
   };
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تحديث إعدادات البث المباشر', 'LiveStream', `حالة البث: ${data.liveStream.isActive ? 'مفعل' : 'متوقف'}`);
-  await db.flushCloudSync();
   res.json({ success: true, liveStream: data.liveStream });
 });
 
@@ -3044,7 +3719,6 @@ app.put('/api/admin/applications/:id', authenticateAdmin, requirePermission('app
     `تغيير حالة طلب ${data.applications[idx].applicationNumber} للمواطن ${data.applications[idx].fullName} من [${prevStatus}] إلى [${updatedStatus}]. ملاحظات: ${req.body.internalNotes || 'لا يوجد'}`,
     req.params.id
   );
-  await db.flushCloudSync();
   res.json({ success: true, application: data.applications[idx] });
 });
 
@@ -3128,7 +3802,6 @@ app.post('/api/admin/applications/:id/convert-to-member', authenticateAdmin, req
     newMember.id
   );
 
-  await db.flushCloudSync();
   res.json({ success: true, member: newMember });
 });
 
@@ -3149,12 +3822,12 @@ app.put('/api/admin/members/:id', authenticateAdmin, requirePermission('members'
   data.members[idx] = {
     ...data.members[idx],
     ...req.body,
-    id: req.params.id
+    id: req.params.id,
+    updatedAt: new Date().toISOString()
   };
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل بيانات عضو بالسجل', 'Member', `تحديث ملف العضو: ${data.members[idx].fullName}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, member: data.members[idx] });
 });
 
@@ -3211,7 +3884,6 @@ app.post('/api/admin/members/:id/assignment', authenticateAdmin, requirePermissi
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تكليف تنظيمي جديد', 'Member', `إصدار تكليف لـ ${member.fullName} بمسمى [${newAssignment.title}] بأمانة [${newAssignment.secretariatName}]`, member.id);
-  await db.flushCloudSync();
   res.json({ success: true, member });
 });
 
@@ -3237,7 +3909,6 @@ app.put('/api/admin/members/:id/end-assignment', authenticateAdmin, requirePermi
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إنهاء تكليف تنظيمي', 'Member', `إنهاء تكليف ${member.fullName} مع بقاء بياناته وسجله التاريخي محفوظة`, member.id);
-  await db.flushCloudSync();
   res.json({ success: true, member });
 });
 
@@ -3311,7 +3982,6 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   const scopeDesc = newAdmin.adminScope === 'specialized' ? `أمانة تخصصية (${newAdmin.managedSecretariatId || 'محددة'})` : 'إدارة عامة';
   const contactDesc = [newAdmin.email, newAdmin.phone].filter(Boolean).join(' / ');
   db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'إضافة مشرف جديد', 'AdminUser', `تم إنشاء حساب للمشرف: ${newAdmin.name} (${contactDesc}) بنطاق [${scopeDesc}]`, newAdmin.id);
-  await db.flushCloudSync();
 
   const { passwordHash, ...safe } = newAdmin;
   res.json({ success: true, user: safe });
@@ -3386,7 +4056,6 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
 
   db.save();
   db.addAuditLog(currentAdmin.email || currentAdmin.phone || currentAdmin.id, currentAdmin.name, 'تعديل بيانات مشرف', 'AdminUser', `تم تعديل بيانات وصلاحيات ونطاق المشرف: ${target.name}`, target.id);
-  await db.flushCloudSync();
 
   const { passwordHash, ...safe } = target;
   res.json({ success: true, user: safe });
@@ -3404,10 +4073,8 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
   }
 
   data.admins = data.admins.filter(a => a.id !== req.params.id);
-  markLocalDeletion('admin_users', req.params.id);
   db.save();
   db.addAuditLog(currentAdmin.email || currentAdmin.phone || currentAdmin.id, currentAdmin.name, 'حذف مشرف', 'AdminUser', `تم حذف حساب المشرف: ${target.name} (${target.email || target.phone || target.id})`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -3451,7 +4118,6 @@ app.post('/api/admin/pages', authenticateAdmin, requirePermission('pages'), asyn
   data.pages.push(newPage);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إنشاء صفحة CMS جديدة', 'CMSPage', `تم إنشاء صفحة: ${newPage.title} (${newPage.slug})`, newPage.id);
-  await db.flushCloudSync();
   res.json({ success: true, page: newPage });
 });
 
@@ -3498,7 +4164,6 @@ app.put('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages'), a
   };
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل صفحة CMS', 'CMSPage', `تم تحديث محتوى صفحة: ${data.pages[idx].title}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, page: data.pages[idx] });
 });
 
@@ -3508,10 +4173,9 @@ app.delete('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages')
   if (!data.pages) data.pages = [];
   const page = data.pages.find(p => p.id === req.params.id);
   data.pages = data.pages.filter(p => p.id !== req.params.id);
-  markLocalDeletion('pages', req.params.id);
+  recordLocalTombstone(data, 'pages', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف صفحة CMS', 'CMSPage', `تم حذف صفحة: ${page?.title || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -3543,7 +4207,6 @@ app.post('/api/admin/roles', authenticateAdmin, requirePermission('roles'), asyn
   data.roles.push(newRole);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'إنشاء دور إداري جديد (RBAC)', 'AdminRole', `تم إنشاء دور: ${newRole.name}`, newRole.id);
-  await db.flushCloudSync();
   res.json({ success: true, role: newRole });
 });
 
@@ -3560,11 +4223,11 @@ app.put('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles'), a
     ...data.roles[idx],
     ...req.body,
     id: req.params.id,
-    isSystem: data.roles[idx].isSystem // protect system flag
+    isSystem: data.roles[idx].isSystem, // protect system flag
+    updatedAt: new Date().toISOString()
   };
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل دور إداري (RBAC)', 'AdminRole', `تم تعديل دور: ${data.roles[idx].name}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true, role: data.roles[idx] });
 });
 
@@ -3578,10 +4241,8 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
   }
 
   data.roles = data.roles.filter(r => r.id !== req.params.id);
-  markLocalDeletion('roles', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف دور إداري (RBAC)', 'AdminRole', `تم حذف دور: ${role?.name || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -3620,11 +4281,11 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
 
   data.settings = {
     ...data.settings,
-    ...body
+    ...body,
+    updatedAt: new Date().toISOString()
   };
   db.save();
   db.addAuditLog(admin.email || admin.phone || admin.id, admin.name, 'تحديث إعدادات المنصة', 'Settings', 'تم تعديل إعدادات وهوية وبيانات التواصل وSEO للمنصة');
-  await db.flushCloudSync();
   res.json({ success: true, settings: data.settings });
 });
 
@@ -3656,7 +4317,6 @@ app.post('/api/admin/subscribers/:id/toggle', authenticateAdmin, async (req: Req
   sub.updatedAt = new Date().toISOString();
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تغيير حالة مشترك بريدي', 'Subscriber', `${sub.email}: ${sub.status}`, sub.id);
-  await db.flushCloudSync();
   res.json({ success: true, subscriber: sub });
 });
 
@@ -3666,10 +4326,8 @@ app.delete('/api/admin/subscribers/:id', authenticateAdmin, async (req: Request,
   if (!data.subscribers) data.subscribers = [];
   const sub = data.subscribers.find(s => s.id === req.params.id);
   data.subscribers = data.subscribers.filter(s => s.id !== req.params.id);
-  markLocalDeletion('subscribers', req.params.id);
   db.save();
   db.addAuditLog(admin.email, admin.name, 'حذف مشترك من القائمة البريدية', 'Subscriber', `تم حذف البريد: ${sub?.email || req.params.id}`, req.params.id);
-  await db.flushCloudSync();
   res.json({ success: true });
 });
 
@@ -3728,7 +4386,6 @@ app.post('/api/admin/subscribers/dispatch-item', authenticateAdmin, async (req: 
 
   const notificationResult = await dispatchSubscriberNotifications(data, payload, () => db.save());
   db.addAuditLog(admin.email, admin.name, 'إرسال تنبيه بريدي للمشتركين', 'EmailDispatch', `إرسال (${payload.title}) - أُرسل إلى ${notificationResult.sentCount}`, itemId);
-  await db.flushCloudSync();
   res.json({ success: true, notificationResult });
 });
 
@@ -3803,27 +4460,8 @@ app.get(['/api/news/:id/image', '/api/events/:id/image', '/api/initiatives/:id/i
 // -------------------------------------------------------------
 
 async function startServer() {
-  // Hydrate initial public data from Firestore ONLY when no unpushed local edits exist
-  try {
-    if (hasPendingLocalChanges()) {
-      console.log('[NFP Platform] Skipped startup Firestore pull because local edits are pending cloud sync.');
-    } else {
-      const cloudPublic = await pullPublicFromFirestore(db.get(), db.getDbFileMtimeMs());
-      if (cloudPublic) {
-        db.setFromCloud(cloudPublic);
-        console.log('[NFP Platform] Hydrated public portal state from Firestore.');
-      }
-    }
-  } catch (err) {
-    console.error('[NFP Platform] Initial Firestore pull failed (using local snapshot):', err);
-  }
-
-  // Keep Preview & Live containers in sync with public Firestore updates
-  setInterval(() => {
-    refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs()).catch(() => {});
-  }, 10000);
-
   const isProduction = process.env.NODE_ENV === 'production';
+  await hydrateDbFromPublicFirestoreRest(true).catch(() => undefined);
 
   if (!isProduction) {
     const vite = await createViteServer({
@@ -3853,14 +4491,16 @@ async function startServer() {
       '/login'
     ];
 
-    // Serve Vite SPA with route-specific SEO tags & semantic SSR HTML inside #root
+    // Serve Vite SPA with route-specific SEO tags & crawler-only semantic SSR HTML inside #root
     app.get(spaPublicRoutes, async (req: Request, res: Response, next: NextFunction) => {
       try {
-        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
         const indexPath = path.resolve(process.cwd(), 'index.html');
         const rawHtml = fs.readFileSync(indexPath, 'utf-8');
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
-        res.status(200).set({ 'Content-Type': 'text/html; charset=utf-8' }).end(injectDynamicSiteMeta(transformed, req));
+        res
+          .status(200)
+          .set({ 'Content-Type': 'text/html; charset=utf-8', Vary: 'User-Agent' })
+          .end(injectDynamicSiteMeta(transformed, req));
       } catch (err) {
         next(err);
       }
@@ -3870,12 +4510,7 @@ async function startServer() {
   } else {
     const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath, { index: false }));
-    app.get('*', async (req: Request, res: Response) => {
-      try {
-        await refreshPublicIfStale(db.get(), nextDb => db.setFromCloud(nextDb), db.getDbFileMtimeMs());
-      } catch {
-        // ignore
-      }
+    app.get('*', (req: Request, res: Response) => {
       if (req.path === '/admin' || req.path.startsWith('/admin/')) {
         res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
       }
@@ -3883,7 +4518,10 @@ async function startServer() {
       const rawHtml = fs.existsSync(distIndex)
         ? fs.readFileSync(distIndex, 'utf-8')
         : '<!doctype html><html><head></head><body><div id="root"></div></body></html>';
-      res.status(200).set({ 'Content-Type': 'text/html; charset=utf-8' }).end(injectDynamicSiteMeta(rawHtml, req));
+      res
+        .status(200)
+        .set({ 'Content-Type': 'text/html; charset=utf-8', Vary: 'User-Agent' })
+        .end(injectDynamicSiteMeta(rawHtml, req));
     });
   }
 

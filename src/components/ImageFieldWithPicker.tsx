@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MediaItem } from '../types';
 import { MediaPickerModal } from './MediaPickerModal';
+import { readAndCompressImageFile } from '../utils/imageCompression';
 import { Image as ImageIcon, Upload, Trash2, ExternalLink } from 'lucide-react';
 
 interface ImageFieldWithPickerProps {
@@ -93,40 +94,15 @@ export const ImageFieldWithPicker: React.FC<ImageFieldWithPickerProps> = ({
                 type="file"
                 accept="image/*"
                 className="hidden"
-                onChange={e => {
+                onChange={async e => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = ev => {
-                    const dataUrl = ev.target?.result as string;
-                    if (!dataUrl || dataUrl.length < 520000) {
-                      onChange(dataUrl);
-                      return;
-                    }
-                    const img = new Image();
-                    img.onload = () => {
-                      const maxDim = 1600;
-                      let { width, height } = img;
-                      if (width > maxDim || height > maxDim) {
-                        const scale = Math.min(maxDim / width, maxDim / height);
-                        width = Math.round(width * scale);
-                        height = Math.round(height * scale);
-                      }
-                      const canvas = document.createElement('canvas');
-                      canvas.width = width;
-                      canvas.height = height;
-                      const ctx = canvas.getContext('2d');
-                      if (ctx) {
-                        ctx.drawImage(img, 0, 0, width, height);
-                        onChange(canvas.toDataURL('image/jpeg', 0.84));
-                      } else {
-                        onChange(dataUrl);
-                      }
-                    };
-                    img.onerror = () => onChange(dataUrl);
-                    img.src = dataUrl;
-                  };
-                  reader.readAsDataURL(file);
+                  try {
+                    const compressed = await readAndCompressImageFile(file);
+                    onChange(compressed);
+                  } catch {
+                    // ignore invalid file
+                  }
                 }}
               />
             </label>

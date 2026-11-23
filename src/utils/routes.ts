@@ -1,9 +1,10 @@
 import { PublicPortalData } from '../types';
 
 export const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
-export const HOME_TITLE = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+export const SITE_BRAND_NAME = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر';
+export const HOME_TITLE = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي';
 export const HOME_DESCRIPTION =
-  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+  'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.';
 export const HOME_KEYWORDS =
   'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
 
@@ -223,6 +224,7 @@ export function getPageSeoMeta(
       ? configuredUrl
       : OFFICIAL_SITE_URL;
   const siteTitle = data?.settings?.seoTitle?.trim() || HOME_TITLE;
+  const siteBrand = siteTitle.replace(/\s*\|\s*الموقع الرسمي\s*$/, '').trim() || SITE_BRAND_NAME;
   const siteDesc = data?.settings?.seoDescription?.trim() || HOME_DESCRIPTION;
   const siteKeywords = data?.settings?.seoKeywords?.trim() || HOME_KEYWORDS;
   const defaultShareImg = resolveClientShareImage(
@@ -243,7 +245,7 @@ export function getPageSeoMeta(
       title: siteTitle,
       description: siteDesc,
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl: `${baseSiteUrl}/`,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -252,10 +254,10 @@ export function getPageSeoMeta(
   }
   if (view === 'about') {
     return {
-      title: `عن الحزب والأمانة | ${siteTitle}`,
+      title: `عن الحزب والأمانة | ${siteBrand}`,
       description: 'تعرف على رؤية ورسالة ومبادئ حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورها المجتمعي والتنموي.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -264,10 +266,10 @@ export function getPageSeoMeta(
   }
   if (view === 'party-leaders') {
     return {
-      title: `قيادات الحزب | ${siteTitle}`,
+      title: `قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر | ${siteBrand}`,
       description: 'تعرف على قيادات حزب الجبهة الوطنية وقيادات وهيئة مكتب أمانة قسم ثالث أكتوبر بمحافظة الجيزة ودورهم في العمل الوطني والمجتمعي.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -276,10 +278,10 @@ export function getPageSeoMeta(
   }
   if (view === 'secretariat-leaders') {
     return {
-      title: `قيادات الأمانة | ${siteTitle}`,
+      title: `قيادات أمانة قسم ثالث أكتوبر – هيئة المكتب | ${siteBrand}`,
       description: 'قيادات وهيئة مكتب أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -288,10 +290,10 @@ export function getPageSeoMeta(
   }
   if (view === 'secretariats') {
     return {
-      title: `الأمانات التخصصية | ${siteTitle}`,
+      title: `الأمانات التخصصية والنوعية – قسم ثالث أكتوبر | ${siteBrand}`,
       description: 'استعرض الأمانات التخصصية لحزب الجبهة الوطنية بأمانة قسم ثالث أكتوبر بمحافظة الجيزة ومهامها وأمناءها.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -306,12 +308,12 @@ export function getPageSeoMeta(
       ? resolveClientShareImage(sec.coverUrl || sec.logoUrl, baseSiteUrl, defaultShareImg)
       : defaultShareImg;
     return {
-      title: sec ? `${sec.name} | ${siteTitle}` : `الأمانات التخصصية | ${siteTitle}`,
+      title: sec ? `${sec.name} – أمانة قسم ثالث أكتوبر | ${siteBrand}` : `الأمانات التخصصية | ${siteBrand}`,
       description: sec?.description
         ? `${sec.name} – ${sec.description.slice(0, 140)}`
         : 'تفاصيل ومهام الأمانة التخصصية بأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: secImg,
       ogType: 'website',
@@ -320,10 +322,10 @@ export function getPageSeoMeta(
   }
   if (view === 'initiatives') {
     return {
-      title: `المبادرات المجتمعية والتنموية | ${siteTitle}`,
+      title: `المبادرات المجتمعية والتنموية | ${siteBrand}`,
       description: 'تابع المبادرات الميدانية والتنموية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -345,10 +347,10 @@ export function getPageSeoMeta(
         defaultShareImg
       );
       return {
-        title: `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteTitle}`,
+        title: `${act.title || 'نشاط ميداني'} – ${init.title} | ${siteBrand}`,
         description: (act.description || init.description || siteDesc).slice(0, 160),
         keywords: siteKeywords,
-        siteName: siteTitle,
+        siteName: SITE_BRAND_NAME,
         canonicalUrl: `${canonicalUrl}?activity=${options?.activity}`,
         ogImage: actImg,
         ogType: 'article',
@@ -359,12 +361,12 @@ export function getPageSeoMeta(
       ? resolveClientShareImage(init.coverUrl || init.galleryImages?.[0] || init.logoUrl, baseSiteUrl, defaultShareImg)
       : defaultShareImg;
     return {
-      title: init ? `${init.title} | ${siteTitle}` : `المبادرات | ${siteTitle}`,
+      title: init ? `${init.title} | ${siteBrand}` : `المبادرات المجتمعية | ${siteBrand}`,
       description: init?.description
         ? init.description.slice(0, 160)
         : 'تفاصيل وأنشطة المبادرة الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: initImg,
       ogType: init ? 'article' : 'website',
@@ -381,10 +383,10 @@ export function getPageSeoMeta(
         ? `${baseSiteUrl}/api/news/${encodeURIComponent(item.id)}/image`
         : resolveClientShareImage(newsRawImg, baseSiteUrl, defaultShareImg);
       return {
-        title: `${item.title} | ${siteTitle}`,
+        title: `${item.title} | ${siteBrand}`,
         description: (item.excerpt || item.content || siteDesc).slice(0, 160),
         keywords: siteKeywords,
-        siteName: siteTitle,
+        siteName: SITE_BRAND_NAME,
         canonicalUrl,
         ogImage: newsImg,
         ogType: 'article',
@@ -392,10 +394,10 @@ export function getPageSeoMeta(
       };
     }
     return {
-      title: `الأخبار والبيانات الرسمية | ${siteTitle}`,
+      title: `أخبار وبيانات أمانة قسم ثالث أكتوبر | ${siteBrand}`,
       description: 'آخر الأخبار والبيانات الرسمية والتغطيات الميدانية لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -412,10 +414,10 @@ export function getPageSeoMeta(
         ? `${baseSiteUrl}/api/events/${encodeURIComponent(ev.id)}/image`
         : resolveClientShareImage(evRawImg, baseSiteUrl, defaultShareImg);
       return {
-        title: `${ev.title} | ${siteTitle}`,
+        title: `${ev.title} | ${siteBrand}`,
         description: (ev.description || siteDesc).slice(0, 160),
         keywords: siteKeywords,
-        siteName: siteTitle,
+        siteName: SITE_BRAND_NAME,
         canonicalUrl,
         ogImage: evImg,
         ogType: 'article',
@@ -423,10 +425,10 @@ export function getPageSeoMeta(
       };
     }
     return {
-      title: `الفعاليات والأنشطة | ${siteTitle}`,
+      title: `الفعاليات والأنشطة – أمانة قسم ثالث أكتوبر | ${siteBrand}`,
       description: 'جدول الفعاليات واللقاءات والندوات والقوافل لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -435,10 +437,10 @@ export function getPageSeoMeta(
   }
   if (view === 'live') {
     return {
-      title: `البث المباشر | ${siteTitle}`,
+      title: `البث المباشر | ${siteBrand}`,
       description: 'تابع البث المباشر لفعاليات ومؤتمرات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -447,10 +449,10 @@ export function getPageSeoMeta(
   }
   if (view === 'join') {
     return {
-      title: `طلب العضوية والانضمام | ${siteTitle}`,
+      title: `طلب العضوية والانضمام | ${siteBrand}`,
       description: 'التقديم الإلكتروني لعضوية حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر بمحافظة الجيزة والاستعلام عن حالة الطلب.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -459,10 +461,10 @@ export function getPageSeoMeta(
   }
   if (view === 'contact') {
     return {
-      title: `تواصل معنا ومقر الأمانة | ${siteTitle}`,
+      title: `تواصل معنا ومقر الأمانة | ${siteBrand}`,
       description: 'طرق التواصل المباشرة ومقر أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة وأرقام الهاتف والواتساب والخريطة.',
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -475,10 +477,10 @@ export function getPageSeoMeta(
       ? resolveClientShareImage(page.coverImage, baseSiteUrl, defaultShareImg)
       : defaultShareImg;
     return {
-      title: page?.title ? `${page.title} | ${siteTitle}` : siteTitle,
+      title: page?.title ? `${page.title} | ${siteBrand}` : siteTitle,
       description: page?.metaDescription || page?.subtitle || (page?.content || siteDesc).slice(0, 160),
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl,
       ogImage: pageImg,
       ogType: 'article',
@@ -487,10 +489,10 @@ export function getPageSeoMeta(
   }
   if (view === 'admin') {
     return {
-      title: `لوحة التحكم | ${siteTitle}`,
+      title: `لوحة التحكم | ${siteBrand}`,
       description: siteDesc,
       keywords: siteKeywords,
-      siteName: siteTitle,
+      siteName: SITE_BRAND_NAME,
       canonicalUrl: `${baseSiteUrl}/`,
       ogImage: defaultShareImg,
       ogType: 'website',
@@ -502,7 +504,7 @@ export function getPageSeoMeta(
     title: siteTitle,
     description: siteDesc,
     keywords: siteKeywords,
-    siteName: siteTitle,
+    siteName: SITE_BRAND_NAME,
     canonicalUrl: `${baseSiteUrl}/`,
     ogImage: defaultShareImg,
     ogType: 'website',

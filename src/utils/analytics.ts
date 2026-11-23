@@ -88,6 +88,20 @@ export function getActiveMeasurementId(): string | null {
   return activeMeasurementId || DEFAULT_GA4_MEASUREMENT_ID;
 }
 
+function getOrCreateVisitorId(): string {
+  try {
+    const key = 'nfp_vid';
+    let id = localStorage.getItem(key);
+    if (!id) {
+      id = 'v_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      localStorage.setItem(key, id);
+    }
+    return id;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Track an SPA pageview (includes referrer/traffic source & screen context automatically via GA4)
  */
@@ -95,17 +109,33 @@ export function trackPageView(pagePath: string, pageTitle?: string) {
   if (!activeMeasurementId) {
     initGoogleAnalytics(DEFAULT_GA4_MEASUREMENT_ID);
   }
-  if (!window.gtag || !activeMeasurementId) {
-    return;
+  const resolvedTitle = pageTitle || document.title;
+  if (window.gtag && activeMeasurementId) {
+    window.gtag('event', 'page_view', {
+      page_title: resolvedTitle,
+      page_location: window.location.href,
+      page_path: pagePath,
+      page_referrer: document.referrer || undefined,
+      language: document.documentElement.lang || 'ar'
+    });
   }
 
-  window.gtag('event', 'page_view', {
-    page_title: pageTitle || document.title,
-    page_location: window.location.href,
-    page_path: pagePath,
-    page_referrer: document.referrer || undefined,
-    language: document.documentElement.lang || 'ar'
-  });
+  // Record non-admin public visits for real analytics visualization in Admin Panel
+  if (typeof window !== 'undefined' && pagePath && !pagePath.startsWith('/#admin') && !pagePath.startsWith('/admin') && !pagePath.startsWith('/login')) {
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
+    fetch('/api/public/analytics/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: pagePath,
+        title: resolvedTitle,
+        referrer: document.referrer || '',
+        device: isMobile ? 'mobile' : 'desktop',
+        visitorId: getOrCreateVisitorId()
+      }),
+      keepalive: true
+    }).catch(() => {});
+  }
 }
 
 /**

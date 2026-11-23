@@ -1,44 +1,49 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { AdminUser } from '../types';
 import { api, setAuthToken, getAuthToken } from '../api';
-import {
-  firebaseAuth,
-  onAuthStateChanged,
-  signInWithGooglePopup,
-  signOutFirebase,
-  type FirebaseUser
-} from '../firebase';
+import { auth } from '../firebase';
+import { signInWithGoogleForAdmin, signOutFirebaseAdmin } from '../utils/firestoreSync';
 
 interface AuthContextType {
   user: AdminUser | null;
-  firebaseUser: FirebaseUser | null;
   loading: boolean;
+  firebaseReady: boolean;
+  firebaseEmail: string | null;
   login: (email: string, pass: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
-  linkCloudSync: () => Promise<{ seeded?: boolean; pulled?: boolean }>;
+  linkGoogleSession: () => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (perm: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
-  firebaseUser: null,
   loading: true,
+  firebaseReady: false,
+  firebaseEmail: null,
   login: async () => {},
   loginWithGoogle: async () => {},
-  linkCloudSync: async () => ({}),
+  linkGoogleSession: async () => {},
   logout: async () => {},
   hasPermission: () => false
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AdminUser | null>(null);
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [firebaseReady, setFirebaseReady] = useState(false);
+  const [firebaseEmail, setFirebaseEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(firebaseAuth, fbUser => {
-      setFirebaseUser(fbUser);
+    const unsub = onAuthStateChanged(auth, fbUser => {
+      if (fbUser && fbUser.email && fbUser.emailVerified) {
+        setFirebaseReady(true);
+        setFirebaseEmail(fbUser.email.toLowerCase());
+      } else {
+        setFirebaseReady(false);
+        setFirebaseEmail(null);
+      }
     });
     return () => unsub();
   }, []);
@@ -70,26 +75,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginWithGoogle = async () => {
-    const { user: fbUser, idToken } = await signInWithGooglePopup();
-    setFirebaseUser(fbUser);
-    const res = await api.adminLoginGoogle(idToken);
-    setAuthToken(res.token);
-    setUser(res.user);
+    const { idToken } = await signInWithGoogleForAdmin();
+    try {
+      const res = await api.adminGoogleLogin(idToken);
+      setAuthToken(res.token);
+      setUser(res.user);
+    } catch (err) {
+      await signOutFirebaseAdmin();
+      throw err;
+    }
   };
 
-  const linkCloudSync = async () => {
-    const { user: fbUser, idToken } = await signInWithGooglePopup();
-    setFirebaseUser(fbUser);
-    return await api.adminCloudSync({ idToken });
+  const linkGoogleSession = async () => {
+    const { email } = await signInWithGoogleForAdmin();
+    if (email) {
+      setFirebaseReady(true);
+      setFirebaseEmail(email);
+    }
   };
 
   const logout = async () => {
     await api.adminLogout();
-    try {
-      await signOutFirebase();
-    } catch {
-      // ignore
-    }
+    await signOutFirebaseAdmin();
     setUser(null);
   };
 
@@ -106,7 +113,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, firebaseUser, loading, login, loginWithGoogle, linkCloudSync, logout, hasPermission }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        firebaseReady,
+        firebaseEmail,
+        login,
+        loginWithGoogle,
+        linkGoogleSession,
+        logout,
+        hasPermission
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

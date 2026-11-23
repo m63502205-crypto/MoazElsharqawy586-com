@@ -19,9 +19,19 @@ import {
   ApplicationInquiryResult,
   EmailSubscriber,
   EmailDispatchLog,
-  NotificationDispatchResult
+  NotificationDispatchResult,
+  AdminAnalyticsResponse
 } from './types';
-import { getFirebaseIdToken } from './firebase';
+import {
+  hydratePortalDataFromFirestore,
+  persistImageUrlToFirestore,
+  syncPublicRecordToFirestore,
+  deletePublicRecordFromFirestore,
+  syncSiteConfigToFirestore,
+  syncPrivateRecordToFirestore,
+  deletePrivateRecordFromFirestore,
+  isFirebaseAdminReady
+} from './utils/firestoreSync';
 
 const TOKEN_KEY = 'nfp_admin_token';
 
@@ -46,13 +56,6 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  if (endpoint.startsWith('/api/admin')) {
-    const fbToken = await getFirebaseIdToken();
-    if (fbToken) {
-      headers['X-Firebase-Id-Token'] = fbToken;
-    }
   }
 
   const res = await fetch(endpoint, {
@@ -85,7 +88,10 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
 
 export const api = {
   // Public
-  getPublicData: () => apiFetch<PublicPortalData>('/api/public/data'),
+  getPublicData: async (): Promise<PublicPortalData> => {
+    const portal = await apiFetch<PublicPortalData>('/api/public/data');
+    return await hydratePortalDataFromFirestore(portal);
+  },
   
   getSecretariatDetail: (slug: string) =>
     apiFetch<{
@@ -125,6 +131,20 @@ export const api = {
       body: JSON.stringify(payload)
     }),
 
+  trackPublicVisit: (payload: {
+    path: string;
+    title?: string;
+    referrer?: string;
+    device?: 'mobile' | 'desktop';
+    visitorId?: string;
+  }) =>
+    fetch('/api/public/analytics/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).catch(() => undefined),
+
   // Admin Auth
   adminLogin: (credentials: { email?: string; identifier?: string; phone?: string; password: string }) =>
     apiFetch<{ success: boolean; token: string; user: AdminUser }>('/api/admin/login', {
@@ -132,18 +152,10 @@ export const api = {
       body: JSON.stringify(credentials)
     }),
 
-  adminLoginGoogle: (idToken: string) =>
-    apiFetch<{ success: boolean; token: string; user: AdminUser; cloudSynced?: boolean }>('/api/admin/login-google', {
+  adminGoogleLogin: (idToken: string) =>
+    apiFetch<{ success: boolean; token: string; user: AdminUser }>('/api/admin/google-login', {
       method: 'POST',
       body: JSON.stringify({ idToken })
-    }),
-
-  getCloudStatus: () => apiFetch<{ configured: boolean; initialized: boolean; hasPendingChanges?: boolean }>('/api/admin/cloud-status'),
-
-  adminCloudSync: (options?: { idToken?: string; forcePush?: boolean }) =>
-    apiFetch<{ success: boolean; seeded?: boolean; pulled?: boolean }>('/api/admin/cloud-sync', {
-      method: 'POST',
-      body: JSON.stringify(options || {})
     }),
 
   adminGetMe: () => apiFetch<{ user: AdminUser }>('/api/admin/me'),
@@ -160,6 +172,9 @@ export const api = {
 
   // Admin Data & Stats
   getAdminStats: () => apiFetch<AdminStats>('/api/admin/stats'),
+
+  getAdminAnalytics: (range: '7d' | '14d' | '30d' = '14d') =>
+    apiFetch<AdminAnalyticsResponse>(`/api/admin/analytics?range=${encodeURIComponent(range)}`),
 
   getFullDatabase: () =>
     apiFetch<{
@@ -185,133 +200,218 @@ export const api = {
     }>('/api/admin/full-db'),
 
   // Party Leaders
-  createPartyLeader: (leader: Partial<PartyLeader>) =>
-    apiFetch<{ success: boolean; leader: PartyLeader }>('/api/admin/party-leaders', {
+  createPartyLeader: async (leader: Partial<PartyLeader>) => {
+    const res = await apiFetch<{ success: boolean; leader: PartyLeader }>('/api/admin/party-leaders', {
       method: 'POST',
       body: JSON.stringify(leader)
-    }),
-  updatePartyLeader: (id: string, leader: Partial<PartyLeader>) =>
-    apiFetch<{ success: boolean; leader: PartyLeader }>(`/api/admin/party-leaders/${id}`, {
+    });
+    if (res.leader) await syncPublicRecordToFirestore('party_leaders', res.leader);
+    return res;
+  },
+  updatePartyLeader: async (id: string, leader: Partial<PartyLeader>) => {
+    const res = await apiFetch<{ success: boolean; leader: PartyLeader }>(`/api/admin/party-leaders/${id}`, {
       method: 'PUT',
       body: JSON.stringify(leader)
-    }),
-  deletePartyLeader: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/party-leaders/${id}`, { method: 'DELETE' }),
+    });
+    if (res.leader) await syncPublicRecordToFirestore('party_leaders', res.leader);
+    return res;
+  },
+  deletePartyLeader: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/party-leaders/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('party_leaders', id);
+    return res;
+  },
 
   // Secretariat Leaders (3rd October Giza)
-  createSecretariatLeader: (leader: Partial<SecretariatLeader>) =>
-    apiFetch<{ success: boolean; leader: SecretariatLeader }>('/api/admin/secretariat-leaders', {
+  createSecretariatLeader: async (leader: Partial<SecretariatLeader>) => {
+    const res = await apiFetch<{ success: boolean; leader: SecretariatLeader }>('/api/admin/secretariat-leaders', {
       method: 'POST',
       body: JSON.stringify(leader)
-    }),
-  updateSecretariatLeader: (id: string, leader: Partial<SecretariatLeader>) =>
-    apiFetch<{ success: boolean; leader: SecretariatLeader }>(`/api/admin/secretariat-leaders/${id}`, {
+    });
+    if (res.leader) await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    return res;
+  },
+  updateSecretariatLeader: async (id: string, leader: Partial<SecretariatLeader>) => {
+    const res = await apiFetch<{ success: boolean; leader: SecretariatLeader }>(`/api/admin/secretariat-leaders/${id}`, {
       method: 'PUT',
       body: JSON.stringify(leader)
-    }),
-  deleteSecretariatLeader: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/secretariat-leaders/${id}`, { method: 'DELETE' }),
+    });
+    if (res.leader) await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    return res;
+  },
+  deleteSecretariatLeader: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariat-leaders/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('secretariat_leaders', id);
+    return res;
+  },
 
   // Specialized Secretariats (Secured Admin Endpoints)
-  createSecretariat: (sec: Partial<SpecializedSecretariat>) =>
-    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>('/api/admin/secretariats', {
+  createSecretariat: async (sec: Partial<SpecializedSecretariat>) => {
+    const res = await apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>('/api/admin/secretariats', {
       method: 'POST',
       body: JSON.stringify(sec)
-    }),
-  updateSecretariat: (id: string, sec: Partial<SpecializedSecretariat>) =>
-    apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>(`/api/admin/secretariats/${id}`, {
+    });
+    if (res.secretariat) await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    return res;
+  },
+  updateSecretariat: async (id: string, sec: Partial<SpecializedSecretariat>) => {
+    const res = await apiFetch<{ success: boolean; secretariat: SpecializedSecretariat }>(`/api/admin/secretariats/${id}`, {
       method: 'PUT',
       body: JSON.stringify(sec)
-    }),
-  deleteSecretariat: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/secretariats/${id}`, { method: 'DELETE' }),
-  saveAllSecretariats: (secretariats?: SpecializedSecretariat[]) =>
-    apiFetch<{ success: boolean; count: number; message: string }>('/api/admin/secretariats/save-all', {
+    });
+    if (res.secretariat) await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    return res;
+  },
+  deleteSecretariat: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariats/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('secretariats', id);
+    return res;
+  },
+  saveAllSecretariats: async (secretariats?: SpecializedSecretariat[]) => {
+    const res = await apiFetch<{ success: boolean; count: number; message: string }>('/api/admin/secretariats/save-all', {
       method: 'POST',
       body: JSON.stringify({ secretariats })
-    }),
+    });
+    if (Array.isArray(secretariats)) {
+      for (const sec of secretariats) {
+        if (sec && sec.id) await syncPublicRecordToFirestore('secretariats', sec);
+      }
+    }
+    return res;
+  },
 
   // Secretariat Members & Transfers
-  createSecretariatMember: (member: Partial<SecretariatMember>) =>
-    apiFetch<{ success: boolean; member: SecretariatMember }>('/api/admin/secretariat-members', {
+  createSecretariatMember: async (member: Partial<SecretariatMember>) => {
+    const res = await apiFetch<{ success: boolean; member: SecretariatMember }>('/api/admin/secretariat-members', {
       method: 'POST',
       body: JSON.stringify(member)
-    }),
-  updateSecretariatMember: (id: string, member: Partial<SecretariatMember>) =>
-    apiFetch<{ success: boolean; member: SecretariatMember }>(`/api/admin/secretariat-members/${id}`, {
+    });
+    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    return res;
+  },
+  updateSecretariatMember: async (id: string, member: Partial<SecretariatMember>) => {
+    const res = await apiFetch<{ success: boolean; member: SecretariatMember }>(`/api/admin/secretariat-members/${id}`, {
       method: 'PUT',
       body: JSON.stringify(member)
-    }),
-  transferSecretariatMember: (data: { memberId: string; targetSecretariatId: string; newRole?: string; notes?: string }) =>
-    apiFetch<{ success: boolean; member: SecretariatMember }>('/api/admin/secretariat-members/transfer', {
+    });
+    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    return res;
+  },
+  transferSecretariatMember: async (data: { memberId: string; targetSecretariatId: string; newRole?: string; notes?: string }) => {
+    const res = await apiFetch<{ success: boolean; member: SecretariatMember }>('/api/admin/secretariat-members/transfer', {
       method: 'POST',
       body: JSON.stringify(data)
-    }),
-  deleteSecretariatMember: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/secretariat-members/${id}`, { method: 'DELETE' }),
+    });
+    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    return res;
+  },
+  deleteSecretariatMember: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariat-members/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('secretariat_members', id);
+    return res;
+  },
 
   // Initiatives
-  createInitiative: (init: Partial<Initiative>) =>
-    apiFetch<{ success: boolean; initiative: Initiative; notificationResult?: NotificationDispatchResult | null }>('/api/admin/initiatives', {
+  createInitiative: async (init: Partial<Initiative>) => {
+    const res = await apiFetch<{ success: boolean; initiative: Initiative; notificationResult?: NotificationDispatchResult | null }>('/api/admin/initiatives', {
       method: 'POST',
       body: JSON.stringify(init)
-    }),
-  updateInitiative: (id: string, init: Partial<Initiative>) =>
-    apiFetch<{ success: boolean; initiative: Initiative }>(`/api/admin/initiatives/${id}`, {
+    });
+    if (res.initiative) await syncPublicRecordToFirestore('initiatives', res.initiative);
+    return res;
+  },
+  updateInitiative: async (id: string, init: Partial<Initiative>) => {
+    const res = await apiFetch<{ success: boolean; initiative: Initiative }>(`/api/admin/initiatives/${id}`, {
       method: 'PUT',
       body: JSON.stringify(init)
-    }),
-  deleteInitiative: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/initiatives/${id}`, { method: 'DELETE' }),
+    });
+    if (res.initiative) await syncPublicRecordToFirestore('initiatives', res.initiative);
+    return res;
+  },
+  deleteInitiative: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/initiatives/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('initiatives', id);
+    return res;
+  },
 
   // News
-  createNews: (news: Partial<NewsItem>) =>
-    apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/news', {
+  createNews: async (news: Partial<NewsItem>) => {
+    const res = await apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/news', {
       method: 'POST',
       body: JSON.stringify(news)
-    }),
-  updateNews: (id: string, news: Partial<NewsItem>) =>
-    apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>(`/api/admin/news/${id}`, {
+    });
+    if (res.news) await syncPublicRecordToFirestore('news', res.news);
+    return res;
+  },
+  updateNews: async (id: string, news: Partial<NewsItem>) => {
+    const res = await apiFetch<{ success: boolean; news: NewsItem; notificationResult?: NotificationDispatchResult | null }>(`/api/admin/news/${id}`, {
       method: 'PUT',
       body: JSON.stringify(news)
-    }),
-  deleteNews: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/news/${id}`, { method: 'DELETE' }),
+    });
+    if (res.news) await syncPublicRecordToFirestore('news', res.news);
+    return res;
+  },
+  deleteNews: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/news/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('news', id);
+    return res;
+  },
 
   // Events
-  createEvent: (event: Partial<EventItem>) =>
-    apiFetch<{ success: boolean; event: EventItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/events', {
+  createEvent: async (event: Partial<EventItem>) => {
+    const res = await apiFetch<{ success: boolean; event: EventItem; notificationResult?: NotificationDispatchResult | null }>('/api/admin/events', {
       method: 'POST',
       body: JSON.stringify(event)
-    }),
-  updateEvent: (id: string, event: Partial<EventItem>) =>
-    apiFetch<{ success: boolean; event: EventItem }>(`/api/admin/events/${id}`, {
+    });
+    if (res.event) await syncPublicRecordToFirestore('events', res.event);
+    return res;
+  },
+  updateEvent: async (id: string, event: Partial<EventItem>) => {
+    const res = await apiFetch<{ success: boolean; event: EventItem }>(`/api/admin/events/${id}`, {
       method: 'PUT',
       body: JSON.stringify(event)
-    }),
-  deleteEvent: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/events/${id}`, { method: 'DELETE' }),
+    });
+    if (res.event) await syncPublicRecordToFirestore('events', res.event);
+    return res;
+  },
+  deleteEvent: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/events/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('events', id);
+    return res;
+  },
 
   // Media
-  createMedia: (media: Partial<MediaItem>) =>
-    apiFetch<{ success: boolean; media: MediaItem }>('/api/admin/media', {
+  createMedia: async (media: Partial<MediaItem>) => {
+    const res = await apiFetch<{ success: boolean; media: MediaItem }>('/api/admin/media', {
       method: 'POST',
       body: JSON.stringify(media)
-    }),
-  updateMedia: (id: string, media: Partial<MediaItem>) =>
-    apiFetch<{ success: boolean; media: MediaItem }>(`/api/admin/media/${id}`, {
+    });
+    if (res.media) await syncPublicRecordToFirestore('media', res.media);
+    return res;
+  },
+  updateMedia: async (id: string, media: Partial<MediaItem>) => {
+    const res = await apiFetch<{ success: boolean; media: MediaItem }>(`/api/admin/media/${id}`, {
       method: 'PUT',
       body: JSON.stringify(media)
-    }),
-  deleteMedia: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/media/${id}`, { method: 'DELETE' }),
+    });
+    if (res.media) await syncPublicRecordToFirestore('media', res.media);
+    return res;
+  },
+  deleteMedia: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/media/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('media', id);
+    return res;
+  },
 
   // Live Stream
-  updateLiveStream: (stream: any) =>
-    apiFetch<{ success: boolean; liveStream: any }>('/api/admin/livestream', {
+  updateLiveStream: async (stream: any) => {
+    const res = await apiFetch<{ success: boolean; liveStream: any }>('/api/admin/livestream', {
       method: 'PUT',
       body: JSON.stringify(stream)
-    }),
+    });
+    if (res.liveStream) await syncSiteConfigToFirestore('livestream', res.liveStream);
+    return res;
+  },
 
   // Applications
   getApplications: (search?: string, status?: string) => {
@@ -320,96 +420,149 @@ export const api = {
     if (status) params.set('status', status);
     return apiFetch<MembershipApplication[]>(`/api/admin/applications?${params.toString()}`);
   },
-  updateApplication: (id: string, data: Partial<MembershipApplication>) =>
-    apiFetch<{ success: boolean; application: MembershipApplication }>(`/api/admin/applications/${id}`, {
+  updateApplication: async (id: string, data: Partial<MembershipApplication>) => {
+    const res = await apiFetch<{ success: boolean; application: MembershipApplication }>(`/api/admin/applications/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
-    }),
-  convertToMember: (id: string, data: { secretariatId?: string; title: string; notes?: string }) =>
-    apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/applications/${id}/convert-to-member`, {
+    });
+    if (res.application) await syncPrivateRecordToFirestore('applications', res.application);
+    return res;
+  },
+  convertToMember: async (id: string, data: { secretariatId?: string; title: string; notes?: string }) => {
+    const res = await apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/applications/${id}/convert-to-member`, {
       method: 'POST',
       body: JSON.stringify(data)
-    }),
+    });
+    if (res.member) await syncPrivateRecordToFirestore('members', res.member);
+    return res;
+  },
 
   // Members
   getMembers: () => apiFetch<MemberRecord[]>('/api/admin/members'),
-  updateMember: (id: string, data: Partial<MemberRecord>) =>
-    apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}`, {
+  updateMember: async (id: string, data: Partial<MemberRecord>) => {
+    const res = await apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data)
-    }),
-  assignMember: (id: string, data: { title: string; secretariatId?: string; notes?: string }) =>
-    apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}/assignment`, {
+    });
+    if (res.member) await syncPrivateRecordToFirestore('members', res.member);
+    return res;
+  },
+  assignMember: async (id: string, data: { title: string; secretariatId?: string; notes?: string }) => {
+    const res = await apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}/assignment`, {
       method: 'POST',
       body: JSON.stringify(data)
-    }),
-  endMemberAssignment: (id: string, notes?: string) =>
-    apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}/end-assignment`, {
+    });
+    if (res.member) await syncPrivateRecordToFirestore('members', res.member);
+    return res;
+  },
+  endMemberAssignment: async (id: string, notes?: string) => {
+    const res = await apiFetch<{ success: boolean; member: MemberRecord }>(`/api/admin/members/${id}/end-assignment`, {
       method: 'PUT',
       body: JSON.stringify({ notes })
-    }),
+    });
+    if (res.member) await syncPrivateRecordToFirestore('members', res.member);
+    return res;
+  },
 
   // Admin Users
   getAdminUsers: () => apiFetch<AdminUser[]>('/api/admin/users'),
-  createAdminUser: (user: any) =>
-    apiFetch<{ success: boolean; user: AdminUser }>('/api/admin/users', {
+  createAdminUser: async (user: any) => {
+    const res = await apiFetch<{ success: boolean; user: AdminUser }>('/api/admin/users', {
       method: 'POST',
       body: JSON.stringify(user)
-    }),
-  updateAdminUser: (id: string, user: any) =>
-    apiFetch<{ success: boolean; user: AdminUser }>(`/api/admin/users/${id}`, {
+    });
+    if (res.user) await syncPrivateRecordToFirestore('admin_users', res.user);
+    return res;
+  },
+  updateAdminUser: async (id: string, user: any) => {
+    const res = await apiFetch<{ success: boolean; user: AdminUser }>(`/api/admin/users/${id}`, {
       method: 'PUT',
       body: JSON.stringify(user)
-    }),
-  deleteAdminUser: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+    });
+    if (res.user) await syncPrivateRecordToFirestore('admin_users', res.user);
+    return res;
+  },
+  deleteAdminUser: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' });
+    await deletePrivateRecordFromFirestore('admin_users', id);
+    return res;
+  },
 
-  // Media Upload (saves base64 to server data/uploads directory and returns URL)
-  uploadMedia: (fileData: string, fileName?: string) =>
-    apiFetch<{ success: boolean; url: string }>('/api/admin/upload', {
+  // Media Upload (saves locally AND persists permanently to Firestore uploads_public)
+  uploadMedia: async (fileData: string, fileName?: string) => {
+    const res = await apiFetch<{ success: boolean; url: string }>('/api/admin/upload', {
       method: 'POST',
       body: JSON.stringify({ data: fileData, filename: fileName })
-    }),
+    });
+    if (res.url && isFirebaseAdminReady() && fileData.startsWith('data:image/')) {
+      const permanentUrl = await persistImageUrlToFirestore(fileData);
+      if (permanentUrl.startsWith('/api/public/firestore-asset/')) {
+        return { ...res, url: permanentUrl };
+      }
+    }
+    return res;
+  },
 
   // Settings
-  updateSettings: (settings: Partial<SiteSettings>) =>
-    apiFetch<{ success: boolean; settings: SiteSettings }>('/api/admin/settings', {
+  updateSettings: async (settings: Partial<SiteSettings>) => {
+    const res = await apiFetch<{ success: boolean; settings: SiteSettings }>('/api/admin/settings', {
       method: 'PUT',
       body: JSON.stringify(settings)
-    }),
+    });
+    if (res.settings) await syncSiteConfigToFirestore('public', res.settings);
+    return res;
+  },
 
   // Audit Logs
   getAuditLogs: () => apiFetch<AuditLog[]>('/api/admin/audit-logs'),
 
   // CMS Pages
   getCMSPages: () => apiFetch<CMSPage[]>('/api/admin/pages'),
-  createCMSPage: (page: Partial<CMSPage>) =>
-    apiFetch<{ success: boolean; page: CMSPage }>('/api/admin/pages', {
+  createCMSPage: async (page: Partial<CMSPage>) => {
+    const res = await apiFetch<{ success: boolean; page: CMSPage }>('/api/admin/pages', {
       method: 'POST',
       body: JSON.stringify(page)
-    }),
-  updateCMSPage: (id: string, page: Partial<CMSPage>) =>
-    apiFetch<{ success: boolean; page: CMSPage }>(`/api/admin/pages/${id}`, {
+    });
+    if (res.page) await syncPublicRecordToFirestore('pages', res.page);
+    return res;
+  },
+  updateCMSPage: async (id: string, page: Partial<CMSPage>) => {
+    const res = await apiFetch<{ success: boolean; page: CMSPage }>(`/api/admin/pages/${id}`, {
       method: 'PUT',
       body: JSON.stringify(page)
-    }),
-  deleteCMSPage: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/pages/${id}`, { method: 'DELETE' }),
+    });
+    if (res.page) await syncPublicRecordToFirestore('pages', res.page);
+    return res;
+  },
+  deleteCMSPage: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/pages/${id}`, { method: 'DELETE' });
+    await deletePublicRecordFromFirestore('pages', id);
+    return res;
+  },
 
   // Granular Roles (RBAC)
   getRoles: () => apiFetch<AdminRole[]>('/api/admin/roles'),
-  createRole: (role: Partial<AdminRole>) =>
-    apiFetch<{ success: boolean; role: AdminRole }>('/api/admin/roles', {
+  createRole: async (role: Partial<AdminRole>) => {
+    const res = await apiFetch<{ success: boolean; role: AdminRole }>('/api/admin/roles', {
       method: 'POST',
       body: JSON.stringify(role)
-    }),
-  updateRole: (id: string, role: Partial<AdminRole>) =>
-    apiFetch<{ success: boolean; role: AdminRole }>(`/api/admin/roles/${id}`, {
+    });
+    if (res.role) await syncPrivateRecordToFirestore('roles', res.role);
+    return res;
+  },
+  updateRole: async (id: string, role: Partial<AdminRole>) => {
+    const res = await apiFetch<{ success: boolean; role: AdminRole }>(`/api/admin/roles/${id}`, {
       method: 'PUT',
       body: JSON.stringify(role)
-    }),
-  deleteRole: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/roles/${id}`, { method: 'DELETE' }),
+    });
+    if (res.role) await syncPrivateRecordToFirestore('roles', res.role);
+    return res;
+  },
+  deleteRole: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/roles/${id}`, { method: 'DELETE' });
+    await deletePrivateRecordFromFirestore('roles', id);
+    return res;
+  },
 
   // Email Subscribers & Instant Notifications
   getSubscribers: () =>
@@ -418,12 +571,18 @@ export const api = {
       dispatchLogs: EmailDispatchLog[];
       smtpStatus: { configured: boolean };
     }>('/api/admin/subscribers'),
-  toggleSubscriber: (id: string) =>
-    apiFetch<{ success: boolean; subscriber: EmailSubscriber }>(`/api/admin/subscribers/${id}/toggle`, {
+  toggleSubscriber: async (id: string) => {
+    const res = await apiFetch<{ success: boolean; subscriber: EmailSubscriber }>(`/api/admin/subscribers/${id}/toggle`, {
       method: 'POST'
-    }),
-  deleteSubscriber: (id: string) =>
-    apiFetch<{ success: boolean }>(`/api/admin/subscribers/${id}`, { method: 'DELETE' }),
+    });
+    if (res.subscriber) await syncPrivateRecordToFirestore('subscribers', res.subscriber);
+    return res;
+  },
+  deleteSubscriber: async (id: string) => {
+    const res = await apiFetch<{ success: boolean }>(`/api/admin/subscribers/${id}`, { method: 'DELETE' });
+    await deletePrivateRecordFromFirestore('subscribers', id);
+    return res;
+  },
   dispatchSubscriberItem: (itemType: 'news' | 'event' | 'initiative', itemId: string) =>
     apiFetch<{ success: boolean; result: NotificationDispatchResult }>('/api/admin/subscribers/dispatch-item', {
       method: 'POST',

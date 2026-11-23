@@ -1107,11 +1107,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
             <div className="max-w-4xl mx-auto text-center space-y-4">
               <p className="text-xs font-extrabold text-red-700 tracking-wide">
-                الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة
+                الموقع الرسمي بمحافظة الجيزة
               </p>
               <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
-                معاً نبني مستقبلاً مشرقاً لمصر
+                حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر
               </h1>
+              <p className="text-lg sm:text-2xl font-extrabold text-red-700 leading-snug">
+                معاً نبني مستقبلاً مشرقاً لمصر
+              </p>
               <p className="text-sm sm:text-base lg:text-lg font-semibold text-stone-700 leading-relaxed max-w-3xl mx-auto">
                 حزب الجبهة الوطنية هو حزب سياسي مدني ديمقراطي يحق لأي مصري الانتماء إلى عضويته دون تفرقة أو تمييز، ويهدف إلى إعلاء قيم العدل والمساواة والحرية واحترام حقوق الإنسان.
               </p>
@@ -2227,7 +2230,9 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
         <div className="text-center space-y-2">
           <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight">
-            {ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر'}
+            {currentView === 'secretariat-leaders'
+              ? 'قيادات أمانة قسم ثالث أكتوبر – حزب الجبهة الوطنية'
+              : (ct.partyLeadersTitle || 'قيادات حزب الجبهة الوطنية وأمانة قسم ثالث أكتوبر')}
           </h1>
         </div>
 
@@ -2432,7 +2437,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             الهيكل التنظيمي
           </span>
           <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
-            الأمانات التخصصية والنوعية
+            الأمانات التخصصية والنوعية – أمانة قسم ثالث أكتوبر
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 max-w-2xl mx-auto">
             تضم أمانة قسم ثالث أكتوبر تشكيلات متخصصة تغطي كافة الأبعاد الميدانية والتنموية والإعلامية والتنظيمية، ولكل أمانة صفحة مستقلة تعرض مهامها وأهدافها وأنشطتها.
@@ -2648,7 +2653,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
           <div className="relative z-10 space-y-4 text-right">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="bg-amber-500/20 text-amber-300 text-xs font-bold px-3 py-1 rounded-full border border-amber-500/30">
-                أمانة معتمدة – أمانة قسم ثالث أكتوبر
+                أمانة معتمدة – حزب الجبهة الوطنية (قسم ثالث أكتوبر)
               </span>
             </div>
 
@@ -3776,7 +3781,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             المركز الإعلامي
           </span>
           <h1 className="text-3xl sm:text-4xl font-black text-stone-900">
-            أخبار وبيانات حزب الجبهة الوطنية
+            أخبار وبيانات أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 max-w-xl mx-auto">
             المصدر الرسمي لكافة البيانات الإخبارية والتغطيات الميدانية لأمانة قسم ثالث أكتوبر.

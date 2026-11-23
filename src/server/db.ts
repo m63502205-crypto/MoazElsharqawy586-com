@@ -1,19 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { AsyncLocalStorage } from 'async_hooks';
-import { pushDatabaseDiffToFirestore, recordDatabaseChanges } from './firestoreSync.ts';
-
-const firebaseTokenStorage = new AsyncLocalStorage<string>();
-
-export function runWithFirebaseToken<T>(token: string | undefined, fn: () => T): T {
-  if (!token) return fn();
-  return firebaseTokenStorage.run(token, fn);
-}
-
-export function getCurrentFirebaseToken(): string | undefined {
-  return firebaseTokenStorage.getStore();
-}
 
 export interface PartyLeader {
   id: string;
@@ -208,6 +195,7 @@ export interface LiveStream {
   isActive: boolean;
   platform: 'youtube' | 'facebook' | 'other';
   startedAt?: string;
+  updatedAt?: string;
 }
 
 export interface MembershipApplication {
@@ -358,6 +346,31 @@ export interface SiteSettings {
   principles: string[];
   secretariatsVersion?: number;
   rosterVersion?: number;
+  updatedAt?: string;
+}
+
+export interface AnalyticsStore {
+  daily: Record<
+    string,
+    {
+      visitors: string[];
+      pageViews: number;
+      mobile: number;
+      desktop: number;
+    }
+  >;
+  pages: Record<
+    string,
+    {
+      path: string;
+      title: string;
+      views: number;
+      visitors: string[];
+      lastVisitedAt: string;
+    }
+  >;
+  sources: Record<string, number>;
+  updatedAt: string;
 }
 
 export interface CMSPage {
@@ -429,6 +442,8 @@ export interface AppDatabase {
   subscribers: EmailSubscriber[];
   emailDispatchLogs: EmailDispatchLog[];
   settings: SiteSettings;
+  analytics?: AnalyticsStore;
+  deletedTombstones?: string[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -1291,6 +1306,63 @@ function getInitialDatabase(): AppDatabase {
         passwordHash: hashPassword('Moaz2008@'),
         role: 'super_admin',
         roleId: 'role-super-admin',
+        adminScope: 'general',
+        permissions: [
+          'leaders_party',
+          'leaders_secretariat',
+          'secretariats',
+          'initiatives',
+          'applications',
+          'members',
+          'news',
+          'events',
+          'media',
+          'livestream',
+          'pages',
+          'roles',
+          'admins',
+          'settings',
+          'audit'
+        ],
+        isActive: true,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'super-admin-dalia-nassar',
+        email: 'nassard131@gmail.com',
+        name: 'أ.داليا نصار',
+        passwordHash: hashPassword('31731'),
+        role: 'super_admin',
+        roleId: 'role-super-admin',
+        adminScope: 'general',
+        permissions: [
+          'leaders_party',
+          'leaders_secretariat',
+          'secretariats',
+          'initiatives',
+          'applications',
+          'members',
+          'news',
+          'events',
+          'media',
+          'livestream',
+          'pages',
+          'roles',
+          'admins',
+          'settings',
+          'audit'
+        ],
+        isActive: true,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'super-admin-ayman-moussa',
+        email: 'aymanmoussadunes67@gmail.com',
+        name: 'أ.أيمن موسى',
+        passwordHash: hashPassword('24681357'),
+        role: 'super_admin',
+        roleId: 'role-super-admin',
+        adminScope: 'general',
         permissions: [
           'leaders_party',
           'leaders_secretariat',
@@ -1372,28 +1444,28 @@ function getInitialDatabase(): AppDatabase {
       googleTagManagerId: 'GTM-TRZ4SG95',
       googleSiteVerification: '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo',
       officialSiteUrl: 'https://nfp-october3.ai.studio',
-      seoTitle: 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر',
-      seoDescription: 'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.',
+      seoTitle: 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي',
+      seoDescription: 'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.',
       seoKeywords: 'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية',
       seoShareImage: '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
       secretariatsVersion: 25,
-      rosterVersion: 4
+      rosterVersion: 9
+    },
+    analytics: {
+      daily: {},
+      pages: {},
+      sources: {},
+      updatedAt: ''
     }
   };
 }
 
 class DatabaseManager {
   private data: AppDatabase;
-  private lastSavedDbSnapshot: AppDatabase | null = null;
 
   constructor() {
     this.ensureDirectory();
     this.data = this.load();
-    this.lastSavedDbSnapshot = this.cloneDb(this.data);
-  }
-
-  private cloneDb(src: AppDatabase): AppDatabase {
-    return JSON.parse(JSON.stringify(src));
   }
 
   private ensureDirectory() {
@@ -1445,12 +1517,22 @@ class DatabaseManager {
           admins: Array.isArray(parsed.admins) ? parsed.admins : initial.admins,
           auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : initial.auditLogs,
           subscribers: Array.isArray(parsed.subscribers) ? parsed.subscribers : [],
-          emailDispatchLogs: Array.isArray(parsed.emailDispatchLogs) ? parsed.emailDispatchLogs : []
+          emailDispatchLogs: Array.isArray(parsed.emailDispatchLogs) ? parsed.emailDispatchLogs : [],
+          analytics:
+            parsed.analytics && typeof parsed.analytics === 'object'
+              ? {
+                  daily: parsed.analytics.daily || {},
+                  pages: parsed.analytics.pages || {},
+                  sources: parsed.analytics.sources || {},
+                  updatedAt: String(parsed.analytics.updatedAt || '')
+                }
+              : { daily: {}, pages: {}, sources: {}, updatedAt: '' }
         };
 
         const migrated = this.migrateSecretariatsIfNeeded(assembled);
         if (migrated) {
-          this.save(assembled);
+          this.data = assembled;
+          this.save();
         }
         return assembled;
       }
@@ -1792,32 +1874,147 @@ class DatabaseManager {
       changed = true;
     }
 
+    // Upgrade previous default SEO title/description to exact requested official strings (preserving custom admin overrides)
+    if ((dbObj.settings.rosterVersion || 0) < 5) {
+      const prevDefaultTitle = 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+      const targetTitle = 'أمانة حزب الجبهة الوطنية قسم ثالث أكتوبر | الموقع الرسمي';
+      const curTitle = (dbObj.settings.seoTitle || '').trim();
+      if (!curTitle || curTitle === prevDefaultTitle) {
+        dbObj.settings.seoTitle = targetTitle;
+      }
+
+      const prevDefaultDesc =
+        'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+      const targetDesc =
+        'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.';
+      const curDesc = (dbObj.settings.seoDescription || '').trim();
+      if (!curDesc || curDesc === prevDefaultDesc) {
+        dbObj.settings.seoDescription = targetDesc;
+      }
+
+      dbObj.settings.rosterVersion = 5;
+      changed = true;
+    }
+
+    // Upgrade legacy domain URLs & empty Google service IDs to https://nfp-october3.ai.studio
+    if ((dbObj.settings.rosterVersion || 0) < 7) {
+      const currentSiteUrl = (dbObj.settings.officialSiteUrl || '').trim().replace(/\/+$/, '');
+      if (
+        !currentSiteUrl ||
+        currentSiteUrl === 'https://www.algabhaalwataniya-oct3.org' ||
+        currentSiteUrl === 'https://algabhaalwataniya-oct3.org' ||
+        currentSiteUrl === 'https://nfp-october3.cloud.run'
+      ) {
+        dbObj.settings.officialSiteUrl = 'https://nfp-october3.ai.studio';
+      }
+      if (!dbObj.settings.googleAnalyticsId?.trim()) {
+        dbObj.settings.googleAnalyticsId = 'G-NX1MQ9NHXW';
+      }
+      if (!dbObj.settings.googleTagManagerId?.trim()) {
+        dbObj.settings.googleTagManagerId = 'GTM-TRZ4SG95';
+      }
+      if (!dbObj.settings.googleSiteVerification?.trim()) {
+        dbObj.settings.googleSiteVerification = '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo';
+      }
+      dbObj.settings.rosterVersion = 7;
+      changed = true;
+    }
+
+    // Upgrade default site name & SEO title to "حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي"
+    if ((dbObj.settings.rosterVersion || 0) < 8) {
+      const targetTitle = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي';
+      const curTitle = (dbObj.settings.seoTitle || '').trim();
+      if (
+        !curTitle ||
+        curTitle === 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر' ||
+        curTitle === 'أمانة حزب الجبهة الوطنية قسم ثالث أكتوبر | الموقع الرسمي'
+      ) {
+        dbObj.settings.seoTitle = targetTitle;
+      }
+      dbObj.settings.rosterVersion = 8;
+      changed = true;
+    }
+
+    // Add General Supervisors (أ.داليا نصار & أ.أيمن موسى) as super_admin accounts
+    if ((dbObj.settings.rosterVersion || 0) < 9) {
+      if (!Array.isArray(dbObj.admins)) dbObj.admins = [];
+      const fullPerms = [
+        'leaders_party',
+        'leaders_secretariat',
+        'secretariats',
+        'initiatives',
+        'applications',
+        'members',
+        'news',
+        'events',
+        'media',
+        'livestream',
+        'pages',
+        'roles',
+        'admins',
+        'settings',
+        'audit'
+      ];
+      const supervisorsToEnsure: Array<{ id: string; name: string; email: string; password: string }> = [
+        {
+          id: 'super-admin-dalia-nassar',
+          name: 'أ.داليا نصار',
+          email: 'nassard131@gmail.com',
+          password: '31731'
+        },
+        {
+          id: 'super-admin-ayman-moussa',
+          name: 'أ.أيمن موسى',
+          email: 'aymanmoussadunes67@gmail.com',
+          password: '24681357'
+        }
+      ];
+
+      const nowIso = new Date().toISOString();
+      for (const sup of supervisorsToEnsure) {
+        const existingIdx = dbObj.admins.findIndex(
+          a => (a.email || '').trim().toLowerCase() === sup.email
+        );
+        if (existingIdx >= 0) {
+          dbObj.admins[existingIdx] = {
+            ...dbObj.admins[existingIdx],
+            name: sup.name,
+            email: sup.email,
+            passwordHash: hashPassword(sup.password),
+            role: 'super_admin',
+            roleId: 'role-super-admin',
+            adminScope: 'general',
+            permissions: fullPerms,
+            isActive: true,
+            updatedAt: nowIso
+          };
+        } else {
+          dbObj.admins.push({
+            id: sup.id,
+            email: sup.email,
+            name: sup.name,
+            passwordHash: hashPassword(sup.password),
+            role: 'super_admin',
+            roleId: 'role-super-admin',
+            adminScope: 'general',
+            permissions: fullPerms,
+            isActive: true,
+            createdAt: nowIso
+          });
+        }
+      }
+
+      dbObj.settings.rosterVersion = 9;
+      changed = true;
+    }
+
     return changed;
   }
 
-  private pendingCloudPushTimer: ReturnType<typeof setTimeout> | null = null;
-  private latestCloudToken: string | null = null;
-  private activeCloudPushPromise: Promise<boolean> | null = null;
-
-  public setFromCloud(cloudData: AppDatabase): void {
-    this.migrateSecretariatsIfNeeded(cloudData);
-    this.data = cloudData;
-    this.lastSavedDbSnapshot = this.cloneDb(this.data);
-    this.writeLocalFileOnly();
-  }
-
-  public getDbFileMtimeMs(): number {
-    try {
-      if (fs.existsSync(DB_FILE)) {
-        return fs.statSync(DB_FILE).mtimeMs || 0;
-      }
-    } catch {
-      // ignore
+  public save(dataToSave?: AppDatabase): void {
+    if (dataToSave) {
+      this.data = dataToSave;
     }
-    return 0;
-  }
-
-  private writeLocalFileOnly(): void {
     try {
       const backupFile = `${DB_FILE}.bak`;
       const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
@@ -1833,56 +2030,6 @@ class DatabaseManager {
       fs.renameSync(tempPath, DB_FILE);
     } catch (err) {
       console.error('Error saving database atomically:', err);
-    }
-  }
-
-  public save(dataToSave?: AppDatabase): void {
-    if (dataToSave) {
-      this.data = dataToSave;
-    }
-    recordDatabaseChanges(this.lastSavedDbSnapshot, this.data);
-    this.lastSavedDbSnapshot = this.cloneDb(this.data);
-    this.writeLocalFileOnly();
-
-    const activeToken = getCurrentFirebaseToken();
-    if (activeToken) {
-      this.latestCloudToken = activeToken;
-      if (this.pendingCloudPushTimer) {
-        clearTimeout(this.pendingCloudPushTimer);
-      }
-      this.pendingCloudPushTimer = setTimeout(() => {
-        this.pendingCloudPushTimer = null;
-        const tok = this.latestCloudToken;
-        if (tok) {
-          this.activeCloudPushPromise = pushDatabaseDiffToFirestore(this.data, tok)
-            .catch(err => {
-              console.error('[DB] Background Firestore sync error:', err);
-              return false;
-            })
-            .finally(() => {
-              this.activeCloudPushPromise = null;
-            });
-        }
-      }, 25);
-    }
-  }
-
-  public async flushCloudSync(explicitToken?: string): Promise<boolean> {
-    const tok = explicitToken || getCurrentFirebaseToken() || this.latestCloudToken;
-    if (!tok) return false;
-    this.latestCloudToken = tok;
-    if (this.pendingCloudPushTimer) {
-      clearTimeout(this.pendingCloudPushTimer);
-      this.pendingCloudPushTimer = null;
-    }
-    if (this.activeCloudPushPromise) {
-      await this.activeCloudPushPromise.catch(() => false);
-    }
-    try {
-      return await pushDatabaseDiffToFirestore(this.data, tok);
-    } catch (err) {
-      console.error('[DB] Flush Firestore sync error:', err);
-      return false;
     }
   }
 

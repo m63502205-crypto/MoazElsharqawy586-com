@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { MediaItem } from '../types';
 import { api } from '../api';
+import { readAndCompressImageFile } from '../utils/imageCompression';
 import {
   Image as ImageIcon,
   Upload,
@@ -281,17 +282,18 @@ export const MediaPickerModal: React.FC<MediaPickerModalProps> = ({
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={e => {
+                      onChange={async e => {
                         const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = ev => {
-                            setUploadUrl(ev.target?.result as string);
-                            if (!uploadTitle) {
-                              setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
-                            }
-                          };
-                          reader.readAsDataURL(file);
+                        if (!file) return;
+                        try {
+                          const compressedUrl = await readAndCompressImageFile(file);
+                          setUploadUrl(compressedUrl);
+                          setUploadError(null);
+                          if (!uploadTitle) {
+                            setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
+                          }
+                        } catch (err: any) {
+                          setUploadError(err?.message || 'تعذر قراءة الصورة المختارة');
                         }
                       }}
                     />

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MediaItem } from '../types';
 import { MediaPickerModal } from './MediaPickerModal';
+import { readAndCompressImageFile } from '../utils/imageCompression';
 import {
   Image as ImageIcon,
   Upload,
@@ -63,21 +64,7 @@ export const MultiImageGalleryField: React.FC<MultiImageGalleryFieldProps> = ({
     const readPromises: Promise<string>[] = [];
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      readPromises.push(
-        new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = ev => {
-            if (ev.target?.result) {
-              resolve(ev.target.result as string);
-            } else {
-              reject(new Error('Failed to read file'));
-            }
-          };
-          reader.onerror = err => reject(err);
-          reader.readAsDataURL(file);
-        })
-      );
+      readPromises.push(readAndCompressImageFile(files[i]));
     }
 
     try {

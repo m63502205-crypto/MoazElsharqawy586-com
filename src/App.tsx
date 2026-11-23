@@ -15,14 +15,45 @@ import { Loader2 } from 'lucide-react';
 import { initGoogleAnalytics, trackPageView, DEFAULT_GA4_MEASUREMENT_ID } from './utils/analytics';
 import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
 import { resolvePersonInSecretariats } from './utils/personSecretariat';
+import { PullToRefresh } from './components/PullToRefresh';
 
 import {
   getViewPath,
   parseLocationToRoute,
   getPageSeoMeta
 } from './utils/routes';
+import { subscribePublicFirestoreChanges } from './utils/firestoreSync';
+
+let cachedBootstrappedData: PublicPortalData | null | undefined = undefined;
+
+function readBootstrappedPublicData(): PublicPortalData | null {
+  if (cachedBootstrappedData !== undefined) {
+    return cachedBootstrappedData;
+  }
+  if (typeof document === 'undefined') {
+    cachedBootstrappedData = null;
+    return null;
+  }
+  try {
+    const el = document.getElementById('__NFP_INITIAL_DATA__');
+    if (!el || !el.textContent) {
+      cachedBootstrappedData = null;
+      return null;
+    }
+    const parsed = JSON.parse(el.textContent);
+    if (parsed && typeof parsed === 'object' && parsed.settings) {
+      cachedBootstrappedData = parsed as PublicPortalData;
+      return cachedBootstrappedData;
+    }
+  } catch {
+    // Ignore malformed bootstrap payload and fall back to /api/public/data
+  }
+  cachedBootstrappedData = null;
+  return null;
+}
 
 function MainApp() {
+  const bootstrappedData = readBootstrappedPublicData();
   const initialRoute = typeof window !== 'undefined' ? parseLocationToRoute(window.location) : { view: 'home' };
   const [currentView, setCurrentView] = useState<string>(initialRoute.view || 'home');
   const [selectedSlug, setSelectedSlug] = useState<string>(initialRoute.slug || 'about');
@@ -32,26 +63,48 @@ function MainApp() {
   const [selectedActivityIndex, setSelectedActivityIndex] = useState<number | null>(
     typeof initialRoute.activity === 'number' ? initialRoute.activity : null
   );
-  const [data, setData] = useState<PublicPortalData | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [data, setData] = useState<PublicPortalData | null>(bootstrappedData);
+  const [loading, setLoading] = useState<boolean>(!bootstrappedData);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
 
-  const loadData = async () => {
+  const dataSnapshotRef = useRef<string>('');
+  useEffect(() => {
+    dataSnapshotRef.current = data ? JSON.stringify(data) : '';
+  }, [data]);
+
+  const loadData = async (silent = false) => {
     try {
       const portal = await api.getPublicData();
-      setData(portal);
+      const nextSerialized = JSON.stringify(portal);
+      if (nextSerialized !== dataSnapshotRef.current) {
+        dataSnapshotRef.current = nextSerialized;
+        setData(portal);
+      }
       setLoadError(null);
     } catch (err: any) {
-      console.error('Failed to load public portal data:', err);
-      setLoadError('تعذر تحميل بيانات المنصة، يرجى المحاولة لاحقاً');
+      if (!silent) {
+        console.error('Failed to load public portal data:', err);
+        setData(prev => {
+          if (!prev) {
+            setLoadError('تعذر تحميل بيانات المنصة، يرجى المحاولة لاحقاً');
+          }
+          return prev;
+        });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
+    const unsub = subscribePublicFirestoreChanges(() => {
+      loadData(true);
+    });
+    return () => unsub();
   }, []);
 
   // Global search shortcut (Ctrl+K or Cmd+K)
@@ -284,7 +337,7 @@ function MainApp() {
 
   // Public View
   return (
-    <div className="min-h-screen bg-stone-50 flex flex-col selection:bg-red-700 selection:text-white w-full max-w-full overflow-x-hidden" dir="rtl">
+    <div className="min-h-screen bg-stone-50 text-stone-900 flex flex-col selection:bg-red-700 selection:text-white w-full max-w-full overflow-x-hidden" dir="rtl">
       <Navbar
         currentView={currentView}
         setCurrentView={handleSetCurrentView}
@@ -296,7 +349,8 @@ function MainApp() {
         onSelectNews={(item) => navigateTo('news', { newsId: item.id })}
       />
 
-      <main className="flex-1 w-full max-w-full overflow-x-hidden">
+      <PullToRefresh onRefresh={loadData}>
+        <main className="flex-1 w-full max-w-full overflow-x-hidden">
         <PublicPages
           currentView={currentView}
           setCurrentView={handleSetCurrentView}
@@ -328,7 +382,8 @@ function MainApp() {
             }
           }}
         />
-      </main>
+        </main>
+      </PullToRefresh>
 
       <Footer
         settings={data.settings}

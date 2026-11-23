@@ -83,6 +83,9 @@ import {
   PenTool
 } from 'lucide-react';
 import { initGoogleAnalytics, trackEvent } from '../utils/analytics';
+import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { readAndCompressImageFile } from '../utils/imageCompression';
+import { reconcileAdminFirestore } from '../utils/firestoreSync';
 
 const MEMBERSHIP_FORM_FIELDS = [
   { key: 'fullName', label: 'الاسم الرباعي كاملاً' },
@@ -114,17 +117,19 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshPublicData }) => {
-  const { user, login, logout, hasPermission } = useAuth();
+  const { user, firebaseReady, login, logout, hasPermission } = useAuth();
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
+  const [showLoginPass, setShowLoginPass] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
 
   // Active admin tab
   const [activeTab, setActiveTab] = useState<
     | 'stats'
+    | 'analytics'
     | 'party-leaders'
     | 'secretariat-leaders'
     | 'secretariats'
@@ -303,6 +308,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
       const st = await api.getAdminStats();
       setStats(st);
+
+      if (firebaseReady) {
+        reconcileAdminFirestore(full)
+          .then(didSync => {
+            if (didSync) onRefreshPublicData();
+          })
+          .catch(() => undefined);
+      }
     } catch (err) {
       console.error('Error fetching admin data:', err);
     }
@@ -314,6 +327,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     if (user.role === 'super_admin') return true;
     switch (tab) {
       case 'stats':
+      case 'analytics':
         return true;
       case 'party-leaders':
         return hasPermission('leaders_party');
@@ -363,14 +377,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     if (user) {
       loadAdminData();
     }
-  }, [user]);
+  }, [user, firebaseReady]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
     setLoginLoading(true);
     try {
-      await login(loginEmail, loginPass);
+      const cleanLogin = loginEmail.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0\s]+/g, '');
+      const cleanPass = loginPass.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]+/g, '').trim();
+      await login(cleanLogin, cleanPass);
     } catch (err: any) {
       setLoginError(err.message || 'فشل تسجيل الدخول، تأكد من صحة البريد الإلكتروني أو رقم الهاتف وكلمة المرور');
     } finally {
@@ -381,8 +397,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   // If not logged in, show secure login interface
   if (!user) {
     return (
-      <div className="min-h-[80vh] flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-3xl border border-stone-200 p-8 shadow-xl text-right space-y-6">
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-3xl border border-stone-200 p-6 sm:p-8 shadow-xl text-right space-y-6">
           <div className="text-center space-y-2">
             <div className="w-14 h-14 bg-red-50 text-red-700 rounded-2xl flex items-center justify-center mx-auto border border-red-200">
               <Lock className="w-7 h-7" />
@@ -409,11 +425,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               <input
                 type="text"
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 required
                 placeholder="example@domain.com أو 010xxxxxxxx"
                 value={loginEmail}
                 onChange={e => setLoginEmail(e.target.value)}
-                className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700 font-mono"
+                className="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-[13px] text-stone-900 focus:outline-hidden focus:border-red-700 font-sans tracking-normal"
                 dir="ltr"
               />
             </div>
@@ -422,16 +441,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               <label className="block text-xs font-bold text-stone-700 mb-1">
                 كلمة المرور
               </label>
-              <input
-                type="password"
-                autoComplete="current-password"
-                required
-                placeholder="أرقام أو أحرف..."
-                value={loginPass}
-                onChange={e => setLoginPass(e.target.value)}
-                className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 focus:outline-hidden focus:border-red-700 font-mono"
-                dir="ltr"
-              />
+              <div className="relative">
+                <input
+                  type={showLoginPass ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  required
+                  placeholder="أرقام أو أحرف..."
+                  value={loginPass}
+                  onChange={e => setLoginPass(e.target.value)}
+                  className="w-full border border-stone-300 rounded-xl pl-10 pr-3 py-2.5 text-sm text-stone-900 focus:outline-hidden focus:border-red-700 font-sans"
+                  dir="ltr"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPass(v => !v)}
+                  aria-label={showLoginPass ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                  className="absolute inset-y-0 left-0 px-3 flex items-center text-stone-500 hover:text-stone-800 cursor-pointer"
+                >
+                  {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             <button
@@ -444,7 +476,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
             </button>
           </form>
 
-          <div className="text-center pt-2">
+          <div className="text-center pt-1">
             <button
               type="button"
               onClick={onBackToSite}
@@ -462,7 +494,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   // LOGGED IN DASHBOARD
   // -------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-stone-100/70 pb-16">
+    <div className="min-h-screen bg-stone-100/70 text-stone-900 pb-16">
       
       {/* Top Admin Header */}
       <div className="bg-stone-900 text-white border-b-2 border-amber-600 sticky top-0 z-30 shadow-md">
@@ -538,6 +570,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <span className="flex items-center gap-2">
                   <Layers className="w-4 h-4" />
                   <span>نظرة عامة وإحصائيات</span>
+                </span>
+              </button>
+            )}
+
+            {isTabPermitted('analytics') && (
+              <button
+                onClick={() => setActiveTab('analytics')}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  activeTab === 'analytics' ? 'bg-red-700 text-white shadow-xs' : 'text-stone-700 hover:bg-stone-100'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4" />
+                  <span>إحصائيات Google Analytics</span>
                 </span>
               </button>
             )}
@@ -907,6 +953,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </ul>
                 </div>
               </div>
+            )}
+
+            {/* TAB: GOOGLE ANALYTICS & VISITOR INSIGHTS */}
+            {activeTab === 'analytics' && (
+              <AnalyticsDashboard
+                ga4Id={settings?.googleAnalyticsId}
+                gtmId={settings?.googleTagManagerId}
+              />
             )}
 
             {/* TAB: PARTY LEADERS */}
@@ -3861,23 +3915,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                 type="file"
                                 accept="image/*"
                                 className="hidden"
-                                onChange={e => {
+                                onChange={async e => {
                                   const file = e.target.files?.[0];
                                   if (!file) return;
-                                  const reader = new FileReader();
-                                  reader.onload = async () => {
-                                    try {
-                                      const res = await api.uploadMedia(reader.result as string, file.name);
-                                      const current = settings.heroImages || [];
-                                      setSettings({
-                                        ...settings,
-                                        heroImages: [...current, res.url]
-                                      });
-                                    } catch (err: any) {
-                                      alert(`فشل رفع الصورة: ${err.message || 'حدث خطأ'}`);
-                                    }
-                                  };
-                                  reader.readAsDataURL(file);
+                                  try {
+                                    const compressed = await readAndCompressImageFile(file);
+                                    const res = await api.uploadMedia(compressed, file.name);
+                                    const current = settings.heroImages || [];
+                                    setSettings({
+                                      ...settings,
+                                      heroImages: [...current, res.url]
+                                    });
+                                  } catch (err: any) {
+                                    showBanner('error', `فشل رفع الصورة: ${err.message || 'حدث خطأ'}`);
+                                  }
                                 }}
                               />
                             </label>
@@ -5210,10 +5261,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               const activeGa4Id = (settings.googleAnalyticsId || '').trim() || 'G-NX1MQ9NHXW';
               const activeGtmId = (settings.googleTagManagerId || '').trim() || 'GTM-TRZ4SG95';
               const activeGscToken = (settings.googleSiteVerification || '').trim() || '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo';
-              const activeSeoTitle = settings.seoTitle ?? 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر';
+              const activeSeoTitle = settings.seoTitle ?? 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي';
               const activeSeoDesc =
                 settings.seoDescription ??
-                'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع قيادات الحزب والأمانة والأخبار والمبادرات والفعاليات وطلبات الانضمام.';
+                'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.';
               const activeSeoKeywords =
                 settings.seoKeywords ??
                 'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
@@ -5392,7 +5443,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           type="text"
                           value={activeSeoTitle}
                           onChange={e => setSettings({ ...settings, seoTitle: e.target.value })}
-                          placeholder="أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر"
+                          placeholder="حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي"
                           className="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-bold bg-white focus:outline-none focus:ring-2 focus:ring-red-700"
                         />
                         <p className="text-[10px] text-stone-500 mt-1">
@@ -8178,18 +8229,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             type="file"
                             accept="image/*"
                             className="hidden"
-                            onChange={e => {
+                            onChange={async e => {
                               const file = e.target.files?.[0];
                               if (file) {
-                                const reader = new FileReader();
-                                reader.onload = ev => {
-                                  setEditingMedia({
-                                    ...editingMedia,
-                                    url: ev.target?.result as string,
-                                    title: editingMedia.title || file.name.replace(/\.[^/.]+$/, "")
-                                  });
-                                };
-                                reader.readAsDataURL(file);
+                                try {
+                                  const compressed = await readAndCompressImageFile(file);
+                                  setEditingMedia(prev =>
+                                    prev
+                                      ? {
+                                          ...prev,
+                                          url: compressed,
+                                          title: prev.title || file.name.replace(/\.[^/.]+$/, '')
+                                        }
+                                      : prev
+                                  );
+                                } catch (err: any) {
+                                  setModalError(err?.message || 'تعذر قراءة الصورة المختارة');
+                                }
                               }
                             }}
                           />

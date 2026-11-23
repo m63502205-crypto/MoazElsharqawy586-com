@@ -245,7 +245,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                             }
                           }}
                           className={`flex items-center gap-3 px-3 py-2 rounded-xl transition-colors ${
-                            isCur ? 'bg-red-50 text-red-700' : 'hover:bg-stone-50 text-stone-800'
+                            isCur
+                              ? 'bg-red-50 text-red-700'
+                              : 'hover:bg-stone-50 text-stone-800'
                           }`}
                         >
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${

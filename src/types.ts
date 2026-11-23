@@ -194,6 +194,7 @@ export interface LiveStream {
   isActive: boolean;
   platform: 'youtube' | 'facebook' | 'other';
   startedAt?: string;
+  updatedAt?: string;
 }
 
 export interface MembershipApplication {
@@ -479,6 +480,7 @@ export interface PublicPortalData {
   media: MediaItem[];
   liveStream: LiveStream;
   pages: CMSPage[];
+  deletedTombstones?: string[];
 }
 
 export interface EmailSubscriber {

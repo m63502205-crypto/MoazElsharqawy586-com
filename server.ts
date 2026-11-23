@@ -250,11 +250,11 @@ try {
   const fbCfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
   if (fs.existsSync(fbCfgPath)) {
     const parsed = JSON.parse(fs.readFileSync(fbCfgPath, 'utf-8'));
-    if (parsed?.projectId && parsed.projectId !== 'remixed-project-id' && parsed?.apiKey && parsed?.firestoreDatabaseId) {
+    if (parsed?.projectId && parsed.projectId !== 'remixed-project-id' && parsed?.apiKey) {
       firebaseRuntimeConfig = {
         projectId: String(parsed.projectId),
         apiKey: String(parsed.apiKey),
-        firestoreDatabaseId: String(parsed.firestoreDatabaseId)
+        firestoreDatabaseId: String(parsed.firestoreDatabaseId || '(default)')
       };
     }
   }

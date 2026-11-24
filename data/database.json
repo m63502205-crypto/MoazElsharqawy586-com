@@ -1865,10 +1865,11 @@
       },
       "2026-11-23": {
         "visitors": [
-          "5e14c6fb0319e0"
+          "5e14c6fb0319e0",
+          "dac38270a8d7bf"
         ],
-        "pageViews": 1,
-        "mobile": 1,
+        "pageViews": 2,
+        "mobile": 2,
         "desktop": 0
       }
     },
@@ -1876,20 +1877,21 @@
       "/": {
         "path": "/",
         "title": "حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي",
-        "views": 3,
+        "views": 4,
         "visitors": [
           "b8f2aaf1a94f33",
           "9ea705c57b4c41",
-          "5e14c6fb0319e0"
+          "5e14c6fb0319e0",
+          "dac38270a8d7bf"
         ],
-        "lastVisitedAt": "2026-11-23T15:52:13.237Z"
+        "lastVisitedAt": "2026-11-23T19:35:23.000Z"
       }
     },
     "sources": {
       "زيارة مباشرة (Direct)": 2,
-      "بحث Google": 1
+      "بحث Google": 2
     },
-    "updatedAt": "2026-11-23T15:52:13.237Z"
+    "updatedAt": "2026-11-23T19:35:23.000Z"
   },
   "deletedTombstones": []
 }

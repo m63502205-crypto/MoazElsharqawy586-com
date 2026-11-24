@@ -6,11 +6,14 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
-import { db, hashPassword } from './src/server/db.ts';
-import type { AdminUser, MembershipApplication, MemberRecord, EmailSubscriber } from './src/server/db.ts';
+import { db, hashPassword, verifyPassword } from './src/server/db.ts';
+import type { AdminUser, MembershipApplication, MemberRecord, EmailSubscriber, AppDatabase } from './src/server/db.ts';
 import { dispatchSubscriberNotifications, getSmtpStatus } from './src/server/mailer.ts';
 import { initializeApp as initFirebaseAdminApp, getApps as getFirebaseAdminApps, getApp as getFirebaseAdminApp } from 'firebase-admin/app';
 import { getAuth as getFirebaseAdminAuth } from 'firebase-admin/auth';
+import { isCloudSqlConfigured } from './src/db/index.ts';
+import { savePortalSnapshotToSql } from './src/db/users.ts';
+import { requireAuth } from './src/middleware/auth.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -299,6 +302,14 @@ function broadcastServerDbUpdate(scope: 'public' | 'admin' | 'all' = 'all') {
 
 db.setAfterSaveHook(() => {
   broadcastServerDbUpdate('all');
+  if (isCloudSqlConfigured()) {
+    void savePortalSnapshotToSql(db.get() as unknown as Record<string, unknown>).catch(() => undefined);
+  }
+});
+
+app.get('/api/auth/sql-profile', requireAuth, (req: Request, res: Response) => {
+  const sqlUser = (req as any).user || null;
+  res.json({ authenticated: true, user: sqlUser });
 });
 
 function decodeFirestoreRestValue(val: any): any {
@@ -455,7 +466,7 @@ async function hydrateDbFromPublicFirestoreRest(force = false): Promise<boolean>
           } else {
             const existingTs = String(existing.updatedAt || existing.createdAt || '');
             const cloudTs = String(item.updatedAt || c.updatedAt || '');
-            if (!existingTs || (Boolean(cloudTs) && cloudTs > existingTs)) {
+            if (cloudTs && (!existingTs || cloudTs > existingTs)) {
               map.set(k, item);
             }
           }
@@ -623,7 +634,12 @@ export function persistDataUrlIfAny(dataUrlOrUrl: string, prefix = 'media'): str
 
 // Persistent session signing secret + in-memory cache (survives server restarts & Cloud Run recycles)
 const sessionSecretPath = path.resolve(process.cwd(), 'data', '.session-secret');
+const ephemeralBootSecret = crypto.randomBytes(32).toString('hex');
 function getSessionSecret(): string {
+  const envSecret = String(process.env.SESSION_SECRET || '').trim();
+  if (envSecret.length >= 32) {
+    return envSecret;
+  }
   try {
     const dir = path.dirname(sessionSecretPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -632,15 +648,44 @@ function getSessionSecret(): string {
       if (existing.length >= 32) return existing;
     }
     const generated = crypto.randomBytes(32).toString('hex');
-    fs.writeFileSync(sessionSecretPath, generated, 'utf-8');
+    fs.writeFileSync(sessionSecretPath, generated, { encoding: 'utf-8', mode: 0o600 });
     return generated;
   } catch {
-    return crypto.createHash('sha256').update(process.cwd() + '_nfp_oct3_session_key').digest('hex');
+    return ephemeralBootSecret;
   }
 }
 const SESSION_SECRET = getSessionSecret();
 const sessionStore = new Map<string, { admin: AdminUser; expiresAt: number }>();
-const revokedTokens = new Set<string>();
+
+function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex').slice(0, 32);
+}
+
+function isTokenRevoked(token: string): boolean {
+  const h = hashSessionToken(token);
+  const revokedList = db.get().revokedTokenHashes;
+  return Array.isArray(revokedList) && revokedList.includes(h);
+}
+
+function revokeSessionToken(token: string): void {
+  sessionStore.delete(token);
+  const data = db.get();
+  if (!Array.isArray(data.revokedTokenHashes)) {
+    data.revokedTokenHashes = [];
+  }
+  const h = hashSessionToken(token);
+  if (!data.revokedTokenHashes.includes(h)) {
+    data.revokedTokenHashes.unshift(h);
+    if (data.revokedTokenHashes.length > 500) {
+      data.revokedTokenHashes = data.revokedTokenHashes.slice(0, 500);
+    }
+    try {
+      db.save(undefined, { skipBroadcast: true });
+    } catch {
+      // ignore disk failure on revocation
+    }
+  }
+}
 
 function normalizeArabicDigitsServer(raw: string): string {
   return String(raw || '')
@@ -660,60 +705,96 @@ function normalizeAdminPhone(raw?: string | null): string {
   return digits;
 }
 
-function generateToken(admin?: AdminUser): string {
-  if (!admin) {
-    return 'tok_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
-  }
+function generateToken(admin: AdminUser): string {
   const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const tv = Number(admin.tokenVersion ?? 1);
   const payload = Buffer.from(
-    JSON.stringify({ id: admin.id, email: (admin.email || '').toLowerCase(), phone: admin.phone || '', exp })
+    JSON.stringify({ id: admin.id, email: (admin.email || '').toLowerCase(), phone: admin.phone || '', tv, exp })
   ).toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
   return `v1.${payload}.${sig}`;
 }
 
 function resolveSessionAdmin(token: string): { admin: AdminUser; expiresAt: number } | null {
-  if (!token || revokedTokens.has(token)) return null;
-  const cached = sessionStore.get(token);
-  if (cached) {
-    if (cached.expiresAt < Date.now()) {
+  if (!token || !token.startsWith('v1.') || isTokenRevoked(token)) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [, payload, sig] = parts;
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    if (!parsed?.exp || parsed.exp < Date.now()) return null;
+    const parsedEmail = String(parsed.email || '').toLowerCase();
+    const matched = db.get().admins.find(
+      a => a.isActive && (a.id === parsed.id || (parsedEmail !== '' && (a.email || '').toLowerCase() === parsedEmail))
+    );
+    if (!matched) return null;
+    const currentTv = Number(matched.tokenVersion ?? 1);
+    const tokenTv = Number(parsed.tv ?? 1);
+    if (tokenTv !== currentTv) {
       sessionStore.delete(token);
       return null;
     }
-    // Always resolve latest active record from DB if present
-    const cachedEmail = (cached.admin.email || '').toLowerCase();
-    const latest = db.get().admins.find(
-      a => a.isActive && (a.id === cached.admin.id || (cachedEmail !== '' && (a.email || '').toLowerCase() === cachedEmail))
-    );
-    if (!latest) return null;
-    return { admin: latest, expiresAt: cached.expiresAt };
+    const entry = { admin: matched, expiresAt: Number(parsed.exp) };
+    sessionStore.set(token, entry);
+    return entry;
+  } catch {
+    return null;
   }
-
-  if (token.startsWith('v1.')) {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [, payload, sig] = parts;
-    const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
-    if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-      if (!parsed?.exp || parsed.exp < Date.now()) return null;
-      const parsedEmail = String(parsed.email || '').toLowerCase();
-      const matched = db.get().admins.find(
-        a => a.isActive && (a.id === parsed.id || (parsedEmail !== '' && (a.email || '').toLowerCase() === parsedEmail))
-      );
-      if (!matched) return null;
-      const entry = { admin: matched, expiresAt: Number(parsed.exp) };
-      sessionStore.set(token, entry);
-      return entry;
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
+
+// Rate limiter for auth & sensitive public endpoints
+const rateLimitBuckets = new Map<string, number[]>();
+function createRateLimiter(options: { windowMs: number; max: number; keyPrefix: string; message?: string }) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const ip = forwarded || req.ip || 'unknown';
+    const key = `${options.keyPrefix}:${ip}`;
+    const now = Date.now();
+    const cutoff = now - options.windowMs;
+    const arr = (rateLimitBuckets.get(key) || []).filter(ts => ts > cutoff);
+    if (arr.length >= options.max) {
+      return res.status(429).json({
+        error: options.message || 'تم تجاوز الحد المسموح من المحاولات مؤقتاً، يرجى الانتظار قليلاً ثم المحاولة مجدداً'
+      });
+    }
+    arr.push(now);
+    rateLimitBuckets.set(key, arr);
+    if (rateLimitBuckets.size > 5000) {
+      for (const [k, list] of rateLimitBuckets.entries()) {
+        if (!list.some(ts => ts > cutoff)) rateLimitBuckets.delete(k);
+      }
+    }
+    next();
+  };
+}
+
+const loginRateLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 15,
+  keyPrefix: 'admin_login',
+  message: 'تم تجاوز الحد المسموح لمحاولات تسجيل الدخول، يرجى المحاولة بعد عدة دقائق'
+});
+const inquiryRateLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyPrefix: 'public_inquire',
+  message: 'تم إجراء عدد كبير من الاستعلامات، يرجى الانتظار بضع دقائق ثم المحاولة مجدداً'
+});
+const applyRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyPrefix: 'public_apply',
+  message: 'تم إرسال عدة طلبات في وقت قصير، يرجى المحاولة لاحقاً'
+});
+const subscribeRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyPrefix: 'public_subscribe'
+});
 
 // Authentication middleware
 function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
@@ -721,7 +802,7 @@ function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'غير مصرح: يجب تسجيل الدخول أولاً' });
   }
-  const token = authHeader.substring(7);
+  const token = authHeader.substring(7).trim();
   const session = resolveSessionAdmin(token);
   if (!session) {
     sessionStore.delete(token);
@@ -731,8 +812,52 @@ function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// Permission check helper (resolves both explicit user permissions and roleId permissions)
-function requirePermission(perm: string) {
+function resolveAdminPermissions(admin: AdminUser): Set<string> {
+  const userPerms = new Set<string>(Array.isArray(admin.permissions) ? admin.permissions : []);
+  if (admin.roleId) {
+    const data = db.get();
+    const roleObj = (data.roles || []).find(r => r.id === admin.roleId);
+    if (roleObj && Array.isArray(roleObj.permissions)) {
+      roleObj.permissions.forEach(p => userPerms.add(p));
+    }
+  }
+  if (userPerms.has('cms')) userPerms.add('pages');
+  if (userPerms.has('pages')) userPerms.add('cms');
+  if (userPerms.has('users')) userPerms.add('admins');
+  if (userPerms.has('admins')) userPerms.add('users');
+  return userPerms;
+}
+
+function hasAdminPermission(admin: AdminUser, perm: string): boolean {
+  if (!admin || !admin.isActive) return false;
+  if (admin.role === 'super_admin') return true;
+  return resolveAdminPermissions(admin).has(perm);
+}
+
+function isSpecializedAdmin(admin: AdminUser): boolean {
+  return Boolean(admin && admin.role !== 'super_admin' && admin.adminScope === 'specialized');
+}
+
+function getManagedSecretariatId(admin: AdminUser): string | undefined {
+  if (!isSpecializedAdmin(admin)) return undefined;
+  return typeof admin.managedSecretariatId === 'string' && admin.managedSecretariatId.trim()
+    ? admin.managedSecretariatId.trim()
+    : undefined;
+}
+
+function isItemInManagedSecretariat(item: any, managedSecId: string, secName?: string): boolean {
+  if (!item || !managedSecId) return false;
+  if (item.secretariatId === managedSecId) return true;
+  if (item.linkedSecretariatId === managedSecId) return true;
+  if (item.authorSecretariatId === managedSecId) return true;
+  if (item.publisherSecretariatId === managedSecId) return true;
+  if (item.specializedSecretariatId === managedSecId) return true;
+  if (secName && typeof item.organizer === 'string' && item.organizer.includes(secName)) return true;
+  return false;
+}
+
+// Permission check helper (resolves both explicit user permissions and roleId permissions + validates specialized secretariat binding)
+function requirePermission(perm: string, options?: { disallowSpecialized?: boolean }) {
   return (req: Request, res: Response, next: NextFunction) => {
     const admin = (req as any).admin as AdminUser;
     if (!admin) {
@@ -741,19 +866,51 @@ function requirePermission(perm: string) {
     if (admin.role === 'super_admin') {
       return next();
     }
-    const userPerms = new Set(admin.permissions || []);
-    if (admin.roleId) {
-      const data = db.get();
-      const roleObj = (data.roles || []).find(r => r.id === admin.roleId);
-      if (roleObj && roleObj.permissions) {
-        roleObj.permissions.forEach(p => userPerms.add(p));
+    if (!hasAdminPermission(admin, perm)) {
+      return res.status(403).json({ error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' });
+    }
+    if (isSpecializedAdmin(admin)) {
+      if (options?.disallowSpecialized) {
+        return res.status(403).json({ error: 'هذا القسم مقتصر على الإدارة العامة فقط وليس لنطاق الأمانة التخصصية' });
+      }
+      if (!getManagedSecretariatId(admin)) {
+        return res.status(403).json({ error: 'حساب المشرف التخصصي غير مربوط بأمانة محددة؛ يرجى مراجعة المدير العام' });
       }
     }
-    if (userPerms.has(perm)) {
+    return next();
+  };
+}
+
+function requireAnyPermission(perms: string[], options?: { disallowSpecialized?: boolean }) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const admin = (req as any).admin as AdminUser;
+    if (!admin) {
+      return res.status(401).json({ error: 'غير مصرح' });
+    }
+    if (admin.role === 'super_admin') {
       return next();
     }
-    return res.status(403).json({ error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' });
+    if (!perms.some(p => hasAdminPermission(admin, p))) {
+      return res.status(403).json({ error: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' });
+    }
+    if (isSpecializedAdmin(admin)) {
+      if (options?.disallowSpecialized) {
+        return res.status(403).json({ error: 'هذا الإجراء مقتصر على الإدارة العامة فقط' });
+      }
+      if (!getManagedSecretariatId(admin)) {
+        return res.status(403).json({ error: 'حساب المشرف التخصصي غير مربوط بأمانة محددة' });
+      }
+    }
+    return next();
   };
+}
+
+function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  const admin = (req as any).admin as AdminUser;
+  if (!admin || admin.role !== 'super_admin') {
+    return res.status(403).json({ error: 'هذا الإجراء محصور لمدير المنصة الرئيسي (Super Admin) فقط' });
+  }
+  return next();
 }
 
 // -------------------------------------------------------------
@@ -782,12 +939,12 @@ app.get(/^\/(google[a-zA-Z0-9_-]+\.html)$/, (req: Request, res: Response, next: 
 });
 
 const OFFICIAL_SITE_URL = 'https://nfp-october3.ai.studio';
-const SITE_BRAND_NAME = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر';
-const HOME_SEO_TITLE = 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي';
+const SITE_BRAND_NAME = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر';
+const HOME_SEO_TITLE = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | الموقع الرسمي';
 const HOME_SEO_DESCRIPTION =
   'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.';
 const HOME_SEO_KEYWORDS =
-  'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
+  'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية';
 const DEFAULT_GA4_ID = 'G-NX1MQ9NHXW';
 const DEFAULT_GTM_ID = 'GTM-TRZ4SG95';
 
@@ -1156,8 +1313,8 @@ function renderSsrShell(data: ReturnType<typeof db.get>, mainHtml: string): stri
   return `<div dir="rtl" lang="ar" style="font-family:Cairo,Tajawal,sans-serif;background:#fafaf9;color:#1c1917;">
   <header>
     <a href="/">
-      <img src="${escapeHtml(logoSrc)}" alt="شعار حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر" width="52" height="52" />
-      <span>حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر</span>
+      <img src="${escapeHtml(logoSrc)}" alt="شعار حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر" width="52" height="52" />
+      <span>حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر</span>
     </a>
     <nav aria-label="التنقل الرئيسي">
       <a href="/">الرئيسية</a>
@@ -1232,9 +1389,23 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   let ogImage = defaultOgImage;
   let ogImageAlt = `شعار ${siteName}`;
   let robots = 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1';
+  let statusCode = 200;
   let mainHtml = '';
   let articleSchema: Record<string, any> | null = null;
   let eventSchema: Record<string, any> | null = null;
+
+  const markNotFound = (missingLabel: string, backHref: string, backText: string) => {
+    statusCode = 404;
+    title = `الصفحة غير موجودة | ${siteBrand}`;
+    description = `المحتوى المطلوب غير متاح حالياً في البوابة الرسمية لأمانة قسم ثالث أكتوبر.`;
+    robots = 'noindex, nofollow';
+    mainHtml = `
+      <section>
+        <h1>${escapeHtml(missingLabel)}</h1>
+        <p>عذراً، الرابط المطلوب غير موجود أو تم نقله أو حذفه.</p>
+        <p><a href="${escapeHtml(backHref)}">${escapeHtml(backText)}</a> | <a href="/">الصفحة الرئيسية</a></p>
+      </section>`;
+  };
 
   if (cleanPath === '/admin' || cleanPath.startsWith('/admin/') || cleanPath === '/login') {
     title = `لوحة التحكم | ${siteBrand}`;
@@ -1300,7 +1471,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       </section>`;
   } else if (cleanPath.startsWith('/secretariat/')) {
     const slug = cleanPath.slice('/secretariat/'.length);
-    const sec = activeSecretariats.find(s => s.slug === slug || s.id === slug) || activeSecretariats[0];
+    const sec = activeSecretariats.find(s => s.slug === slug || s.id === slug);
     if (sec) {
       title = `${sec.name} – أمانة قسم ثالث أكتوبر | ${siteBrand}`;
       description = sec.description
@@ -1321,6 +1492,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
           ${secMembers.length > 0 ? `<h2>أعضاء الأمانة</h2><ul>${secMembers.map(m => `<li>${escapeHtml(m.name)} – ${escapeHtml(m.role)}</li>`).join('')}</ul>` : ''}
           <p><a href="/secretariats">العودة إلى جميع الأمانات التخصصية</a></p>
         </article>`;
+    } else {
+      markNotFound('الأمانة التخصصية غير موجودة', '/secretariats', 'استعراض كافة الأمانات التخصصية');
     }
   } else if (cleanPath === '/initiatives') {
     title = `المبادرات المجتمعية والتنموية | ${siteBrand}`;
@@ -1338,7 +1511,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
       </section>`;
   } else if (cleanPath.startsWith('/initiative/')) {
     const slug = cleanPath.slice('/initiative/'.length);
-    const init = visibleInitiatives.find(i => i.slug === slug || i.id === slug) || visibleInitiatives[0];
+    const init = visibleInitiatives.find(i => i.slug === slug || i.id === slug);
     if (init) {
       const rawAct = typeof req.query?.activity === 'string' ? req.query.activity : '';
       const actIdx = rawAct !== '' && /^\d+$/.test(rawAct) ? Number(rawAct) : -1;
@@ -1382,6 +1555,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
           ${(init.activities || []).length > 0 ? `<h2>الأنشطة الميدانية</h2><ul>${init.activities.map(a => `<li>${escapeHtml(a.title)} (${escapeHtml(a.date)}): ${escapeHtml(a.description)}</li>`).join('')}</ul>` : ''}
           <p><a href="/initiatives">العودة إلى كافة المبادرات</a></p>
         </article>`;
+    } else {
+      markNotFound('المبادرة غير موجودة', '/initiatives', 'تصفح كافة المبادرات المجتمعية');
     }
   } else if (cleanPath === '/news') {
     title = `أخبار وبيانات أمانة قسم ثالث أكتوبر | ${siteBrand}`;
@@ -1442,6 +1617,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
           <div>${escapeHtml(item.content)}</div>
           <p><a href="/news">العودة إلى كافة الأخبار</a></p>
         </article>`;
+    } else {
+      markNotFound('الخبر غير موجود', '/news', 'العودة إلى صفحة الأخبار والبيانات');
     }
   } else if (cleanPath === '/events') {
     title = `الفعاليات والأنشطة – أمانة قسم ثالث أكتوبر | ${siteBrand}`;
@@ -1500,6 +1677,8 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
           <p>المكان: ${escapeHtml(ev.venue)} – الجهة المنظمة: ${escapeHtml(ev.organizer)}</p>
           <p><a href="/events">العودة إلى كافة الفعاليات</a></p>
         </article>`;
+    } else {
+      markNotFound('الفعالية غير موجودة', '/events', 'العودة إلى جدول الفعاليات');
     }
   } else if (cleanPath === '/live') {
     const ls = data.liveStream;
@@ -1739,6 +1918,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
     ogImage,
     ogImageAlt,
     robots,
+    statusCode,
     articleSchema,
     eventSchema,
     extraSchemas,
@@ -1746,7 +1926,7 @@ function resolveRouteSeoAndSsr(req: Request, data: ReturnType<typeof db.get>) {
   };
 }
 
-function injectDynamicSiteMeta(html: string, req: Request): string {
+function injectDynamicSiteMetaWithStatus(html: string, req: Request): { html: string; statusCode: number } {
   const data = db.get();
   const settings = data.settings;
   const seo = resolveRouteSeoAndSsr(req, data);
@@ -1791,7 +1971,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
       name: seo.siteName,
-      alternateName: ['أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر', 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
+      alternateName: ['حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر', 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
       url: `${siteUrl}/`,
       description: seo.siteDescription,
       inLanguage: 'ar'
@@ -1879,7 +2059,7 @@ function injectDynamicSiteMeta(html: string, req: Request): string {
     out = out.replace(/<div id="root"><\/div>/i, `<div id="root">${seo.ssrHtml}</div>`);
   }
 
-  return out;
+  return { html: out, statusCode: seo.statusCode };
 }
 
 function isCrawlerUserAgent(userAgent?: string): boolean {
@@ -2153,9 +2333,26 @@ app.get(['/og-logo.jpg', '/api/site-logo', '/api/seo/share-image'], (req: Reques
   return res.status(404).send('Logo not found');
 });
 
-// Serve decoded inline data:image assets cleanly as cacheable HTTP images for ultra-fast SSR & public bootstrap
+// Serve decoded inline data:image assets cleanly ONLY from public collections (prevents PII leakage)
+const PUBLIC_INLINE_COLLECTIONS = new Set([
+  'settings',
+  'partyLeaders',
+  'secretariatLeaders',
+  'specializedSecretariats',
+  'secretariatMembers',
+  'initiatives',
+  'news',
+  'events',
+  'media',
+  'pages'
+]);
+const PUBLIC_INLINE_FIELDS_DENYLIST = new Set(['phone', 'email', 'nationalId', 'passwordHash', 'unsubscribeToken']);
+
 app.get('/api/public/inline-asset/:collection/:id/:field', (req: Request, res: Response) => {
   const { collection: col, id, field } = req.params;
+  if (!PUBLIC_INLINE_COLLECTIONS.has(col) || PUBLIC_INLINE_FIELDS_DENYLIST.has(field)) {
+    return res.status(403).send('Forbidden');
+  }
   const data = db.get();
   let rawVal: unknown;
 
@@ -2475,8 +2672,8 @@ app.get('/api/public/initiative/:slug', (req: Request, res: Response) => {
   });
 });
 
-// 4. Submit Membership Application
-app.post('/api/public/apply', (req: Request, res: Response) => {
+// 4. Submit Membership Application (rate-limited & attachment-validated)
+app.post('/api/public/apply', applyRateLimiter, (req: Request, res: Response) => {
   const body = req.body || {};
   const data = db.get();
   const reqs = data.settings.membershipFieldRequirements || {};
@@ -2509,6 +2706,23 @@ app.post('/api/public/apply', (req: Request, res: Response) => {
       const val = body[key];
       if (!val || (typeof val === 'string' && !val.trim())) {
         return res.status(400).json({ error: `يرجى استيفاء الحقل الإجباري: ${label}` });
+      }
+    }
+  }
+
+  // Validate image attachment payloads (must be empty, safe image data URL <= 8MB, or safe URL path)
+  for (const imgField of ['personalPhotoUrl', 'nationalIdFrontUrl', 'nationalIdBackUrl'] as const) {
+    const rawImg = typeof body[imgField] === 'string' ? body[imgField].trim() : '';
+    if (rawImg) {
+      if (rawImg.startsWith('data:')) {
+        if (!/^data:image\/(jpeg|jpg|png|webp|gif|avif);base64,/i.test(rawImg)) {
+          return res.status(400).json({ error: 'صيغة الصورة المرفقة غير مدعومة (يرجى رفع JPG أو PNG أو WEBP)' });
+        }
+        if (rawImg.length > 8 * 1024 * 1024) {
+          return res.status(413).json({ error: 'حجم الصورة المرفقة يتجاوز الحد المسموح (6 ميجابايت)' });
+        }
+      } else if (!rawImg.startsWith('/uploads/') && !rawImg.startsWith('/assets/') && !rawImg.startsWith('https://')) {
+        return res.status(400).json({ error: 'رابط الصورة المرفقة غير صالح' });
       }
     }
   }
@@ -2551,27 +2765,27 @@ app.post('/api/public/apply', (req: Request, res: Response) => {
   const newApp: MembershipApplication = {
     id: 'app-' + Date.now(),
     applicationNumber,
-    fullName: body.fullName.trim(),
+    fullName: String(body.fullName || '').trim().slice(0, 120),
     nationalId: cleanNID,
-    dateOfBirth: body.dateOfBirth || '',
-    gender: body.gender || 'ذكر',
-    maritalStatus: body.maritalStatus || 'أعزب',
-    governorate: body.governorate || 'محافظة الجيزة',
-    district: body.district || 'قسم ثالث أكتوبر',
-    address: body.address || '',
-    phone: body.phone.trim(),
-    whatsapp: body.whatsapp || body.phone.trim(),
-    email: body.email || '',
-    qualification: body.qualification || '',
-    job: body.job || '',
-    workplace: body.workplace || '',
-    skills: body.skills || '',
-    interests: body.interests || '',
-    volunteerExperience: body.volunteerExperience || '',
-    reasonForJoining: body.reasonForJoining || '',
-    personalPhotoUrl: body.personalPhotoUrl || '',
-    nationalIdFrontUrl: body.nationalIdFrontUrl || '',
-    nationalIdBackUrl: body.nationalIdBackUrl || '',
+    dateOfBirth: String(body.dateOfBirth || '').trim().slice(0, 32),
+    gender: body.gender === 'أنثى' ? 'أنثى' : 'ذكر',
+    maritalStatus: body.maritalStatus === 'متزوج' ? 'متزوج' : body.maritalStatus === 'أخرى' ? 'أخرى' : 'أعزب',
+    governorate: String(body.governorate || 'محافظة الجيزة').slice(0, 60),
+    district: String(body.district || 'قسم ثالث أكتوبر').slice(0, 80),
+    address: String(body.address || '').trim().slice(0, 300),
+    phone: String(body.phone || '').trim().slice(0, 30),
+    whatsapp: String(body.whatsapp || body.phone || '').trim().slice(0, 30),
+    email: String(body.email || '').trim().slice(0, 120),
+    qualification: String(body.qualification || '').trim().slice(0, 150),
+    job: String(body.job || '').trim().slice(0, 150),
+    workplace: String(body.workplace || '').trim().slice(0, 150),
+    skills: String(body.skills || '').trim().slice(0, 1000),
+    interests: String(body.interests || '').trim().slice(0, 1000),
+    volunteerExperience: String(body.volunteerExperience || '').trim().slice(0, 1000),
+    reasonForJoining: String(body.reasonForJoining || '').trim().slice(0, 1500),
+    personalPhotoUrl: typeof body.personalPhotoUrl === 'string' ? body.personalPhotoUrl.trim() : '',
+    nationalIdFrontUrl: typeof body.nationalIdFrontUrl === 'string' ? body.nationalIdFrontUrl.trim() : '',
+    nationalIdBackUrl: typeof body.nationalIdBackUrl === 'string' ? body.nationalIdBackUrl.trim() : '',
     consentAgreed: !!body.consentAgreed,
     status: 'جديد',
     internalNotes: '',
@@ -2597,11 +2811,11 @@ app.post('/api/public/apply', (req: Request, res: Response) => {
   });
 });
 
-// 4.5. Public Application Inquiry by Number or National ID
-app.post(['/api/public/inquire', '/api/applications/inquire'], (req: Request, res: Response) => {
+// 4.5. Public Application Inquiry by Number or National ID (rate-limited, status-only)
+app.post(['/api/public/inquire', '/api/applications/inquire'], inquiryRateLimiter, (req: Request, res: Response) => {
   const query = String(req.body.query || req.body.applicationNumber || '').trim();
-  if (!query) {
-    return res.status(400).json({ found: false, error: 'يرجى إدخال رقم الطلب أو الرقم القومي للاستعلام' });
+  if (!query || query.length < 5 || query.length > 64) {
+    return res.status(400).json({ found: false, error: 'يرجى إدخال رقم طلب أو رقم قومي صحيح للاستعلام' });
   }
 
   const data = db.get();
@@ -2656,7 +2870,7 @@ app.post(['/api/public/inquire', '/api/applications/inquire'], (req: Request, re
 });
 
 // 4.6. Public Newsletter Email Subscription & One-Click Unsubscribe
-app.post('/api/public/subscribe', (req: Request, res: Response) => {
+app.post('/api/public/subscribe', subscribeRateLimiter, (req: Request, res: Response) => {
   const rawEmail = String(req.body?.email || '').trim().toLowerCase();
   const rawName = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 80) : '';
   const topicsInput = req.body?.topics || {};
@@ -2766,7 +2980,7 @@ app.get('/api/public/unsubscribe', (req: Request, res: Response) => {
 // ADMIN AUTHENTICATION APIS
 // -------------------------------------------------------------
 
-app.post('/api/admin/login', (req: Request, res: Response) => {
+app.post('/api/admin/login', loginRateLimiter, (req: Request, res: Response) => {
   const { identifier, email, phone, password } = req.body || {};
   const stripInvisible = (v: string) => v.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0]/g, '');
   const rawLogin = stripInvisible(String(identifier ?? email ?? phone ?? '')).trim();
@@ -2799,9 +3013,26 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
       normalizeArabicDigitsServer(rawPassword).trim()
     ].filter(Boolean))
   );
-  const passwordOk = passCandidates.some(candidate => hashPassword(candidate) === admin.passwordHash);
-  if (!passwordOk) {
+  let matchedCandidate: string | null = null;
+  let needsRehash = false;
+  for (const candidate of passCandidates) {
+    const check = verifyPassword(candidate, admin.passwordHash);
+    if (check.valid) {
+      matchedCandidate = candidate;
+      needsRehash = check.needsRehash;
+      break;
+    }
+  }
+  if (!matchedCandidate) {
     return res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
+  }
+
+  if (needsRehash) {
+    admin.passwordHash = hashPassword(matchedCandidate);
+    admin.updatedAt = new Date().toISOString();
+  }
+  if (admin.tokenVersion === undefined) {
+    admin.tokenVersion = 1;
   }
 
   // Update last login
@@ -2825,7 +3056,7 @@ app.post('/api/admin/login', (req: Request, res: Response) => {
 });
 
 // Google Sign-In Admin login (verifies Firebase ID token using projectId only — no IAM required)
-app.post('/api/admin/google-login', async (req: Request, res: Response) => {
+app.post('/api/admin/google-login', loginRateLimiter, async (req: Request, res: Response) => {
   const idToken = String(req.body?.idToken || '').trim();
   if (!idToken) {
     return res.status(400).json({ error: 'رمز التحقق من Google غير موجود' });
@@ -2847,6 +3078,9 @@ app.post('/api/admin/google-login', async (req: Request, res: Response) => {
       return res.status(403).json({ error: `الحساب (${verifiedEmail}) غير مسجل ضمن المشرفين المعتمدين في المنصة` });
     }
 
+    if (admin.tokenVersion === undefined) {
+      admin.tokenVersion = 1;
+    }
     admin.lastLogin = new Date().toISOString();
     db.save();
     db.addAuditLog(admin.email, admin.name, 'تسجيل دخول إداري عبر Google', 'Auth', 'تم تسجيل الدخول والتحقق من الهوية عبر Google');
@@ -2877,9 +3111,8 @@ app.get('/api/admin/me', authenticateAdmin, (req: Request, res: Response) => {
 app.post('/api/admin/logout', authenticateAdmin, (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const tok = authHeader.substring(7);
-    sessionStore.delete(tok);
-    revokedTokens.add(tok);
+    const tok = authHeader.substring(7).trim();
+    revokeSessionToken(tok);
   }
   res.json({ success: true });
 });
@@ -2888,33 +3121,49 @@ app.post('/api/admin/logout', authenticateAdmin, (req: Request, res: Response) =
 // ADMIN PROTECTED DASHBOARD APIS
 // -------------------------------------------------------------
 
-// Dashboard summary stats
-app.get('/api/admin/stats', authenticateAdmin, (_req: Request, res: Response) => {
+// Dashboard summary stats (respects caller permissions and secretariat scope)
+app.get('/api/admin/stats', authenticateAdmin, (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
+  const specialized = isSpecializedAdmin(admin);
+  const managedSecId = getManagedSecretariatId(admin);
+  const canApps = !specialized && hasAdminPermission(admin, 'applications');
+  const canMembers = hasAdminPermission(admin, 'members');
+  const canSubscribers = !specialized && hasAdminPermission(admin, 'settings');
+  const scopedMembers = canMembers
+    ? (specialized && managedSecId ? data.members.filter(m => m.secretariatId === managedSecId) : data.members)
+    : [];
+
   const stats = {
-    partyLeadersCount: data.partyLeaders.length,
-    secretariatLeadersCount: data.secretariatLeaders.length,
-    secretariatsCount: data.specializedSecretariats.length,
-    membersCount: data.members.length,
+    partyLeadersCount: !specialized && hasAdminPermission(admin, 'leaders_party') ? data.partyLeaders.length : 0,
+    secretariatLeadersCount: hasAdminPermission(admin, 'leaders_secretariat')
+      ? (specialized && managedSecId
+          ? data.secretariatLeaders.filter(l => l.specializedSecretariatId === managedSecId).length
+          : data.secretariatLeaders.length)
+      : 0,
+    secretariatsCount: specialized && managedSecId
+      ? data.specializedSecretariats.filter(s => s.id === managedSecId).length
+      : data.specializedSecretariats.length,
+    membersCount: scopedMembers.length,
     initiativesCount: data.initiatives.length,
     activeInitiativesCount: data.initiatives.filter(i => i.status === 'active').length,
-    applicationsCount: data.applications.length,
-    newApplicationsCount: data.applications.filter(a => a.status === 'جديد').length,
-    reviewingApplicationsCount: data.applications.filter(a => a.status === 'قيد المراجعة').length,
-    acceptedApplicationsCount: data.applications.filter(a => a.status === 'مقبول').length,
-    rejectedApplicationsCount: data.applications.filter(a => a.status === 'مرفوض').length,
+    applicationsCount: canApps ? data.applications.length : 0,
+    newApplicationsCount: canApps ? data.applications.filter(a => a.status === 'جديد').length : 0,
+    reviewingApplicationsCount: canApps ? data.applications.filter(a => a.status === 'قيد المراجعة').length : 0,
+    acceptedApplicationsCount: canApps ? data.applications.filter(a => a.status === 'مقبول').length : 0,
+    rejectedApplicationsCount: canApps ? data.applications.filter(a => a.status === 'مرفوض').length : 0,
     newsCount: data.news.length,
     eventsCount: data.events.length,
     mediaCount: data.media.length,
-    pagesCount: (data.pages || []).length,
-    rolesCount: (data.roles || []).length,
-    subscribersCount: (data.subscribers || []).filter(s => s.status === 'active').length
+    pagesCount: !specialized && hasAdminPermission(admin, 'pages') ? (data.pages || []).length : 0,
+    rolesCount: !specialized && (hasAdminPermission(admin, 'roles') || hasAdminPermission(admin, 'admins')) ? (data.roles || []).length : 0,
+    subscribersCount: canSubscribers ? (data.subscribers || []).filter(s => s.status === 'active').length : 0
   };
   res.json(stats);
 });
 
-// Admin Google Indexing & All-Pages SEO endpoints
-app.get('/api/admin/seo/urls', authenticateAdmin, (req: Request, res: Response) => {
+// Admin Google Indexing & All-Pages SEO endpoints (requires settings permission)
+app.get('/api/admin/seo/urls', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), (req: Request, res: Response) => {
   const data = db.get();
   const siteUrl = getSitemapBaseUrl(req, data);
   const allItems = buildSitemapItems(data, siteUrl);
@@ -2935,7 +3184,7 @@ app.get('/api/admin/seo/urls', authenticateAdmin, (req: Request, res: Response) 
   });
 });
 
-app.post('/api/admin/seo/audit', authenticateAdmin, (req: Request, res: Response) => {
+app.post('/api/admin/seo/audit', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), (req: Request, res: Response) => {
   const data = db.get();
   const siteUrl = getSitemapBaseUrl(req, data);
   const allItems = buildSitemapItems(data, siteUrl);
@@ -3081,12 +3330,33 @@ app.get('/api/admin/analytics', authenticateAdmin, (req: Request, res: Response)
   });
 });
 
-// Full DB for admin (sanitizes dead legacy /uploads/ paths without altering on-disk user records)
-app.get('/api/admin/full-db', authenticateAdmin, async (_req: Request, res: Response) => {
+// Full DB for admin (filters collections by caller RBAC permissions + specialized secretariat scope)
+app.get('/api/admin/full-db', authenticateAdmin, async (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
   const data = db.get();
-  const safeAdmins = data.admins.map(({ passwordHash, ...rest }) => rest);
-  const sortedSecretariats = [...(data.specializedSecretariats || [])]
+  const specialized = isSpecializedAdmin(admin);
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? (data.specializedSecretariats || []).find(s => s.id === managedSecId) : undefined;
+  const { passwordHash: _selfPw, ...safeSelf } = admin;
+
+  const canPartyLeaders = !specialized && hasAdminPermission(admin, 'leaders_party');
+  const canSecLeaders = hasAdminPermission(admin, 'leaders_secretariat');
+  const canSecretariats = hasAdminPermission(admin, 'secretariats');
+  const canApps = !specialized && hasAdminPermission(admin, 'applications');
+  const canMembers = hasAdminPermission(admin, 'members');
+  const canPages = !specialized && hasAdminPermission(admin, 'pages');
+  const canRoles = !specialized && (hasAdminPermission(admin, 'roles') || hasAdminPermission(admin, 'admins'));
+  const canAdmins = !specialized && hasAdminPermission(admin, 'admins');
+  const canAudit = !specialized && hasAdminPermission(admin, 'audit');
+  const canSettings = !specialized && hasAdminPermission(admin, 'settings');
+  const canLive = !specialized && hasAdminPermission(admin, 'livestream');
+
+  const safeAdmins = canAdmins
+    ? data.admins.map(({ passwordHash, ...rest }) => rest)
+    : [safeSelf];
+
+  const allSecretariatsSorted = [...(data.specializedSecretariats || [])]
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map(s => ({
       ...s,
@@ -3101,53 +3371,107 @@ app.get('/api/admin/full-db', authenticateAdmin, async (_req: Request, res: Resp
         ? s.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean)
         : s.galleryImages
     }));
+
+  const scopedSecretariats = specialized
+    ? (managedSecId ? allSecretariatsSorted.filter(s => s.id === managedSecId) : [])
+    : allSecretariatsSorted;
+
+  const scopedSecretariatLeaders = canSecLeaders
+    ? (data.secretariatLeaders || [])
+        .filter(l => !specialized || (managedSecId && l.specializedSecretariatId === managedSecId))
+        .map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) }))
+    : [];
+
+  const scopedSecretariatMembers = canSecretariats
+    ? (data.secretariatMembers || [])
+        .filter(m => !specialized || (managedSecId && m.secretariatId === managedSecId))
+        .map(m => ({ ...m, photoUrl: sanitizeMediaUrlForRead(m.photoUrl) }))
+    : [];
+
+  const scopedInitiatives = hasAdminPermission(admin, 'initiatives')
+    ? (data.initiatives || [])
+        .filter(i => !specialized || (managedSecId && isItemInManagedSecretariat(i, managedSecId, managedSec?.name)))
+        .map(i => ({
+          ...i,
+          logoUrl: sanitizeMediaUrlForRead(i.logoUrl),
+          coverUrl: sanitizeMediaUrlForRead(i.coverUrl),
+          galleryImages: Array.isArray(i.galleryImages) ? i.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : i.galleryImages,
+          activities: Array.isArray(i.activities) ? i.activities.map(a => ({ ...a, imageUrl: sanitizeMediaUrlForRead(a.imageUrl) })) : i.activities
+        }))
+    : [];
+
+  const scopedNews = hasAdminPermission(admin, 'news')
+    ? (data.news || [])
+        .filter(n => !specialized || (managedSecId && isItemInManagedSecretariat(n, managedSecId, managedSec?.name)))
+        .map(n => ({
+          ...n,
+          coverImage: sanitizeMediaUrlForRead(n.coverImage),
+          galleryImages: Array.isArray(n.galleryImages) ? n.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : n.galleryImages
+        }))
+    : [];
+
+  const scopedEvents = hasAdminPermission(admin, 'events')
+    ? (data.events || [])
+        .filter(e => !specialized || (managedSecId && isItemInManagedSecretariat(e, managedSecId, managedSec?.name)))
+        .map(e => ({
+          ...e,
+          coverUrl: sanitizeMediaUrlForRead(e.coverUrl),
+          coverImage: sanitizeMediaUrlForRead(e.coverImage),
+          images: Array.isArray(e.images) ? e.images.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.images,
+          galleryImages: Array.isArray(e.galleryImages) ? e.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.galleryImages
+        }))
+    : [];
+
+  const scopedMedia = hasAdminPermission(admin, 'media')
+    ? (data.media || [])
+        .filter(m => !specialized || (managedSecId && isItemInManagedSecretariat(m, managedSecId, managedSec?.name)))
+        .map(m => ({
+          ...m,
+          url: sanitizeMediaUrlForRead(m.url) || m.url,
+          thumbnail: sanitizeMediaUrlForRead(m.thumbnail)
+        }))
+    : [];
+
+  const scopedMembers = canMembers
+    ? (data.members || []).filter(m => !specialized || (managedSecId && m.secretariatId === managedSecId))
+    : [];
+
   res.json({
-    ...data,
-    partyLeaders: (data.partyLeaders || []).map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) })),
-    secretariatLeaders: (data.secretariatLeaders || []).map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) })),
-    specializedSecretariats: sortedSecretariats,
-    secretariatMembers: (data.secretariatMembers || []).map(m => ({ ...m, photoUrl: sanitizeMediaUrlForRead(m.photoUrl) })),
-    initiatives: (data.initiatives || []).map(i => ({
-      ...i,
-      logoUrl: sanitizeMediaUrlForRead(i.logoUrl),
-      coverUrl: sanitizeMediaUrlForRead(i.coverUrl),
-      galleryImages: Array.isArray(i.galleryImages) ? i.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : i.galleryImages,
-      activities: Array.isArray(i.activities) ? i.activities.map(a => ({ ...a, imageUrl: sanitizeMediaUrlForRead(a.imageUrl) })) : i.activities
-    })),
-    news: (data.news || []).map(n => ({
-      ...n,
-      coverImage: sanitizeMediaUrlForRead(n.coverImage),
-      galleryImages: Array.isArray(n.galleryImages) ? n.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : n.galleryImages
-    })),
-    events: (data.events || []).map(e => ({
-      ...e,
-      coverUrl: sanitizeMediaUrlForRead(e.coverUrl),
-      coverImage: sanitizeMediaUrlForRead(e.coverImage),
-      images: Array.isArray(e.images) ? e.images.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.images,
-      galleryImages: Array.isArray(e.galleryImages) ? e.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : e.galleryImages
-    })),
-    media: (data.media || []).map(m => ({
-      ...m,
-      url: sanitizeMediaUrlForRead(m.url) || m.url,
-      thumbnail: sanitizeMediaUrlForRead(m.thumbnail)
-    })),
-    pages: (data.pages || []).map(p => ({
-      ...p,
-      coverImage: sanitizeMediaUrlForRead(p.coverImage),
-      galleryImages: Array.isArray(p.galleryImages) ? p.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : p.galleryImages
-    })),
+    partyLeaders: canPartyLeaders
+      ? (data.partyLeaders || []).map(l => ({ ...l, photoUrl: sanitizeMediaUrlForRead(l.photoUrl) }))
+      : [],
+    secretariatLeaders: scopedSecretariatLeaders,
+    specializedSecretariats: scopedSecretariats,
+    secretariatMembers: scopedSecretariatMembers,
+    initiatives: scopedInitiatives,
+    news: scopedNews,
+    events: scopedEvents,
+    media: scopedMedia,
+    liveStream: canLive ? data.liveStream : { id: 'stream-default', title: '', description: '', streamUrl: '', isActive: false, platform: 'facebook' },
+    applications: canApps ? (data.applications || []) : [],
+    members: scopedMembers,
+    pages: canPages
+      ? (data.pages || []).map(p => ({
+          ...p,
+          coverImage: sanitizeMediaUrlForRead(p.coverImage),
+          galleryImages: Array.isArray(p.galleryImages) ? p.galleryImages.map(u => sanitizeMediaUrlForRead(u)).filter(Boolean) : p.galleryImages
+        }))
+      : [],
+    roles: canRoles ? (data.roles || []) : [],
     admins: safeAdmins,
-    subscribers: data.subscribers || [],
-    emailDispatchLogs: data.emailDispatchLogs || [],
-    smtpStatus: getSmtpStatus()
+    auditLogs: canAudit ? (data.auditLogs || []) : [],
+    settings: data.settings,
+    subscribers: canSettings ? (data.subscribers || []) : [],
+    emailDispatchLogs: canSettings ? (data.emailDispatchLogs || []) : [],
+    smtpStatus: canSettings ? getSmtpStatus() : { configured: false }
   });
 });
 
 // --- PARTY LEADERS MANAGEMENT ---
-app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leaders_party'), async (req: Request, res: Response) => {
+app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leaders_party', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  const body = req.body;
+  const body = req.body || {};
 
   if (!body.name || !body.position) {
     return res.status(400).json({ error: 'الاسم والمنصب القيادي حقول إلزامية' });
@@ -3155,16 +3479,17 @@ app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leade
 
   const newLeader = {
     id: 'lead-' + Date.now(),
-    name: body.name.trim(),
-    position: body.position.trim(),
+    name: String(body.name).trim(),
+    position: String(body.position).trim(),
     level: body.level || 'national',
-    governorate: body.governorate || '',
+    governorate: typeof body.governorate === 'string' ? body.governorate.trim() : '',
     specializedSecretariatId: typeof body.specializedSecretariatId === 'string' ? body.specializedSecretariatId.trim() : '',
-    bio: body.bio || '',
-    photoUrl: body.photoUrl ? persistDataUrlIfAny(body.photoUrl, 'party_leader') : '',
+    bio: typeof body.bio === 'string' ? body.bio.trim() : '',
+    photoUrl: body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'party_leader') : '',
     sortOrder: Number(body.sortOrder) || (data.partyLeaders.length + 1),
     isVisible: body.isVisible !== false,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
   data.partyLeaders.push(newLeader);
@@ -3173,7 +3498,7 @@ app.post('/api/admin/party-leaders', authenticateAdmin, requirePermission('leade
   res.json({ success: true, leader: newLeader });
 });
 
-app.put('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('leaders_party'), async (req: Request, res: Response) => {
+app.put('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('leaders_party', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const idx = data.partyLeaders.findIndex(l => l.id === req.params.id);
@@ -3181,15 +3506,26 @@ app.put('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('le
     return res.status(404).json({ error: 'القيادة غير موجودة' });
   }
 
-  const nextBody = { ...req.body };
-  if (typeof nextBody.name === 'string') nextBody.name = nextBody.name.trim();
-  if (typeof nextBody.position === 'string') nextBody.position = nextBody.position.trim();
-  if (nextBody.photoUrl) nextBody.photoUrl = persistDataUrlIfAny(nextBody.photoUrl, 'party_leader');
+  const existing = data.partyLeaders[idx];
+  const body = req.body || {};
+  const nextName = body.name !== undefined ? String(body.name).trim() : existing.name;
+  const nextPosition = body.position !== undefined ? String(body.position).trim() : existing.position;
+  if (!nextName || !nextPosition) {
+    return res.status(400).json({ error: 'الاسم والمنصب القيادي حقول إلزامية' });
+  }
 
   data.partyLeaders[idx] = {
-    ...data.partyLeaders[idx],
-    ...nextBody,
-    id: req.params.id,
+    ...existing,
+    name: nextName,
+    position: nextPosition,
+    level: body.level !== undefined ? body.level : existing.level,
+    governorate: body.governorate !== undefined ? String(body.governorate || '').trim() : existing.governorate,
+    specializedSecretariatId: body.specializedSecretariatId !== undefined ? String(body.specializedSecretariatId || '').trim() : existing.specializedSecretariatId,
+    bio: body.bio !== undefined ? String(body.bio || '').trim() : existing.bio,
+    photoUrl: body.photoUrl !== undefined ? (body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'party_leader') : '') : existing.photoUrl,
+    sortOrder: body.sortOrder !== undefined ? Number(body.sortOrder) : existing.sortOrder,
+    isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : existing.isVisible,
+    id: existing.id,
     updatedAt: new Date().toISOString()
   } as any;
   db.save();
@@ -3197,7 +3533,7 @@ app.put('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('le
   res.json({ success: true, leader: data.partyLeaders[idx] });
 });
 
-app.delete('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('leaders_party'), async (req: Request, res: Response) => {
+app.delete('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission('leaders_party', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const leader = data.partyLeaders.find(l => l.id === req.params.id);
@@ -3212,23 +3548,28 @@ app.delete('/api/admin/party-leaders/:id', authenticateAdmin, requirePermission(
 app.post('/api/admin/secretariat-leaders', authenticateAdmin, requirePermission('leaders_secretariat'), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  const body = req.body;
+  const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
 
   if (!body.name || !body.title) {
     return res.status(400).json({ error: 'الاسم والمسمى الوظيفي حقول إلزامية' });
   }
+  if (managedSecId && body.specializedSecretariatId && body.specializedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك إضافة قيادة خارج الأمانة التخصصية المسندة إليك' });
+  }
 
   const newLeader = {
     id: 'sec-lead-' + Date.now(),
-    name: body.name.trim(),
-    title: body.title.trim(),
-    specializedSecretariatId: body.specializedSecretariatId || '',
-    bio: body.bio || '',
-    photoUrl: body.photoUrl ? persistDataUrlIfAny(body.photoUrl, 'sec_leader') : '',
-    appointmentDate: body.appointmentDate || '',
+    name: String(body.name).trim(),
+    title: String(body.title).trim(),
+    specializedSecretariatId: managedSecId || (typeof body.specializedSecretariatId === 'string' ? body.specializedSecretariatId.trim() : ''),
+    bio: typeof body.bio === 'string' ? body.bio.trim() : '',
+    photoUrl: body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'sec_leader') : '',
+    appointmentDate: typeof body.appointmentDate === 'string' ? body.appointmentDate : '',
     sortOrder: Number(body.sortOrder) || (data.secretariatLeaders.length + 1),
     isVisible: body.isVisible !== false,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
   data.secretariatLeaders.push(newLeader);
@@ -3244,16 +3585,33 @@ app.put('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermissi
   if (idx === -1) {
     return res.status(404).json({ error: 'القيادة غير موجودة' });
   }
+  const existing = data.secretariatLeaders[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && existing.specializedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل قيادة تابعة لأمانة أخرى' });
+  }
 
-  const nextBody = { ...req.body };
-  if (typeof nextBody.name === 'string') nextBody.name = nextBody.name.trim();
-  if (typeof nextBody.title === 'string') nextBody.title = nextBody.title.trim();
-  if (nextBody.photoUrl) nextBody.photoUrl = persistDataUrlIfAny(nextBody.photoUrl, 'sec_leader');
+  const body = req.body || {};
+  if (managedSecId && body.specializedSecretariatId && body.specializedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكن نقل القيادة خارج أمانتك التخصصية' });
+  }
+  const nextName = body.name !== undefined ? String(body.name).trim() : existing.name;
+  const nextTitle = body.title !== undefined ? String(body.title).trim() : existing.title;
+  if (!nextName || !nextTitle) {
+    return res.status(400).json({ error: 'الاسم والمسمى الوظيفي حقول إلزامية' });
+  }
 
   data.secretariatLeaders[idx] = {
-    ...data.secretariatLeaders[idx],
-    ...nextBody,
-    id: req.params.id,
+    ...existing,
+    name: nextName,
+    title: nextTitle,
+    specializedSecretariatId: managedSecId || (body.specializedSecretariatId !== undefined ? String(body.specializedSecretariatId || '').trim() : existing.specializedSecretariatId),
+    bio: body.bio !== undefined ? String(body.bio || '').trim() : existing.bio,
+    photoUrl: body.photoUrl !== undefined ? (body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'sec_leader') : '') : existing.photoUrl,
+    appointmentDate: body.appointmentDate !== undefined ? String(body.appointmentDate || '') : existing.appointmentDate,
+    sortOrder: body.sortOrder !== undefined ? Number(body.sortOrder) : existing.sortOrder,
+    isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : existing.isVisible,
+    id: existing.id,
     updatedAt: new Date().toISOString()
   } as any;
   db.save();
@@ -3265,6 +3623,10 @@ app.delete('/api/admin/secretariat-leaders/:id', authenticateAdmin, requirePermi
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const leader = data.secretariatLeaders.find(l => l.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && (!leader || leader.specializedSecretariatId !== managedSecId)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية حذف قيادة خارج أمانتك التخصصية' });
+  }
   data.secretariatLeaders = data.secretariatLeaders.filter(l => l.id !== req.params.id);
   recordLocalTombstone(data, 'secretariat_leaders', req.params.id);
   db.save();
@@ -3360,10 +3722,10 @@ function isBannedSecName(name: string): boolean {
 }
 
 // --- SPECIALIZED SECRETARIATS MANAGEMENT ---
-app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
+app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secretariats', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  const body = req.body;
+  const body = req.body || {};
 
   if (!body.name || !String(body.name).trim()) {
     return res.status(400).json({ error: 'اسم الأمانة التخصصية إلزامي' });
@@ -3410,6 +3772,10 @@ app.post('/api/admin/secretariats', authenticateAdmin, requirePermission('secret
 app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && req.params.id !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل أمانة غير الأمانة المسندة إليك' });
+  }
   const idx = data.specializedSecretariats.findIndex(s => s.id === req.params.id);
   if (idx === -1) {
     return res.status(404).json({ error: 'الأمانة التخصصية غير موجودة' });
@@ -3435,7 +3801,7 @@ app.put('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('sec
   res.json({ success: true, secretariat: data.specializedSecretariats[idx] });
 });
 
-app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
+app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('secretariats', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const sec = data.specializedSecretariats.find(s => s.id === req.params.id);
@@ -3451,13 +3817,14 @@ app.delete('/api/admin/secretariats/:id', authenticateAdmin, requirePermission('
   res.json({ success: true });
 });
 
-// Save all secretariats (ordering, bulk changes, confirm)
-app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
+// Save all secretariats (ordering, bulk changes, confirm — properly tombstones removed items)
+app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermission('secretariats', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const list = req.body.secretariats;
 
   if (Array.isArray(list) && list.length > 0) {
+    const prevIds = new Set((data.specializedSecretariats || []).map(s => s.id).filter(Boolean));
     const seen = new Set<string>();
     const filtered: any[] = [];
     for (const item of list) {
@@ -3469,6 +3836,12 @@ app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermissio
         s => (item.id && s.id === item.id) || normalizeSecName(s.name) === key
       );
       filtered.push(normalizeSecretariatPayload(item, existingSec));
+    }
+    const nextIds = new Set(filtered.map(s => s.id).filter(Boolean));
+    for (const oldId of prevIds) {
+      if (!nextIds.has(oldId)) {
+        recordLocalTombstone(data, 'secretariats', oldId);
+      }
     }
     data.specializedSecretariats = filtered;
   }
@@ -3492,21 +3865,25 @@ app.post('/api/admin/secretariats/save-all', authenticateAdmin, requirePermissio
 app.post('/api/admin/secretariat-members', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  const body = req.body;
+  const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
 
   if (!body.name || !body.secretariatId || !body.role) {
     return res.status(400).json({ error: 'الاسم والأمانة والمسمى حقول إلزامية' });
+  }
+  if (managedSecId && body.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك إضافة أعضاء لأمانة غير الأمانة المسندة إليك' });
   }
 
   const newMember = {
     id: 'sm-' + Date.now(),
     memberId: body.memberId || '',
-    secretariatId: body.secretariatId,
+    secretariatId: managedSecId || body.secretariatId,
     tier: body.tier || 'member',
     bureauTitle: body.bureauTitle || '',
-    name: body.name.trim(),
-    role: body.role.trim(),
-    photoUrl: body.photoUrl ? persistDataUrlIfAny(body.photoUrl, 'sec_member') : '',
+    name: String(body.name).trim(),
+    role: String(body.role).trim(),
+    photoUrl: body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'sec_member') : '',
     phone: body.phone || '',
     email: body.email || '',
     assignmentDate: body.assignmentDate || '',
@@ -3527,16 +3904,36 @@ app.put('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermissi
   if (idx === -1) {
     return res.status(404).json({ error: 'العضو غير موجود' });
   }
+  const existing = data.secretariatMembers[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && existing.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل أعضاء أمانة أخرى' });
+  }
+  const body = req.body || {};
+  if (managedSecId && body.secretariatId && body.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك نقل عضو خارج أمانتك التخصصية' });
+  }
 
-  const nextBody = { ...req.body };
-  if (typeof nextBody.name === 'string') nextBody.name = nextBody.name.trim();
-  if (typeof nextBody.role === 'string') nextBody.role = nextBody.role.trim();
-  if (nextBody.photoUrl) nextBody.photoUrl = persistDataUrlIfAny(nextBody.photoUrl, 'sec_member');
+  const nextName = body.name !== undefined ? String(body.name).trim() : existing.name;
+  const nextRole = body.role !== undefined ? String(body.role).trim() : existing.role;
+  if (!nextName || !nextRole) {
+    return res.status(400).json({ error: 'الاسم والمسمى التنظيمي حقول إلزامية' });
+  }
 
   data.secretariatMembers[idx] = {
-    ...data.secretariatMembers[idx],
-    ...nextBody,
-    id: req.params.id,
+    ...existing,
+    memberId: body.memberId !== undefined ? String(body.memberId || '') : existing.memberId,
+    secretariatId: managedSecId || (body.secretariatId !== undefined ? String(body.secretariatId) : existing.secretariatId),
+    tier: body.tier !== undefined ? body.tier : existing.tier,
+    bureauTitle: body.bureauTitle !== undefined ? String(body.bureauTitle || '') : existing.bureauTitle,
+    name: nextName,
+    role: nextRole,
+    photoUrl: body.photoUrl !== undefined ? (body.photoUrl ? persistDataUrlIfAny(String(body.photoUrl), 'sec_member') : '') : existing.photoUrl,
+    phone: body.phone !== undefined ? String(body.phone || '') : existing.phone,
+    email: body.email !== undefined ? String(body.email || '') : existing.email,
+    assignmentDate: body.assignmentDate !== undefined ? String(body.assignmentDate || '') : existing.assignmentDate,
+    notes: body.notes !== undefined ? String(body.notes || '') : existing.notes,
+    id: existing.id,
     updatedAt: new Date().toISOString()
   };
   db.save();
@@ -3544,7 +3941,7 @@ app.put('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermissi
   res.json({ success: true, member: data.secretariatMembers[idx] });
 });
 
-app.post('/api/admin/secretariat-members/transfer', authenticateAdmin, requirePermission('secretariats'), async (req: Request, res: Response) => {
+app.post('/api/admin/secretariat-members/transfer', authenticateAdmin, requirePermission('secretariats', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const { memberId, targetSecretariatId, newRole, notes } = req.body;
   const data = db.get();
@@ -3592,6 +3989,10 @@ app.delete('/api/admin/secretariat-members/:id', authenticateAdmin, requirePermi
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const member = data.secretariatMembers.find(m => m.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && (!member || member.secretariatId !== managedSecId)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية إزالة عضو من أمانة أخرى' });
+  }
   data.secretariatMembers = data.secretariatMembers.filter(m => m.id !== req.params.id);
   recordLocalTombstone(data, 'secretariat_members', req.params.id);
   db.save();
@@ -3604,10 +4005,14 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
 
   const title = typeof body.title === 'string' ? body.title.trim() : '';
   if (!title) {
     return res.status(400).json({ error: 'اسم المبادرة إلزامي' });
+  }
+  if (managedSecId && body.authorSecretariatId && body.authorSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك إسناد المبادرة لأمانة خارج نطاقك' });
   }
 
   const slug = body.slug || title.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-') || ('init-' + Date.now());
@@ -3624,10 +4029,10 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
           imageUrl: a.imageUrl ? persistDataUrlIfAny(String(a.imageUrl), 'init_act') : '',
           authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
           authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
-          authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
+          authorSecretariatId: managedSecId || (typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : ''),
           publisherName: typeof a.publisherName === 'string' ? a.publisherName.trim() : '',
           publisherPosition: typeof a.publisherPosition === 'string' ? a.publisherPosition.trim() : '',
-          publisherSecretariatId: typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : ''
+          publisherSecretariatId: managedSecId || (typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : '')
         }))
     : [];
 
@@ -3650,10 +4055,10 @@ app.post('/api/admin/initiatives', authenticateAdmin, requirePermission('initiat
     galleryImages: rawGallery.map((img: string) => persistDataUrlIfAny(img, 'init_gallery')).filter(Boolean),
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
-    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    authorSecretariatId: managedSecId || (typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : ''),
     publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
     publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
-    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
+    publisherSecretariatId: managedSecId || (typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : ''),
     isVisible: body.isVisible !== false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -3692,7 +4097,17 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
   }
 
   const existing = data.initiatives[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && !isItemInManagedSecretariat(existing, managedSecId, managedSec?.name)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل مبادرة تابعة لأمانة أخرى أو للإدارة العامة' });
+  }
+
   const body = req.body || {};
+  if (managedSecId && body.authorSecretariatId && body.authorSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكن نقل المبادرة خارج أمانتك التخصصية' });
+  }
+
   const nextTitle = body.title !== undefined ? String(body.title).trim() : String(existing.title || '').trim();
   if (!nextTitle) {
     return res.status(400).json({ error: 'اسم المبادرة إلزامي' });
@@ -3717,10 +4132,10 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
               imageUrl: a.imageUrl ? persistDataUrlIfAny(String(a.imageUrl), 'init_act') : '',
               authorName: typeof a.authorName === 'string' ? a.authorName.trim() : '',
               authorPosition: typeof a.authorPosition === 'string' ? a.authorPosition.trim() : '',
-              authorSecretariatId: typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : '',
+              authorSecretariatId: managedSecId || (typeof a.authorSecretariatId === 'string' ? a.authorSecretariatId.trim() : ''),
               publisherName: typeof a.publisherName === 'string' ? a.publisherName.trim() : '',
               publisherPosition: typeof a.publisherPosition === 'string' ? a.publisherPosition.trim() : '',
-              publisherSecretariatId: typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : ''
+              publisherSecretariatId: managedSecId || (typeof a.publisherSecretariatId === 'string' ? a.publisherSecretariatId.trim() : '')
             }))
         : [])
     : existing.activities || [];
@@ -3740,7 +4155,6 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
 
   data.initiatives[idx] = {
     ...existing,
-    ...body,
     id: existing.id,
     slug: body.slug !== undefined && String(body.slug).trim() ? String(body.slug).trim() : (existing.slug || nextTitle.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-')),
     title: nextTitle,
@@ -3748,16 +4162,19 @@ app.put('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('init
     venue: body.venue !== undefined ? String(body.venue || '').trim() : ((existing as any).venue || ''),
     locationUrl: body.locationUrl !== undefined ? String(body.locationUrl || '').trim() : ((existing as any).locationUrl || ''),
     goals: nextGoals,
+    startDate: body.startDate !== undefined ? String(body.startDate || '') : existing.startDate,
+    endDate: body.endDate !== undefined ? String(body.endDate || '') : existing.endDate,
+    status: body.status !== undefined ? body.status : existing.status,
     activities: nextActivities,
     coverUrl: nextCoverUrl,
     logoUrl: nextLogoUrl,
     galleryImages: nextGalleryImages,
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
-    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    authorSecretariatId: managedSecId || (body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || '')),
     publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
     publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
-    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
+    publisherSecretariatId: managedSecId || (body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || '')),
     isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : (existing.isVisible !== false),
     updatedAt: new Date().toISOString()
   } as any;
@@ -3771,6 +4188,11 @@ app.delete('/api/admin/initiatives/:id', authenticateAdmin, requirePermission('i
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const init = data.initiatives.find(i => i.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && (!init || !isItemInManagedSecretariat(init, managedSecId, managedSec?.name))) {
+    return res.status(403).json({ error: 'لا تملك صلاحية حذف مبادرة خارج نطاق أمانتك' });
+  }
   data.initiatives = data.initiatives.filter(i => i.id !== req.params.id);
   recordLocalTombstone(data, 'initiatives', req.params.id);
   db.save();
@@ -3783,11 +4205,15 @@ app.post('/api/admin/news', authenticateAdmin, requirePermission('news'), async 
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
 
   const title = typeof body.title === 'string' ? body.title.trim() : '';
   const content = typeof body.content === 'string' ? body.content.trim() : '';
   if (!title || !content) {
     return res.status(400).json({ error: 'عنوان الخبر ومحتواه حقول إلزامية' });
+  }
+  if (managedSecId && body.linkedSecretariatId && body.linkedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك ربط الخبر بأمانة غير الأمانة المسندة إليك' });
   }
 
   const rawGallery = Array.isArray(body.galleryImages) ? body.galleryImages : [];
@@ -3800,17 +4226,17 @@ app.post('/api/admin/news', authenticateAdmin, requirePermission('news'), async 
     galleryImages: rawGallery.map((img: string) => persistDataUrlIfAny(img, 'news_gallery')).filter(Boolean),
     videoUrl: body.videoUrl ? persistDataUrlIfAny(body.videoUrl, 'news_video') : '',
     publishDate: body.publishDate || new Date().toISOString().split('T')[0],
-    linkedSecretariatId: body.linkedSecretariatId || '',
+    linkedSecretariatId: managedSecId || (body.linkedSecretariatId || ''),
     linkedInitiativeId: body.linkedInitiativeId || '',
     isFeatured: !!body.isFeatured,
     isUrgent: !!body.isUrgent,
     isDraft: !!body.isDraft,
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
-    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    authorSecretariatId: managedSecId || (typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : ''),
     publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
     publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
-    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
+    publisherSecretariatId: managedSecId || (typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : ''),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -3849,7 +4275,17 @@ app.put('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), asy
   }
 
   const existing = data.news[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && !isItemInManagedSecretariat(existing, managedSecId, managedSec?.name)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل خبر غير تابع لأمانتك التخصصية' });
+  }
+
   const body = req.body || {};
+  if (managedSecId && body.linkedSecretariatId && body.linkedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكن نقل الخبر إلى أمانة أخرى' });
+  }
+
   const nextTitle = body.title !== undefined ? String(body.title).trim() : String(existing.title || '').trim();
   const nextContent = body.content !== undefined ? String(body.content).trim() : String(existing.content || '').trim();
   if (!nextTitle || !nextContent) {
@@ -3879,7 +4315,6 @@ app.put('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), asy
 
   data.news[idx] = {
     ...existing,
-    ...body,
     id: existing.id,
     title: nextTitle,
     content: nextContent,
@@ -3888,12 +4323,17 @@ app.put('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), asy
     galleryImages: nextGalleryImages,
     videoUrl: nextVideoUrl,
     publishDate: body.publishDate !== undefined ? (String(body.publishDate || '').trim() || existing.publishDate || new Date().toISOString().split('T')[0]) : existing.publishDate,
+    linkedSecretariatId: managedSecId || (body.linkedSecretariatId !== undefined ? String(body.linkedSecretariatId || '') : existing.linkedSecretariatId),
+    linkedInitiativeId: body.linkedInitiativeId !== undefined ? String(body.linkedInitiativeId || '') : existing.linkedInitiativeId,
+    isFeatured: body.isFeatured !== undefined ? Boolean(body.isFeatured) : existing.isFeatured,
+    isUrgent: body.isUrgent !== undefined ? Boolean(body.isUrgent) : existing.isUrgent,
+    isDraft: body.isDraft !== undefined ? Boolean(body.isDraft) : existing.isDraft,
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
-    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    authorSecretariatId: managedSecId || (body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || '')),
     publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
     publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
-    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
+    publisherSecretariatId: managedSecId || (body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || '')),
     updatedAt: new Date().toISOString()
   } as any;
   db.save();
@@ -3925,6 +4365,11 @@ app.delete('/api/admin/news/:id', authenticateAdmin, requirePermission('news'), 
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const news = data.news.find(n => n.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && (!news || !isItemInManagedSecretariat(news, managedSecId, managedSec?.name))) {
+    return res.status(403).json({ error: 'لا تملك صلاحية حذف خبر خارج نطاق أمانتك' });
+  }
   data.news = data.news.filter(n => n.id !== req.params.id);
   recordLocalTombstone(data, 'news', req.params.id);
   db.save();
@@ -3937,6 +4382,8 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
 
   const title = typeof body.title === 'string' ? body.title.trim() : '';
   const dateTime = typeof body.dateTime === 'string' ? body.dateTime.trim() : '';
@@ -3956,13 +4403,13 @@ app.post('/api/admin/events', authenticateAdmin, requirePermission('events'), as
     dateTime,
     venue: (typeof body.venue === 'string' && body.venue.trim()) || 'مقر الحزب بقسم ثالث أكتوبر',
     locationUrl: typeof body.locationUrl === 'string' ? body.locationUrl.trim() : '',
-    organizer: (typeof body.organizer === 'string' && body.organizer.trim()) || 'أمانة قسم ثالث أكتوبر',
+    organizer: managedSec ? managedSec.name : ((typeof body.organizer === 'string' && body.organizer.trim()) || 'أمانة قسم ثالث أكتوبر'),
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
-    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    authorSecretariatId: managedSecId || (typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : ''),
     publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
     publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
-    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
+    publisherSecretariatId: managedSecId || (typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : ''),
     images: persistedImages,
     galleryImages: persistedImages,
     coverUrl: body.coverUrl ? persistDataUrlIfAny(body.coverUrl, 'event_cover') : (persistedImages[0] || ''),
@@ -4008,6 +4455,12 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
   }
 
   const existing = data.events[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && !isItemInManagedSecretariat(existing, managedSecId, managedSec?.name)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل فعالية تابعة لأمانة أخرى أو للإدارة العامة' });
+  }
+
   const body = req.body || {};
   const nextTitle = body.title !== undefined ? String(body.title).trim() : String(existing.title || '').trim();
   const nextDateTime = body.dateTime !== undefined ? String(body.dateTime).trim() : String(existing.dateTime || '').trim();
@@ -4024,21 +4477,21 @@ app.put('/api/admin/events/:id', authenticateAdmin, requirePermission('events'),
 
   data.events[idx] = {
     ...existing,
-    ...body,
     id: existing.id,
     title: nextTitle,
     dateTime: nextDateTime,
     description: body.description !== undefined ? String(body.description || '').trim() : (existing.description || ''),
     venue: body.venue !== undefined ? (String(body.venue || '').trim() || 'مقر الحزب بقسم ثالث أكتوبر') : existing.venue,
     locationUrl: body.locationUrl !== undefined ? String(body.locationUrl || '').trim() : ((existing as any).locationUrl || ''),
-    organizer: body.organizer !== undefined ? (String(body.organizer || '').trim() || 'أمانة قسم ثالث أكتوبر') : existing.organizer,
+    organizer: managedSec ? managedSec.name : (body.organizer !== undefined ? (String(body.organizer || '').trim() || 'أمانة قسم ثالث أكتوبر') : existing.organizer),
+    status: body.status !== undefined ? body.status : existing.status,
     postReport: body.postReport !== undefined ? String(body.postReport || '').trim() : (existing.postReport || ''),
     authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : (existing.authorName || ''),
     authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : (existing.authorPosition || ''),
-    authorSecretariatId: body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || ''),
+    authorSecretariatId: managedSecId || (body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : ((existing as any).authorSecretariatId || '')),
     publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : ((existing as any).publisherName || ''),
     publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : ((existing as any).publisherPosition || ''),
-    publisherSecretariatId: body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || ''),
+    publisherSecretariatId: managedSecId || (body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : ((existing as any).publisherSecretariatId || '')),
     images: persistedImages,
     galleryImages: persistedImages,
     coverUrl: body.coverUrl !== undefined ? (body.coverUrl ? persistDataUrlIfAny(String(body.coverUrl), 'event_cover') : (persistedImages[0] || '')) : (existing.coverUrl ? persistDataUrlIfAny(existing.coverUrl, 'event_cover') : (persistedImages[0] || '')),
@@ -4056,6 +4509,11 @@ app.delete('/api/admin/events/:id', authenticateAdmin, requirePermission('events
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const event = data.events.find(e => e.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && (!event || !isItemInManagedSecretariat(event, managedSecId, managedSec?.name))) {
+    return res.status(403).json({ error: 'لا تملك صلاحية حذف فعالية خارج نطاق أمانتك' });
+  }
   data.events = data.events.filter(e => e.id !== req.params.id);
   recordLocalTombstone(data, 'events', req.params.id);
   db.save();
@@ -4068,9 +4526,13 @@ app.post('/api/admin/media', authenticateAdmin, requirePermission('media'), asyn
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body || {};
+  const managedSecId = getManagedSecretariatId(admin);
 
   if (!body.title || !body.url) {
     return res.status(400).json({ error: 'العنوان ورابط الوسيط حقول إلزامية' });
+  }
+  if (managedSecId && body.linkedSecretariatId && body.linkedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك ربط الوسيط بأمانة غير أمانتك التخصصية' });
   }
 
   const newMedia = {
@@ -4083,15 +4545,15 @@ app.post('/api/admin/media', authenticateAdmin, requirePermission('media'), asyn
     albumName: body.albumName || 'عام',
     isSpecial: Boolean(body.isSpecial),
     specialCategory: body.specialCategory || '',
-    linkedSecretariatId: body.linkedSecretariatId || '',
+    linkedSecretariatId: managedSecId || (body.linkedSecretariatId || ''),
     linkedInitiativeId: body.linkedInitiativeId || '',
     linkedEventId: body.linkedEventId || '',
     authorName: typeof body.authorName === 'string' ? body.authorName.trim() : '',
     authorPosition: typeof body.authorPosition === 'string' ? body.authorPosition.trim() : '',
-    authorSecretariatId: typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : '',
+    authorSecretariatId: managedSecId || (typeof body.authorSecretariatId === 'string' ? body.authorSecretariatId.trim() : ''),
     publisherName: typeof body.publisherName === 'string' ? body.publisherName.trim() : '',
     publisherPosition: typeof body.publisherPosition === 'string' ? body.publisherPosition.trim() : '',
-    publisherSecretariatId: typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : '',
+    publisherSecretariatId: managedSecId || (typeof body.publisherSecretariatId === 'string' ? body.publisherSecretariatId.trim() : ''),
     isVisible: body.isVisible !== false,
     sortOrder: Number(body.sortOrder) || (data.media.length + 1),
     createdAt: new Date().toISOString(),
@@ -4112,21 +4574,40 @@ app.put('/api/admin/media/:id', authenticateAdmin, requirePermission('media'), a
     return res.status(404).json({ error: 'عنصر المعرض غير موجود' });
   }
 
-  const nextBody = { ...req.body };
-  if (typeof nextBody.title === 'string') nextBody.title = nextBody.title.trim();
-  if (typeof nextBody.authorName === 'string') nextBody.authorName = nextBody.authorName.trim();
-  if (typeof nextBody.authorPosition === 'string') nextBody.authorPosition = nextBody.authorPosition.trim();
-  if (typeof nextBody.authorSecretariatId === 'string') nextBody.authorSecretariatId = nextBody.authorSecretariatId.trim();
-  if (typeof nextBody.publisherName === 'string') nextBody.publisherName = nextBody.publisherName.trim();
-  if (typeof nextBody.publisherPosition === 'string') nextBody.publisherPosition = nextBody.publisherPosition.trim();
-  if (typeof nextBody.publisherSecretariatId === 'string') nextBody.publisherSecretariatId = nextBody.publisherSecretariatId.trim();
-  if (nextBody.url) nextBody.url = persistDataUrlIfAny(String(nextBody.url).trim(), 'media_item');
-  if (nextBody.thumbnail) nextBody.thumbnail = persistDataUrlIfAny(String(nextBody.thumbnail).trim(), 'media_thumb');
+  const existing = data.media[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && !isItemInManagedSecretariat(existing, managedSecId, managedSec?.name)) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل وسيط خارج نطاق أمانتك' });
+  }
+
+  const body = req.body || {};
+  if (managedSecId && body.linkedSecretariatId && body.linkedSecretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكن نقل الوسيط إلى أمانة أخرى' });
+  }
 
   data.media[idx] = {
-    ...data.media[idx],
-    ...nextBody,
-    id: req.params.id,
+    ...existing,
+    id: existing.id,
+    type: body.type !== undefined ? body.type : existing.type,
+    title: body.title !== undefined ? String(body.title).trim() : existing.title,
+    description: body.description !== undefined ? String(body.description || '') : existing.description,
+    url: body.url !== undefined ? persistDataUrlIfAny(String(body.url).trim(), 'media_item') : existing.url,
+    thumbnail: body.thumbnail !== undefined ? (body.thumbnail ? persistDataUrlIfAny(String(body.thumbnail).trim(), 'media_thumb') : '') : existing.thumbnail,
+    albumName: body.albumName !== undefined ? String(body.albumName || 'عام') : existing.albumName,
+    isSpecial: body.isSpecial !== undefined ? Boolean(body.isSpecial) : existing.isSpecial,
+    specialCategory: body.specialCategory !== undefined ? String(body.specialCategory || '') : existing.specialCategory,
+    linkedSecretariatId: managedSecId || (body.linkedSecretariatId !== undefined ? String(body.linkedSecretariatId || '') : existing.linkedSecretariatId),
+    linkedInitiativeId: body.linkedInitiativeId !== undefined ? String(body.linkedInitiativeId || '') : existing.linkedInitiativeId,
+    linkedEventId: body.linkedEventId !== undefined ? String(body.linkedEventId || '') : existing.linkedEventId,
+    authorName: body.authorName !== undefined ? String(body.authorName || '').trim() : existing.authorName,
+    authorPosition: body.authorPosition !== undefined ? String(body.authorPosition || '').trim() : existing.authorPosition,
+    authorSecretariatId: managedSecId || (body.authorSecretariatId !== undefined ? String(body.authorSecretariatId || '').trim() : (existing as any).authorSecretariatId),
+    publisherName: body.publisherName !== undefined ? String(body.publisherName || '').trim() : (existing as any).publisherName,
+    publisherPosition: body.publisherPosition !== undefined ? String(body.publisherPosition || '').trim() : (existing as any).publisherPosition,
+    publisherSecretariatId: managedSecId || (body.publisherSecretariatId !== undefined ? String(body.publisherSecretariatId || '').trim() : (existing as any).publisherSecretariatId),
+    isVisible: body.isVisible !== undefined ? Boolean(body.isVisible) : existing.isVisible,
+    sortOrder: body.sortOrder !== undefined ? Number(body.sortOrder) : existing.sortOrder,
     updatedAt: new Date().toISOString()
   } as any;
   db.save();
@@ -4138,6 +4619,11 @@ app.delete('/api/admin/media/:id', authenticateAdmin, requirePermission('media')
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const media = data.media.find(m => m.id === req.params.id);
+  const managedSecId = getManagedSecretariatId(admin);
+  const managedSec = managedSecId ? data.specializedSecretariats.find(s => s.id === managedSecId) : undefined;
+  if (managedSecId && (!media || !isItemInManagedSecretariat(media, managedSecId, managedSec?.name))) {
+    return res.status(403).json({ error: 'لا تملك صلاحية حذف وسيط خارج نطاق أمانتك' });
+  }
   data.media = data.media.filter(m => m.id !== req.params.id);
   recordLocalTombstone(data, 'media', req.params.id);
   db.save();
@@ -4146,12 +4632,18 @@ app.delete('/api/admin/media/:id', authenticateAdmin, requirePermission('media')
 });
 
 // --- LIVE STREAM MANAGEMENT ---
-app.put('/api/admin/livestream', authenticateAdmin, requirePermission('livestream'), async (req: Request, res: Response) => {
+app.put('/api/admin/livestream', authenticateAdmin, requirePermission('livestream', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
+  const body = req.body || {};
   data.liveStream = {
     ...data.liveStream,
-    ...req.body,
+    title: body.title !== undefined ? String(body.title).trim() : data.liveStream.title,
+    description: body.description !== undefined ? String(body.description) : data.liveStream.description,
+    streamUrl: body.streamUrl !== undefined ? String(body.streamUrl).trim() : data.liveStream.streamUrl,
+    isActive: body.isActive !== undefined ? Boolean(body.isActive) : data.liveStream.isActive,
+    platform: body.platform !== undefined ? body.platform : data.liveStream.platform,
+    scheduledTime: body.scheduledTime !== undefined ? String(body.scheduledTime || '') : data.liveStream.scheduledTime,
     updatedAt: new Date().toISOString()
   };
   db.save();
@@ -4160,7 +4652,7 @@ app.put('/api/admin/livestream', authenticateAdmin, requirePermission('livestrea
 });
 
 // --- MEMBERSHIP APPLICATIONS MANAGEMENT ---
-app.get('/api/admin/applications', authenticateAdmin, requirePermission('applications'), (req: Request, res: Response) => {
+app.get('/api/admin/applications', authenticateAdmin, requirePermission('applications', { disallowSpecialized: true }), (req: Request, res: Response) => {
   const data = db.get();
   const search = req.query.search ? String(req.query.search).trim().toLowerCase() : '';
   const status = req.query.status ? String(req.query.status).trim() : '';
@@ -4180,8 +4672,8 @@ app.get('/api/admin/applications', authenticateAdmin, requirePermission('applica
   res.json(list);
 });
 
-// Export Applications to Excel CSV with UTF-8 BOM
-app.get('/api/admin/applications/export-excel', authenticateAdmin, requirePermission('applications'), (req: Request, res: Response) => {
+// Export Applications to Excel CSV with UTF-8 BOM + CSV formula injection defense
+app.get('/api/admin/applications/export-excel', authenticateAdmin, requirePermission('applications', { disallowSpecialized: true }), (req: Request, res: Response) => {
   const data = db.get();
   const status = req.query.status ? String(req.query.status).trim() : '';
   let list = data.applications;
@@ -4189,9 +4681,13 @@ app.get('/api/admin/applications/export-excel', authenticateAdmin, requirePermis
     list = list.filter(a => a.status === status);
   }
 
-  // Helper to escape CSV cell content
+  // Helper to escape CSV cell content and neutralize spreadsheet formulas (=, +, -, @, tab, cr)
   const esc = (val: any) => {
-    const s = String(val ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ');
+    let raw = String(val ?? '').replace(/\r?\n/g, ' ');
+    if (/^[=+\-@\t\r]/.test(raw)) {
+      raw = `'${raw}`;
+    }
+    const s = raw.replace(/"/g, '""');
     return `"${s}"`;
   };
 
@@ -4253,7 +4749,7 @@ app.get('/api/admin/applications/export-excel', authenticateAdmin, requirePermis
   res.send(csvContent);
 });
 
-app.put('/api/admin/applications/:id', authenticateAdmin, requirePermission('applications'), async (req: Request, res: Response) => {
+app.put('/api/admin/applications/:id', authenticateAdmin, requirePermission('applications', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const idx = data.applications.findIndex(a => a.id === req.params.id);
@@ -4261,12 +4757,21 @@ app.put('/api/admin/applications/:id', authenticateAdmin, requirePermission('app
     return res.status(404).json({ error: 'الطلب غير موجود' });
   }
 
-  const prevStatus = data.applications[idx].status;
-  const updatedStatus = req.body.status || prevStatus;
+  const existing = data.applications[idx];
+  const body = req.body || {};
+  const allowedStatuses = new Set(['جديد', 'قيد المراجعة', 'مطلوب استكمال', 'مقبول', 'مرفوض']);
+  const prevStatus = existing.status;
+  const updatedStatus = body.status && allowedStatuses.has(String(body.status)) ? body.status : prevStatus;
 
   data.applications[idx] = {
-    ...data.applications[idx],
-    ...req.body,
+    ...existing,
+    status: updatedStatus,
+    internalNotes: body.internalNotes !== undefined ? String(body.internalNotes || '') : existing.internalNotes,
+    fullName: body.fullName !== undefined ? String(body.fullName || '').trim() : existing.fullName,
+    phone: body.phone !== undefined ? String(body.phone || '').trim() : existing.phone,
+    whatsapp: body.whatsapp !== undefined ? String(body.whatsapp || '').trim() : existing.whatsapp,
+    email: body.email !== undefined ? String(body.email || '').trim() : existing.email,
+    address: body.address !== undefined ? String(body.address || '').trim() : existing.address,
     reviewedBy: admin.name + ` (${admin.email})`,
     reviewedAt: new Date().toISOString()
   };
@@ -4277,14 +4782,14 @@ app.put('/api/admin/applications/:id', authenticateAdmin, requirePermission('app
     admin.name,
     'مراجعة طلب انضمام',
     'Application',
-    `تغيير حالة طلب ${data.applications[idx].applicationNumber} للمواطن ${data.applications[idx].fullName} من [${prevStatus}] إلى [${updatedStatus}]. ملاحظات: ${req.body.internalNotes || 'لا يوجد'}`,
+    `تغيير حالة طلب ${data.applications[idx].applicationNumber} للمواطن ${data.applications[idx].fullName} من [${prevStatus}] إلى [${updatedStatus}]. ملاحظات: ${data.applications[idx].internalNotes || 'لا يوجد'}`,
     req.params.id
   );
   res.json({ success: true, application: data.applications[idx] });
 });
 
 // Convert Accepted Application into Official Member in Registry
-app.post('/api/admin/applications/:id/convert-to-member', authenticateAdmin, requirePermission('members'), async (req: Request, res: Response) => {
+app.post('/api/admin/applications/:id/convert-to-member', authenticateAdmin, requirePermission('members', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const appItem = data.applications.find(a => a.id === req.params.id);
@@ -4367,9 +4872,12 @@ app.post('/api/admin/applications/:id/convert-to-member', authenticateAdmin, req
 });
 
 // --- CENTRAL MEMBERS REGISTRY & ASSIGNMENTS ---
-app.get('/api/admin/members', authenticateAdmin, requirePermission('members'), (_req: Request, res: Response) => {
+app.get('/api/admin/members', authenticateAdmin, requirePermission('members'), (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  res.json(data.members);
+  const managedSecId = getManagedSecretariatId(admin);
+  const list = managedSecId ? data.members.filter(m => m.secretariatId === managedSecId) : data.members;
+  res.json(list);
 });
 
 app.put('/api/admin/members/:id', authenticateAdmin, requirePermission('members'), async (req: Request, res: Response) => {
@@ -4379,13 +4887,27 @@ app.put('/api/admin/members/:id', authenticateAdmin, requirePermission('members'
   if (idx === -1) {
     return res.status(404).json({ error: 'العضو غير موجود' });
   }
+  const existing = data.members[idx];
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && existing.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل عضو من أمانة أخرى' });
+  }
+  const body = req.body || {};
+  if (managedSecId && body.secretariatId && body.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك نقل العضو خارج أمانتك التخصصية' });
+  }
 
   data.members[idx] = {
-    ...data.members[idx],
-    ...req.body,
-    id: req.params.id,
+    ...existing,
+    fullName: body.fullName !== undefined ? String(body.fullName).trim() : existing.fullName,
+    phone: body.phone !== undefined ? String(body.phone || '').trim() : existing.phone,
+    email: body.email !== undefined ? String(body.email || '').trim() : existing.email,
+    address: body.address !== undefined ? String(body.address || '').trim() : existing.address,
+    title: body.title !== undefined ? String(body.title || '').trim() : existing.title,
+    secretariatId: managedSecId || (body.secretariatId !== undefined ? body.secretariatId : existing.secretariatId),
+    id: existing.id,
     updatedAt: new Date().toISOString()
-  };
+  } as any;
 
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل بيانات عضو بالسجل', 'Member', `تحديث ملف العضو: ${data.members[idx].fullName}`, req.params.id);
@@ -4401,8 +4923,17 @@ app.post('/api/admin/members/:id/assignment', authenticateAdmin, requirePermissi
     return res.status(404).json({ error: 'العضو غير موجود' });
   }
 
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && member.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية تعديل تكليف عضو في أمانة أخرى' });
+  }
+
   const { title, secretariatId, notes } = req.body;
-  const sec = data.specializedSecretariats.find(s => s.id === secretariatId);
+  if (managedSecId && secretariatId && secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا يمكنك نقل تكليف العضو خارج الأمانة المسندة إليك' });
+  }
+  const effectiveSecretariatId = managedSecId || secretariatId;
+  const sec = data.specializedSecretariats.find(s => s.id === effectiveSecretariatId);
 
   // Close previous assignment if active
   if (member.assignmentHistory.length > 0 && !member.assignmentHistory[0].endDate) {
@@ -4412,7 +4943,7 @@ app.post('/api/admin/members/:id/assignment', authenticateAdmin, requirePermissi
   const newAssignment = {
     id: 'asg-' + Date.now(),
     title: title || member.title,
-    secretariatId: secretariatId || member.secretariatId,
+    secretariatId: effectiveSecretariatId || member.secretariatId,
     secretariatName: sec?.name || 'أمانة قسم ثالث أكتوبر',
     startDate: new Date().toISOString().split('T')[0],
     assignedBy: admin.name,
@@ -4427,13 +4958,13 @@ app.post('/api/admin/members/:id/assignment', authenticateAdmin, requirePermissi
   // Sync with secretariatMembers
   const secMember = data.secretariatMembers.find(sm => sm.memberId === member.id);
   if (secMember) {
-    if (secretariatId) secMember.secretariatId = secretariatId;
+    if (effectiveSecretariatId) secMember.secretariatId = effectiveSecretariatId;
     secMember.role = member.title;
-  } else if (secretariatId) {
+  } else if (effectiveSecretariatId) {
     data.secretariatMembers.push({
       id: 'sm-' + Date.now(),
       memberId: member.id,
-      secretariatId,
+      secretariatId: effectiveSecretariatId,
       name: member.fullName,
       role: member.title,
       photoUrl: member.photoUrl,
@@ -4456,6 +4987,10 @@ app.put('/api/admin/members/:id/end-assignment', authenticateAdmin, requirePermi
   if (!member) {
     return res.status(404).json({ error: 'العضو غير موجود' });
   }
+  const managedSecId = getManagedSecretariatId(admin);
+  if (managedSecId && member.secretariatId !== managedSecId) {
+    return res.status(403).json({ error: 'لا تملك صلاحية إنهاء تكليف عضو خارج أمانتك' });
+  }
 
   member.assignmentStatus = 'منتهي';
   if (member.assignmentHistory.length > 0 && !member.assignmentHistory[0].endDate) {
@@ -4474,15 +5009,15 @@ app.put('/api/admin/members/:id/end-assignment', authenticateAdmin, requirePermi
 });
 
 // --- ADMIN USERS & PERMISSIONS MANAGEMENT ---
-app.get('/api/admin/users', authenticateAdmin, requirePermission('admins'), (_req: Request, res: Response) => {
+app.get('/api/admin/users', authenticateAdmin, requirePermission('admins', { disallowSpecialized: true }), (_req: Request, res: Response) => {
   const data = db.get();
   const safe = data.admins.map(({ passwordHash, ...rest }) => rest);
   res.json(safe);
 });
 
-app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), async (req: Request, res: Response) => {
+app.post('/api/admin/users', authenticateAdmin, requirePermission('admins', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
-  const { email, phone, name, password, role, roleId, permissions, adminScope, managedSecretariatId } = req.body;
+  const { email, phone, name, password, role, roleId, permissions, adminScope, managedSecretariatId } = req.body || {};
 
   const cleanName = String(name || '').trim();
   const cleanEmail = String(email || '').trim().toLowerCase();
@@ -4510,7 +5045,11 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
     return res.status(400).json({ error: 'رقم الهاتف مسجل مسبقاً لمشرف آخر' });
   }
 
-  let userPerms = Array.isArray(permissions) ? permissions : [];
+  if (role === 'super_admin' && admin.role !== 'super_admin') {
+    return res.status(403).json({ error: 'فقط المدير العام الرئيسي (Super Admin) يمكنه إنشاء حساب مدير عام' });
+  }
+
+  let userPerms = Array.isArray(permissions) ? permissions.map(String) : [];
   if (roleId && userPerms.length === 0) {
     const matchedRole = (data.roles || []).find(r => r.id === roleId);
     if (matchedRole) {
@@ -4518,8 +5057,20 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
     }
   }
 
-  // Only super_admin can create another super_admin
+  // Prevent privilege escalation: sub_admin can only assign permissions they personally hold
+  if (admin.role !== 'super_admin') {
+    const callerPerms = resolveAdminPermissions(admin);
+    const forbidden = userPerms.filter(p => !callerPerms.has(p) || p === 'admins' || p === 'roles');
+    if (forbidden.length > 0) {
+      return res.status(403).json({ error: 'لا يمكنك منح صلاحيات تتجاوز صلاحياتك أو صلاحيات إدارة المشرفين/الأدوار' });
+    }
+  }
+
   const requestedRole = (role === 'super_admin' && admin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
+  const normalizedScope = adminScope === 'specialized' ? 'specialized' : 'general';
+  if (normalizedScope === 'specialized' && !managedSecretariatId) {
+    return res.status(400).json({ error: 'يرجى تحديد الأمانة التخصصية المسندة للمشرف' });
+  }
 
   const nowIso = new Date().toISOString();
   const newAdmin: AdminUser = {
@@ -4530,10 +5081,11 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
     passwordHash: hashPassword(rawPass),
     role: requestedRole,
     roleId: roleId || undefined,
-    adminScope: adminScope === 'specialized' ? 'specialized' : 'general',
-    managedSecretariatId: adminScope === 'specialized' ? managedSecretariatId : undefined,
+    adminScope: normalizedScope,
+    managedSecretariatId: normalizedScope === 'specialized' ? String(managedSecretariatId) : undefined,
     permissions: requestedRole === 'super_admin' ? ['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'applications', 'members', 'pages', 'news', 'events', 'media', 'livestream', 'roles', 'admins', 'settings', 'audit'] : (userPerms.length > 0 ? userPerms : ['news', 'events']),
     isActive: true,
+    tokenVersion: 1,
     createdAt: nowIso,
     updatedAt: nowIso
   };
@@ -4548,7 +5100,7 @@ app.post('/api/admin/users', authenticateAdmin, requirePermission('admins'), asy
   res.json({ success: true, user: safe });
 });
 
-app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), async (req: Request, res: Response) => {
+app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const currentAdmin = (req as any).admin as AdminUser;
   const data = db.get();
   const idx = data.admins.findIndex(a => a.id === req.params.id);
@@ -4557,10 +5109,9 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   }
 
   const target = data.admins[idx];
-  const { email, phone, name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body;
+  const { email, phone, name, password, role, roleId, permissions, isActive, adminScope, managedSecretariatId } = req.body || {};
   const isProtectedOwner = ['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((target.email || '').toLowerCase());
 
-  // Protect main super admin accounts
   if (isProtectedOwner) {
     if (isActive === false) {
       return res.status(400).json({ error: 'لا يمكن تعطيل حساب المدير الرئيسي للمنصة' });
@@ -4573,6 +5124,15 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   // Only super_admin can edit a super_admin or promote someone to super_admin
   if ((target.role === 'super_admin' || role === 'super_admin') && currentAdmin.role !== 'super_admin') {
     return res.status(403).json({ error: 'صلاحية المدير العام الرئيسي (Super Admin) محصورة لمدير المنصة فقط' });
+  }
+
+  // Prevent sub_admin privilege escalation
+  if (currentAdmin.role !== 'super_admin' && Array.isArray(permissions)) {
+    const callerPerms = resolveAdminPermissions(currentAdmin);
+    const forbidden = permissions.map(String).filter(p => !callerPerms.has(p) || p === 'admins' || p === 'roles');
+    if (forbidden.length > 0) {
+      return res.status(403).json({ error: 'لا يمكنك منح صلاحيات تتجاوز صلاحياتك' });
+    }
   }
 
   const nextEmail = email !== undefined && !isProtectedOwner ? String(email || '').trim().toLowerCase() : (target.email || '');
@@ -4594,8 +5154,12 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
     return res.status(400).json({ error: 'رقم الهاتف مسجل مسبقاً لمشرف آخر' });
   }
 
+  let shouldRotateSession = false;
   if (typeof name === 'string' && name.trim()) target.name = name.trim();
-  if (email !== undefined && !isProtectedOwner) target.email = nextEmail;
+  if (email !== undefined && !isProtectedOwner && nextEmail !== target.email) {
+    target.email = nextEmail;
+    shouldRotateSession = true;
+  }
   if (phone !== undefined) target.phone = nextPhone || undefined;
 
   if (password !== undefined && String(password).trim() !== '') {
@@ -4604,15 +5168,37 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
       return res.status(400).json({ error: 'كلمة المرور يجب أن لا تقل عن 4 أرقام أو أحرف' });
     }
     target.passwordHash = hashPassword(rawPass);
+    shouldRotateSession = true;
   }
   if (role) {
-    target.role = (role === 'super_admin' && currentAdmin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
+    const nextRole = (role === 'super_admin' && currentAdmin.role === 'super_admin') ? 'super_admin' : 'sub_admin';
+    if (nextRole !== target.role) shouldRotateSession = true;
+    target.role = nextRole;
   }
-  if (roleId !== undefined) target.roleId = roleId;
-  if (adminScope) target.adminScope = adminScope;
-  if ('managedSecretariatId' in req.body) target.managedSecretariatId = managedSecretariatId;
-  if (Array.isArray(permissions)) target.permissions = permissions;
-  if (typeof isActive === 'boolean') target.isActive = isActive;
+  if (roleId !== undefined) {
+    if (roleId !== target.roleId) shouldRotateSession = true;
+    target.roleId = roleId;
+  }
+  if (adminScope) {
+    const nextScope = adminScope === 'specialized' ? 'specialized' : 'general';
+    if (nextScope !== target.adminScope) shouldRotateSession = true;
+    target.adminScope = nextScope;
+  }
+  if ('managedSecretariatId' in (req.body || {})) {
+    if (managedSecretariatId !== target.managedSecretariatId) shouldRotateSession = true;
+    target.managedSecretariatId = target.adminScope === 'specialized' ? managedSecretariatId : undefined;
+  }
+  if (Array.isArray(permissions)) {
+    target.permissions = permissions.map(String);
+    shouldRotateSession = true;
+  }
+  if (typeof isActive === 'boolean') {
+    if (isActive !== target.isActive) shouldRotateSession = true;
+    target.isActive = isActive;
+  }
+  if (shouldRotateSession) {
+    target.tokenVersion = Number(target.tokenVersion ?? 1) + 1;
+  }
   target.updatedAt = new Date().toISOString();
 
   db.save();
@@ -4622,7 +5208,7 @@ app.put('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), 
   res.json({ success: true, user: safe });
 });
 
-app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'), async (req: Request, res: Response) => {
+app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const currentAdmin = (req as any).admin as AdminUser;
   const data = db.get();
   const target = data.admins.find(a => a.id === req.params.id);
@@ -4632,6 +5218,9 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
   if (['moazmahmoud586@gmail.com', 'm63502205@gmail.com'].includes((target.email || '').toLowerCase())) {
     return res.status(400).json({ error: 'لا يمكن حذف حساب المدير الرئيسي للمنصة' });
   }
+  if (target.role === 'super_admin' && currentAdmin.role !== 'super_admin') {
+    return res.status(403).json({ error: 'لا يمكن حذف حساب مدير عام إلا من قِبل مدير عام آخر' });
+  }
 
   data.admins = data.admins.filter(a => a.id !== req.params.id);
   db.save();
@@ -4640,12 +5229,12 @@ app.delete('/api/admin/users/:id', authenticateAdmin, requirePermission('admins'
 });
 
 // --- CMS STATIC PAGES MANAGEMENT ---
-app.get('/api/admin/pages', authenticateAdmin, requirePermission('pages'), (_req: Request, res: Response) => {
+app.get('/api/admin/pages', authenticateAdmin, requirePermission('pages', { disallowSpecialized: true }), (_req: Request, res: Response) => {
   const data = db.get();
   res.json(data.pages || []);
 });
 
-app.post('/api/admin/pages', authenticateAdmin, requirePermission('pages'), async (req: Request, res: Response) => {
+app.post('/api/admin/pages', authenticateAdmin, requirePermission('pages', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   const body = req.body || {};
@@ -4682,7 +5271,7 @@ app.post('/api/admin/pages', authenticateAdmin, requirePermission('pages'), asyn
   res.json({ success: true, page: newPage });
 });
 
-app.put('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages'), async (req: Request, res: Response) => {
+app.put('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.pages) data.pages = [];
@@ -4715,10 +5304,13 @@ app.put('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages'), a
 
   data.pages[idx] = {
     ...existing,
-    ...body,
-    id: req.params.id,
+    id: existing.id,
     title: nextTitle,
     slug: nextSlug,
+    subtitle: body.subtitle !== undefined ? String(body.subtitle || '').trim() : existing.subtitle,
+    content: body.content !== undefined ? String(body.content || '') : existing.content,
+    metaDescription: body.metaDescription !== undefined ? String(body.metaDescription || '').trim() : existing.metaDescription,
+    isPublished: body.isPublished !== undefined ? Boolean(body.isPublished) : existing.isPublished,
     coverImage: nextCoverImage,
     galleryImages: nextGalleryImages,
     updatedAt: new Date().toISOString()
@@ -4728,7 +5320,7 @@ app.put('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages'), a
   res.json({ success: true, page: data.pages[idx] });
 });
 
-app.delete('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages'), async (req: Request, res: Response) => {
+app.delete('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.pages) data.pages = [];
@@ -4741,15 +5333,15 @@ app.delete('/api/admin/pages/:id', authenticateAdmin, requirePermission('pages')
 });
 
 // --- GRANULAR ROLES & RBAC MANAGEMENT ---
-app.get('/api/admin/roles', authenticateAdmin, (_req: Request, res: Response) => {
+app.get('/api/admin/roles', authenticateAdmin, requireAnyPermission(['roles', 'admins'], { disallowSpecialized: true }), (_req: Request, res: Response) => {
   const data = db.get();
   res.json(data.roles || []);
 });
 
-app.post('/api/admin/roles', authenticateAdmin, requirePermission('roles'), async (req: Request, res: Response) => {
+app.post('/api/admin/roles', authenticateAdmin, requirePermission('roles', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
-  const body = req.body;
+  const body = req.body || {};
 
   if (!body.name) {
     return res.status(400).json({ error: 'اسم الدور الإداري إلزامي' });
@@ -4757,10 +5349,10 @@ app.post('/api/admin/roles', authenticateAdmin, requirePermission('roles'), asyn
 
   const newRole = {
     id: 'role-' + Date.now(),
-    name: body.name.trim(),
+    name: String(body.name).trim(),
     description: body.description || '',
     isSystem: false,
-    permissions: Array.isArray(body.permissions) ? body.permissions : [],
+    permissions: Array.isArray(body.permissions) ? body.permissions.map(String) : [],
     createdAt: new Date().toISOString()
   };
 
@@ -4771,7 +5363,7 @@ app.post('/api/admin/roles', authenticateAdmin, requirePermission('roles'), asyn
   res.json({ success: true, role: newRole });
 });
 
-app.put('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles'), async (req: Request, res: Response) => {
+app.put('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.roles) data.roles = [];
@@ -4779,20 +5371,28 @@ app.put('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles'), a
   if (idx === -1) {
     return res.status(404).json({ error: 'الدور غير موجود' });
   }
+  const existing = data.roles[idx];
+  const body = req.body || {};
+  const nextName = body.name !== undefined ? String(body.name).trim() : existing.name;
+  if (!nextName) {
+    return res.status(400).json({ error: 'اسم الدور الإداري إلزامي' });
+  }
 
   data.roles[idx] = {
-    ...data.roles[idx],
-    ...req.body,
-    id: req.params.id,
-    isSystem: data.roles[idx].isSystem, // protect system flag
+    ...existing,
+    id: existing.id,
+    name: nextName,
+    description: body.description !== undefined ? String(body.description || '') : existing.description,
+    permissions: Array.isArray(body.permissions) ? body.permissions.map(String) : existing.permissions,
+    isSystem: existing.isSystem,
     updatedAt: new Date().toISOString()
-  };
+  } as any;
   db.save();
   db.addAuditLog(admin.email, admin.name, 'تعديل دور إداري (RBAC)', 'AdminRole', `تم تعديل دور: ${data.roles[idx].name}`, req.params.id);
   res.json({ success: true, role: data.roles[idx] });
 });
 
-app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles'), async (req: Request, res: Response) => {
+app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.roles) data.roles = [];
@@ -4807,8 +5407,8 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles')
   res.json({ success: true });
 });
 
-// Upload API
-app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) => {
+// Upload API (requires content/management permission)
+app.post('/api/admin/upload', authenticateAdmin, requireAnyPermission(['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'news', 'events', 'media', 'pages', 'settings']), (req: Request, res: Response) => {
   const { data: fileData } = req.body || {};
   if (!fileData || typeof fileData !== 'string') {
     return res.status(400).json({ error: 'لم يتم إرسال أي ملف صالح للرفع' });
@@ -4824,11 +5424,16 @@ app.post('/api/admin/upload', authenticateAdmin, (req: Request, res: Response) =
 });
 
 // --- SETTINGS MANAGEMENT ---
-app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'), async (req: Request, res: Response) => {
+app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   
-  const body = { ...req.body };
+  const rawBody = { ...(req.body || {}) };
+  // Protect internal version fields from tampering via API body
+  delete rawBody.secretariatsVersion;
+  delete rawBody.rosterVersion;
+  const body = rawBody;
+
   // Sanitize any large base64 media payloads to disk files
   if (body.officialLogo) body.officialLogo = persistDataUrlIfAny(body.officialLogo, 'logo');
   if (body.seoShareImage) body.seoShareImage = persistDataUrlIfAny(body.seoShareImage, 'seo_share');
@@ -4849,6 +5454,8 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
   data.settings = {
     ...data.settings,
     ...body,
+    secretariatsVersion: data.settings.secretariatsVersion,
+    rosterVersion: data.settings.rosterVersion,
     updatedAt: new Date().toISOString()
   };
   db.save();
@@ -4860,13 +5467,84 @@ app.put('/api/admin/settings', authenticateAdmin, requirePermission('settings'),
 });
 
 // --- AUDIT LOGS ---
-app.get('/api/admin/audit-logs', authenticateAdmin, requirePermission('audit'), (_req: Request, res: Response) => {
+app.get('/api/admin/audit-logs', authenticateAdmin, requirePermission('audit', { disallowSpecialized: true }), (_req: Request, res: Response) => {
   const data = db.get();
   res.json(data.auditLogs);
 });
 
+// --- BACKUP & RESTORE APIS (Super Admin Only) ---
+app.get('/api/admin/backup/export', authenticateAdmin, requireSuperAdmin, (_req: Request, res: Response) => {
+  const data = db.get();
+  const exportedAt = new Date().toISOString();
+  const serializedDb = JSON.stringify(data, null, 2);
+  const sha256 = crypto.createHash('sha256').update(serializedDb).digest('hex');
+  const counts = {
+    partyLeaders: (data.partyLeaders || []).length,
+    secretariatLeaders: (data.secretariatLeaders || []).length,
+    specializedSecretariats: (data.specializedSecretariats || []).length,
+    secretariatMembers: (data.secretariatMembers || []).length,
+    initiatives: (data.initiatives || []).length,
+    news: (data.news || []).length,
+    events: (data.events || []).length,
+    media: (data.media || []).length,
+    applications: (data.applications || []).length,
+    members: (data.members || []).length,
+    admins: (data.admins || []).length,
+    pages: (data.pages || []).length
+  };
+  const payload = {
+    success: true,
+    exportedAt,
+    schemaVersion: 1,
+    sha256,
+    counts,
+    database: data
+  };
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="nfp_backup_${exportedAt.slice(0, 10)}.json"`);
+  res.send(JSON.stringify(payload, null, 2));
+});
+
+app.post('/api/admin/backup/restore', authenticateAdmin, requireSuperAdmin, (req: Request, res: Response) => {
+  const admin = (req as any).admin as AdminUser;
+  const incoming = req.body?.database || req.body;
+  if (!incoming || typeof incoming !== 'object' || !incoming.settings || !Array.isArray(incoming.specializedSecretariats)) {
+    return res.status(400).json({ error: 'ملف النسخة الاحتياطية غير صالح أو ينقصه بيانات أساسية' });
+  }
+  try {
+    const preRestoreDir = path.resolve(process.cwd(), 'backups');
+    if (!fs.existsSync(preRestoreDir)) fs.mkdirSync(preRestoreDir, { recursive: true });
+    const safetyFile = path.join(preRestoreDir, `pre_restore_${Date.now()}.json`);
+    fs.writeFileSync(safetyFile, JSON.stringify(db.get(), null, 2), 'utf-8');
+
+    const current = db.get();
+    const restored: AppDatabase = {
+      ...current,
+      ...incoming,
+      admins: Array.isArray(incoming.admins) && incoming.admins.length > 0 ? incoming.admins : current.admins
+    };
+    db.save(restored);
+    db.addAuditLog(admin.email, admin.name, 'استعادة نسخة احتياطية', 'System', 'تمت استعادة قاعدة البيانات من نسخة احتياطية معتمدة بعد إنشاء نسخة أمان تلقائية');
+    return res.json({
+      success: true,
+      message: 'تمت استعادة النسخة الاحتياطية والتحقق من سلامتها بنجاح',
+      preRestoreBackupFile: path.basename(safetyFile),
+      counts: {
+        secretariats: (restored.specializedSecretariats || []).length,
+        news: (restored.news || []).length,
+        events: (restored.events || []).length,
+        media: (restored.media || []).length,
+        admins: (restored.admins || []).length
+      }
+    });
+  } catch (err) {
+    console.error('Backup restore failed:', err);
+    return res.status(500).json({ error: 'تعذر استعادة النسخة الاحتياطية' });
+  }
+});
+
 // --- EMAIL SUBSCRIBERS & INSTANT ALERTS MANAGEMENT ---
-app.get('/api/admin/subscribers', authenticateAdmin, (_req: Request, res: Response) => {
+app.get('/api/admin/subscribers', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), (_req: Request, res: Response) => {
   const data = db.get();
   res.json({
     subscribers: data.subscribers || [],
@@ -4875,7 +5553,7 @@ app.get('/api/admin/subscribers', authenticateAdmin, (_req: Request, res: Respon
   });
 });
 
-app.post('/api/admin/subscribers/:id/toggle', authenticateAdmin, async (req: Request, res: Response) => {
+app.post('/api/admin/subscribers/:id/toggle', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.subscribers) data.subscribers = [];
@@ -4890,7 +5568,7 @@ app.post('/api/admin/subscribers/:id/toggle', authenticateAdmin, async (req: Req
   res.json({ success: true, subscriber: sub });
 });
 
-app.delete('/api/admin/subscribers/:id', authenticateAdmin, async (req: Request, res: Response) => {
+app.delete('/api/admin/subscribers/:id', authenticateAdmin, requirePermission('settings', { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const data = db.get();
   if (!data.subscribers) data.subscribers = [];
@@ -4901,7 +5579,7 @@ app.delete('/api/admin/subscribers/:id', authenticateAdmin, async (req: Request,
   res.json({ success: true });
 });
 
-app.post('/api/admin/subscribers/dispatch-item', authenticateAdmin, async (req: Request, res: Response) => {
+app.post('/api/admin/subscribers/dispatch-item', authenticateAdmin, requireAnyPermission(['settings', 'news', 'events', 'initiatives'], { disallowSpecialized: true }), async (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
   const { itemType, itemId } = req.body || {};
   const data = db.get();
@@ -5069,8 +5747,9 @@ async function startServer() {
         const indexPath = path.resolve(process.cwd(), 'index.html');
         const rawHtml = fs.readFileSync(indexPath, 'utf-8');
         const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
+        const rendered = injectDynamicSiteMetaWithStatus(transformed, req);
         res
-          .status(200)
+          .status(rendered.statusCode)
           .set({
             'Content-Type': 'text/html; charset=utf-8',
             'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -5078,7 +5757,7 @@ async function startServer() {
             Expires: '0',
             Vary: 'User-Agent'
           })
-          .end(injectDynamicSiteMeta(transformed, req));
+          .end(rendered.html);
       } catch (err) {
         next(err);
       }
@@ -5096,8 +5775,9 @@ async function startServer() {
       const rawHtml = fs.existsSync(distIndex)
         ? fs.readFileSync(distIndex, 'utf-8')
         : '<!doctype html><html><head></head><body><div id="root"></div></body></html>';
+      const rendered = injectDynamicSiteMetaWithStatus(rawHtml, req);
       res
-        .status(200)
+        .status(rendered.statusCode)
         .set({
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -5105,7 +5785,7 @@ async function startServer() {
           Expires: '0',
           Vary: 'User-Agent'
         })
-        .end(injectDynamicSiteMeta(rawHtml, req));
+        .end(rendered.html);
     });
   }
 

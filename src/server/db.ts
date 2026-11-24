@@ -69,11 +69,15 @@ export interface SecretariatMember {
   secretariatId: string;
   name: string;
   role: string;
+  tier?: 'secretary' | 'assistant_secretary' | 'bureau' | 'member';
+  bureauTitle?: string;
   photoUrl?: string;
   phone?: string;
   email?: string;
   assignmentDate: string;
+  joinDate?: string;
   notes?: string;
+  updatedAt?: string;
 }
 
 export interface Initiative {
@@ -194,6 +198,7 @@ export interface LiveStream {
   streamUrl: string;
   isActive: boolean;
   platform: 'youtube' | 'facebook' | 'other';
+  scheduledTime?: string;
   startedAt?: string;
   updatedAt?: string;
 }
@@ -280,6 +285,7 @@ export interface AdminUser {
   managedSecretariatId?: string; // معرف الأمانة المسندة إليه عند التخصيص
   permissions: string[];
   isActive: boolean;
+  tokenVersion?: number;
   lastLogin?: string;
   createdAt: string;
   updatedAt?: string;
@@ -444,13 +450,49 @@ export interface AppDatabase {
   settings: SiteSettings;
   analytics?: AnalyticsStore;
   deletedTombstones?: string[];
+  revokedTokenHashes?: string[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 export function hashPassword(password: string): string {
-  return crypto.createHash('sha256').update(password + '_nfp_salt_2026').digest('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+export function verifyPassword(password: string, storedHash: string): { valid: boolean; needsRehash: boolean } {
+  if (!storedHash || typeof storedHash !== 'string') {
+    return { valid: false, needsRehash: false };
+  }
+  if (storedHash.startsWith('scrypt$')) {
+    const parts = storedHash.split('$');
+    if (parts.length !== 3) return { valid: false, needsRehash: false };
+    const [, salt, hexHash] = parts;
+    if (!salt || !hexHash) return { valid: false, needsRehash: false };
+    try {
+      const expected = Buffer.from(hexHash, 'hex');
+      const derived = crypto.scryptSync(password, salt, expected.length || 64);
+      if (expected.length !== derived.length) return { valid: false, needsRehash: false };
+      return { valid: crypto.timingSafeEqual(derived, expected), needsRehash: false };
+    } catch {
+      return { valid: false, needsRehash: false };
+    }
+  }
+  // Backward-compatible verification for legacy SHA-256 hashes (migrates to scrypt on login)
+  if (/^[a-f0-9]{64}$/i.test(storedHash)) {
+    try {
+      const legacyHex = crypto.createHash('sha256').update(password + '_nfp_salt_2026').digest('hex');
+      const a = Buffer.from(legacyHex, 'hex');
+      const b = Buffer.from(storedHash.toLowerCase(), 'hex');
+      const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+      return { valid, needsRehash: valid };
+    } catch {
+      return { valid: false, needsRehash: false };
+    }
+  }
+  return { valid: false, needsRehash: false };
 }
 
 const INITIAL_SECRETARIATS: SpecializedSecretariat[] = [
@@ -1298,92 +1340,39 @@ function getInitialDatabase(): AppDatabase {
     members: [],
     roles: INITIAL_ROLES,
     pages: INITIAL_PAGES,
-    admins: [
-      {
-        id: 'super-admin-1',
-        email: 'moazmahmoud586@gmail.com',
-        name: 'معاذ محمود (المدير الرئيسي)',
-        passwordHash: hashPassword('Moaz2008@'),
-        role: 'super_admin',
-        roleId: 'role-super-admin',
-        adminScope: 'general',
-        permissions: [
-          'leaders_party',
-          'leaders_secretariat',
-          'secretariats',
-          'initiatives',
-          'applications',
-          'members',
-          'news',
-          'events',
-          'media',
-          'livestream',
-          'pages',
-          'roles',
-          'admins',
-          'settings',
-          'audit'
-        ],
-        isActive: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'super-admin-dalia-nassar',
-        email: 'nassard131@gmail.com',
-        name: 'أ.داليا نصار',
-        passwordHash: hashPassword('31731'),
-        role: 'super_admin',
-        roleId: 'role-super-admin',
-        adminScope: 'general',
-        permissions: [
-          'leaders_party',
-          'leaders_secretariat',
-          'secretariats',
-          'initiatives',
-          'applications',
-          'members',
-          'news',
-          'events',
-          'media',
-          'livestream',
-          'pages',
-          'roles',
-          'admins',
-          'settings',
-          'audit'
-        ],
-        isActive: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'super-admin-ayman-moussa',
-        email: 'aymanmoussadunes67@gmail.com',
-        name: 'أ.أيمن موسى',
-        passwordHash: hashPassword('24681357'),
-        role: 'super_admin',
-        roleId: 'role-super-admin',
-        adminScope: 'general',
-        permissions: [
-          'leaders_party',
-          'leaders_secretariat',
-          'secretariats',
-          'initiatives',
-          'applications',
-          'members',
-          'news',
-          'events',
-          'media',
-          'livestream',
-          'pages',
-          'roles',
-          'admins',
-          'settings',
-          'audit'
-        ],
-        isActive: true,
-        createdAt: new Date().toISOString()
-      }
-    ],
+    admins: process.env.INITIAL_ADMIN_PASSWORD
+      ? [
+          {
+            id: 'super-admin-1',
+            email: (process.env.INITIAL_ADMIN_EMAIL || 'moazmahmoud586@gmail.com').trim().toLowerCase(),
+            name: 'المدير الرئيسي للمنصة',
+            passwordHash: hashPassword(process.env.INITIAL_ADMIN_PASSWORD),
+            role: 'super_admin',
+            roleId: 'role-super-admin',
+            adminScope: 'general',
+            tokenVersion: 1,
+            permissions: [
+              'leaders_party',
+              'leaders_secretariat',
+              'secretariats',
+              'initiatives',
+              'applications',
+              'members',
+              'news',
+              'events',
+              'media',
+              'livestream',
+              'pages',
+              'roles',
+              'admins',
+              'settings',
+              'audit'
+            ],
+            isActive: true,
+            createdAt: new Date().toISOString()
+          }
+        ]
+      : [],
     auditLogs: [
       {
         id: 'log-init',
@@ -1444,12 +1433,12 @@ function getInitialDatabase(): AppDatabase {
       googleTagManagerId: 'GTM-TRZ4SG95',
       googleSiteVerification: '1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo',
       officialSiteUrl: 'https://nfp-october3.ai.studio',
-      seoTitle: 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي',
+      seoTitle: 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | الموقع الرسمي',
       seoDescription: 'الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.',
-      seoKeywords: 'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية',
+      seoKeywords: 'حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية',
       seoShareImage: '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg',
       secretariatsVersion: 25,
-      rosterVersion: 9
+      rosterVersion: 10
     },
     analytics: {
       daily: {},
@@ -1531,7 +1520,9 @@ class DatabaseManager {
                   sources: parsed.analytics.sources || {},
                   updatedAt: String(parsed.analytics.updatedAt || '')
                 }
-              : { daily: {}, pages: {}, sources: {}, updatedAt: '' }
+              : { daily: {}, pages: {}, sources: {}, updatedAt: '' },
+          deletedTombstones: Array.isArray(parsed.deletedTombstones) ? parsed.deletedTombstones : [],
+          revokedTokenHashes: Array.isArray(parsed.revokedTokenHashes) ? parsed.revokedTokenHashes : []
         };
 
         const migrated = this.migrateSecretariatsIfNeeded(assembled);
@@ -1940,76 +1931,20 @@ class DatabaseManager {
       changed = true;
     }
 
-    // Add General Supervisors (أ.داليا نصار & أ.أيمن موسى) as super_admin accounts
-    if ((dbObj.settings.rosterVersion || 0) < 9) {
+    // Advance rosterVersion to 10 and unify exact official SEO title with dash
+    if ((dbObj.settings.rosterVersion || 0) < 10) {
       if (!Array.isArray(dbObj.admins)) dbObj.admins = [];
-      const fullPerms = [
-        'leaders_party',
-        'leaders_secretariat',
-        'secretariats',
-        'initiatives',
-        'applications',
-        'members',
-        'news',
-        'events',
-        'media',
-        'livestream',
-        'pages',
-        'roles',
-        'admins',
-        'settings',
-        'audit'
-      ];
-      const supervisorsToEnsure: Array<{ id: string; name: string; email: string; password: string }> = [
-        {
-          id: 'super-admin-dalia-nassar',
-          name: 'أ.داليا نصار',
-          email: 'nassard131@gmail.com',
-          password: '31731'
-        },
-        {
-          id: 'super-admin-ayman-moussa',
-          name: 'أ.أيمن موسى',
-          email: 'aymanmoussadunes67@gmail.com',
-          password: '24681357'
-        }
-      ];
-
-      const nowIso = new Date().toISOString();
-      for (const sup of supervisorsToEnsure) {
-        const existingIdx = dbObj.admins.findIndex(
-          a => (a.email || '').trim().toLowerCase() === sup.email
-        );
-        if (existingIdx >= 0) {
-          dbObj.admins[existingIdx] = {
-            ...dbObj.admins[existingIdx],
-            name: sup.name,
-            email: sup.email,
-            passwordHash: hashPassword(sup.password),
-            role: 'super_admin',
-            roleId: 'role-super-admin',
-            adminScope: 'general',
-            permissions: fullPerms,
-            isActive: true,
-            updatedAt: nowIso
-          };
-        } else {
-          dbObj.admins.push({
-            id: sup.id,
-            email: sup.email,
-            name: sup.name,
-            passwordHash: hashPassword(sup.password),
-            role: 'super_admin',
-            roleId: 'role-super-admin',
-            adminScope: 'general',
-            permissions: fullPerms,
-            isActive: true,
-            createdAt: nowIso
-          });
-        }
+      const officialTitle = 'حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | الموقع الرسمي';
+      const curTitle = (dbObj.settings.seoTitle || '').trim();
+      if (
+        !curTitle ||
+        curTitle === 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر' ||
+        curTitle === 'أمانة حزب الجبهة الوطنية قسم ثالث أكتوبر | الموقع الرسمي' ||
+        curTitle === 'حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي'
+      ) {
+        dbObj.settings.seoTitle = officialTitle;
       }
-
-      dbObj.settings.rosterVersion = 9;
+      dbObj.settings.rosterVersion = 10;
       changed = true;
     }
 
@@ -2020,16 +1955,17 @@ class DatabaseManager {
     if (dataToSave) {
       this.data = dataToSave;
     }
+    const backupFile = `${DB_FILE}.bak`;
+    const tempPath = `${DB_FILE}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
     try {
-      const backupFile = `${DB_FILE}.bak`;
-      const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
+      this.ensureDirectory();
       const serialized = JSON.stringify(this.data, null, 2);
       fs.writeFileSync(tempPath, serialized, 'utf-8');
       if (fs.existsSync(DB_FILE)) {
         try {
           fs.copyFileSync(DB_FILE, backupFile);
         } catch {
-          // ignore
+          // ignore backup copy error if disk is tight
         }
       }
       fs.renameSync(tempPath, DB_FILE);
@@ -2041,7 +1977,13 @@ class DatabaseManager {
         }
       }
     } catch (err) {
+      try {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch {
+        // ignore cleanup error
+      }
       console.error('Error saving database atomically:', err);
+      throw err;
     }
   }
 

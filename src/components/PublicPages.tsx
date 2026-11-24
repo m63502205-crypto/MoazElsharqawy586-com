@@ -49,8 +49,6 @@ import {
   X,
   Radio,
   ShieldCheck,
-  Volume2,
-  VolumeX,
   PenTool
 } from 'lucide-react';
 import { api } from '../api';
@@ -58,11 +56,13 @@ import { SocialShareButtons } from './SocialShareButtons';
 import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { VideoPlayer } from './VideoPlayer';
+import { HeadquartersGoogleMap } from './HeadquartersGoogleMap';
 import {
   syncHeroAudioState,
   stopHeroAudio,
   clearBrowserMediaSession,
-  unlockHeroAudioNow
+  isVisitorHeroAudioMuted,
+  onHeroAudioStateChange
 } from '../utils/heroAudio';
 import {
   resolvePersonInSecretariats,
@@ -82,6 +82,16 @@ function normalizeLocationHref(url?: string): string | null {
   if (!raw) return null;
   if (/^https?:\/\//i.test(raw)) return raw;
   return `https://${raw}`;
+}
+
+function formatWhatsAppUrl(rawPhone?: string | null, message?: string): string {
+  const digits = normalizeArabicDigits(String(rawPhone || '01003070108')).replace(/\D/g, '');
+  let normalized = digits || '01003070108';
+  if (normalized.startsWith('00')) normalized = normalized.slice(2);
+  if (normalized.startsWith('20')) normalized = normalized.slice(2);
+  if (normalized.startsWith('0')) normalized = normalized.slice(1);
+  const full = normalized.startsWith('20') ? normalized : `20${normalized}`;
+  return message ? `https://wa.me/${full}?text=${encodeURIComponent(message)}` : `https://wa.me/${full}`;
 }
 
 const ARABIC_MONTH_NAMES = [
@@ -233,13 +243,44 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const heroBoxRef = React.useRef<HTMLDivElement | null>(null);
+  const [isHeroInView, setIsHeroInView] = useState(true);
+  const [copiedAddress, setCopiedAddress] = useState(false);
+  const [quickMsg, setQuickMsg] = useState('');
   const adminLockedMute = Boolean(data.settings.heroDefaultMuted);
-  const [visitorMuted, setVisitorMuted] = useState<boolean>(adminLockedMute);
+  const [visitorMuted, setVisitorMuted] = useState<boolean>(() => isVisitorHeroAudioMuted());
   const effectiveHeroMuted = adminLockedMute || visitorMuted;
 
   useEffect(() => {
-    setVisitorMuted(Boolean(data.settings.heroDefaultMuted));
-  }, [data.settings.heroDefaultMuted]);
+    setVisitorMuted(isVisitorHeroAudioMuted());
+    return onHeroAudioStateChange(() => {
+      setVisitorMuted(isVisitorHeroAudioMuted());
+    });
+  }, []);
+
+  // Observe whether hero reel container is in viewport
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setIsHeroInView(false);
+      return;
+    }
+    const el = heroBoxRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      setIsHeroInView(true);
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) {
+          setIsHeroInView(entry.isIntersecting && entry.intersectionRatio >= 0.25);
+        }
+      },
+      { threshold: [0, 0.25, 0.5] }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [currentView]);
 
   // Stop hero audio when leaving PublicPages
   useEffect(() => {
@@ -314,19 +355,41 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const activeHeroSlide = heroSlides[heroSlideIndex] || heroSlides[0];
   const activeHeroSlideType = activeHeroSlide?.type || '';
   const activeHeroSlideUrl = activeHeroSlide?.url || '';
+  const configuredHeroAudioSource =
+    data.settings.heroMediaType !== 'images'
+      ? data.settings.heroVideoUrl || '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
+      : '';
 
-  // Keep hero <video> always playing and sync Web Audio respecting heroDefaultMuted without tearing down on unrelated live updates
+  // Keep hero soundtrack continuous across public site pages once activated (respecting visitor mute & admin lock)
+  useEffect(() => {
+    clearBrowserMediaSession();
+    const shouldRunSoundtrack =
+      Boolean(configuredHeroAudioSource) && !effectiveHeroMuted && !document.hidden;
+
+    syncHeroAudioState({
+      enabled: shouldRunSoundtrack,
+      videoUrl: shouldRunSoundtrack ? configuredHeroAudioSource : null,
+      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
+    });
+  }, [configuredHeroAudioSource, effectiveHeroMuted]);
+
+  // Autoplay hero <video> visually whenever Home hero is visible in viewport & pause cleanly off-screen
   useEffect(() => {
     clearBrowserMediaSession();
 
-    if (currentView !== 'home') {
-      syncHeroAudioState({ enabled: false });
+    const vid = heroVideoRef.current;
+    const isVideoSlide = activeHeroSlideType === 'video' && Boolean(activeHeroSlideUrl);
+    const shouldPlayVideo = currentView === 'home' && isHeroInView && isVideoSlide && !document.hidden;
+
+    if (!shouldPlayVideo) {
+      if (vid && !vid.paused) {
+        vid.pause();
+      }
       return;
     }
 
-    const vid = heroVideoRef.current;
-    const ensureVideoPlaying = () => {
-      if (!vid || document.hidden || currentView !== 'home') return;
+    const syncPlayState = () => {
+      if (!vid || document.hidden || currentView !== 'home' || !isHeroInView) return;
       vid.setAttribute('playsinline', '');
       vid.setAttribute('webkit-playsinline', '');
       vid.setAttribute('muted', '');
@@ -339,46 +402,29 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     };
 
     if (vid) {
-      ensureVideoPlaying();
-      vid.addEventListener('loadeddata', ensureVideoPlaying);
-      vid.addEventListener('canplay', ensureVideoPlaying);
-      vid.addEventListener('pause', ensureVideoPlaying);
+      syncPlayState();
+      vid.addEventListener('loadeddata', syncPlayState);
+      vid.addEventListener('canplay', syncPlayState);
     }
 
-    const isVideoSlide = activeHeroSlideType === 'video' && Boolean(activeHeroSlideUrl);
-
-    syncHeroAudioState({
-      enabled: isVideoSlide && !effectiveHeroMuted,
-      videoUrl: activeHeroSlideUrl || null,
-      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
-    });
-
-    const handleVisibilityOrFocus = () => {
-      if (!document.hidden) {
-        ensureVideoPlaying();
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (vid && !vid.paused) vid.pause();
+      } else {
+        syncPlayState();
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    window.addEventListener('pageshow', handleVisibilityOrFocus);
-
-    const playWatchdog = window.setInterval(() => {
-      ensureVideoPlaying();
-    }, 1500);
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
-      window.clearInterval(playWatchdog);
       if (vid) {
-        vid.removeEventListener('loadeddata', ensureVideoPlaying);
-        vid.removeEventListener('canplay', ensureVideoPlaying);
-        vid.removeEventListener('pause', ensureVideoPlaying);
+        vid.removeEventListener('loadeddata', syncPlayState);
+        vid.removeEventListener('canplay', syncPlayState);
       }
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [currentView, heroSlideIndex, activeHeroSlideType, activeHeroSlideUrl, effectiveHeroMuted]);
+  }, [currentView, isHeroInView, heroSlideIndex, activeHeroSlideType, activeHeroSlideUrl]);
 
   useEffect(() => {
     if (heroSlideIndex >= heroSlides.length && heroSlides.length > 0) {
@@ -539,9 +585,10 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 15 * 1024 * 1024) {
-      alert('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 15 ميجابايت');
+      setAppError('حجم الملف كبير جداً، يرجى اختيار ملف أقل من 15 ميجابايت');
       return;
     }
+    setAppError(null);
     const reader = new FileReader();
     reader.onload = () => {
       setAppForm(prev => ({ ...prev, [field]: reader.result as string }));
@@ -928,6 +975,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
 
             {/* Main Hero Display Container */}
             <div
+              ref={heroBoxRef}
               className="relative aspect-[4/3] sm:aspect-[16/9] max-h-[640px] w-full overflow-hidden bg-stone-900 sm:rounded-2xl border-y sm:border border-amber-500/35 shadow-xl select-none"
               style={{ touchAction: 'pan-y' }}
             >
@@ -962,7 +1010,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           e.currentTarget.muted = true;
                           e.currentTarget.defaultMuted = true;
                           e.currentTarget.volume = 0;
-                          if (!document.hidden && e.currentTarget.paused) {
+                          if (!document.hidden && isHeroInView && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
                           }
                         }}
@@ -970,20 +1018,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                           e.currentTarget.muted = true;
                           e.currentTarget.defaultMuted = true;
                           e.currentTarget.volume = 0;
-                          if (!document.hidden && e.currentTarget.paused) {
+                          if (!document.hidden && isHeroInView && e.currentTarget.paused) {
                             e.currentTarget.play().catch(() => {});
                           }
                         }}
                         onPlaying={() => {
                           clearBrowserMediaSession();
-                          if (!effectiveHeroMuted) {
-                            void unlockHeroAudioNow();
-                          }
-                        }}
-                        onPause={(e) => {
-                          if (!document.hidden && currentView === 'home') {
-                            e.currentTarget.play().catch(() => {});
-                          }
                         }}
                         onVolumeChange={(e) => {
                           if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
@@ -1000,10 +1040,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             target.muted = true;
                             target.defaultMuted = true;
                             target.volume = 0;
-                            target.play().catch(() => {});
+                            if (isHeroInView && !document.hidden) {
+                              target.play().catch(() => {});
+                            }
                           }
                         }}
-                        poster={data.settings.heroPosterUrl || '/assets/aistudio/hero-poster.jpg'}
+                        poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/hero-poster.jpg'}
                         className="w-full h-full object-cover object-[center_20%] pointer-events-none select-none"
                       />
                     ) : (
@@ -1058,45 +1100,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   </div>
                 </>
               )}
-
-              {/* Global & Visitor Sound Control Overlay on Hero Video */}
-              {heroSlides[heroSlideIndex]?.type === 'video' && (
-                adminLockedMute ? (
-                  <div className="absolute bottom-3 right-3 z-30 bg-black/65 text-stone-200 border border-white/15 backdrop-blur-xs text-[11px] font-bold px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    <VolumeX className="w-3.5 h-3.5 text-red-400" />
-                    <span>الصوت مقفل من الإدارة</span>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextMuted = !visitorMuted;
-                      setVisitorMuted(nextMuted);
-                      if (!nextMuted) {
-                        void unlockHeroAudioNow();
-                      }
-                    }}
-                    className={`absolute bottom-3 right-3 z-30 border backdrop-blur-xs text-xs font-black px-3.5 py-2 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-lg ${
-                      effectiveHeroMuted
-                        ? 'bg-stone-950/80 hover:bg-amber-500 hover:text-stone-950 text-amber-300 border-amber-400/40'
-                        : 'bg-emerald-700/90 hover:bg-stone-900 text-white border-emerald-400/50'
-                    }`}
-                    aria-label={effectiveHeroMuted ? 'تشغيل صوت الفيديو' : 'كتم صوت الفيديو'}
-                  >
-                    {effectiveHeroMuted ? (
-                      <>
-                        <VolumeX className="w-4 h-4" />
-                        <span>تشغيل الصوت</span>
-                      </>
-                    ) : (
-                      <>
-                        <Volume2 className="w-4 h-4" />
-                        <span>الصوت مفعّل · كتم</span>
-                      </>
-                    )}
-                  </button>
-                )
-              )}
             </div>
 
           </div>
@@ -1110,7 +1113,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 الموقع الرسمي بمحافظة الجيزة
               </p>
               <h1 className="text-2xl sm:text-4xl lg:text-5xl font-black text-stone-950 tracking-tight leading-tight">
-                حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر
+                حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر
               </h1>
               <p className="text-lg sm:text-2xl font-extrabold text-red-700 leading-snug">
                 معاً نبني مستقبلاً مشرقاً لمصر
@@ -2093,7 +2096,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   استمارة العضوية الإلكترونية
                 </a>
                 <a
-                  href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.membershipWhatsapp || data.settings.whatsapp || '01003070108').replace(/\D/g, '')}`}
+                  href={data.settings.whatsappLink || formatWhatsAppUrl(data.settings.membershipWhatsapp || data.settings.whatsapp || data.settings.phone)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-3.5 rounded-xl shadow-lg transition-colors cursor-pointer whitespace-nowrap text-sm sm:text-base inline-flex items-center justify-center gap-2"
@@ -2167,7 +2170,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <div>
                     <h3 className="font-bold text-stone-900 text-sm">واتساب وتواصل</h3>
                     <a
-                      href={data.settings.whatsappLink || `https://wa.me/20${(data.settings.whatsapp || data.settings.phone || '01003070108').replace(/\D/g, '')}`}
+                      href={data.settings.whatsappLink || formatWhatsAppUrl(data.settings.whatsapp || data.settings.phone)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs font-bold text-emerald-700 hover:underline mt-1 inline-flex items-center gap-1"
@@ -2179,6 +2182,43 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Video Showcase Gallery when visible videos exist in media */}
+            {(() => {
+              const videoItems = (data.media || []).filter(m => m.isVisible && m.type === 'video' && m.url);
+              if (videoItems.length === 0) return null;
+              return (
+                <div className="border-t border-stone-200 pt-8 space-y-5">
+                  <div className="text-right">
+                    <span className="text-xs font-extrabold text-red-700">
+                      المكتبة المرئية للأنشطة والفعاليات
+                    </span>
+                    <h2 className="text-xl sm:text-2xl font-black text-stone-900 mt-0.5">
+                      معرض الفيديوهات الرسمية
+                    </h2>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {videoItems.map(vid => (
+                      <div key={vid.id} className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs">
+                        <VideoPlayer
+                          url={vid.url}
+                          title={vid.title}
+                          poster={vid.thumbnail || data.settings.heroPosterUrl}
+                          autoPlayInView={!adminLockedMute || true}
+                          muted={adminLockedMute ? true : undefined}
+                          className="w-full aspect-video bg-black"
+                        />
+                        {vid.title && (
+                          <div className="p-4 text-right border-t border-stone-100">
+                            <h3 className="font-bold text-sm text-stone-900">{vid.title}</h3>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </section>
 
@@ -3319,6 +3359,57 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             </ul>
           </div>
         </div>
+
+        {/* Secretariat Photo & Video Galleries when configured */}
+        {sec.galleryImages && sec.galleryImages.length > 0 && (
+          <div className="space-y-4 text-right">
+            <h3 className="text-xl font-bold text-stone-900 border-r-4 border-amber-600 pr-3">
+              معرض صور {sec.name}
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {sec.galleryImages.map((imgUrl, idx) => (
+                <div
+                  key={idx}
+                  onClick={() => openLightbox(sec.galleryImages || [], idx, `${sec.name} - صورة ${idx + 1}`)}
+                  className="aspect-[4/3] rounded-2xl overflow-hidden border border-stone-200 bg-stone-100 cursor-zoom-in group shadow-xs"
+                >
+                  <img
+                    src={imgUrl}
+                    alt={`${sec.name} - صورة ${idx + 1}`}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {sec.videos && sec.videos.length > 0 && (
+          <div className="space-y-4 text-right">
+            <h3 className="text-xl font-bold text-stone-900 border-r-4 border-red-700 pr-3">
+              معرض فيديوهات {sec.name}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {sec.videos.map((vid, idx) => (
+                <div key={idx} className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xs">
+                  <VideoPlayer
+                    url={vid.url}
+                    title={vid.title || sec.name}
+                    autoPlayInView={true}
+                    muted={adminLockedMute ? true : undefined}
+                    className="w-full aspect-video bg-black"
+                  />
+                  {vid.title && (
+                    <div className="p-3.5 text-right border-t border-stone-100">
+                      <h4 className="font-bold text-sm text-stone-900">{vid.title}</h4>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Related News & Activities if any */}
         {relatedNews.length > 0 && (
@@ -4543,7 +4634,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                       <span>لأي استفسار إضافي، يمكنكم التواصل مع أمانة قسم ثالث أكتوبر:</span>
                       {data.settings.whatsapp && (
                         <a
-                          href={`https://wa.me/20${data.settings.whatsapp.replace(/\D/g, '').replace(/^20/, '')}?text=${encodeURIComponent(`السلام عليكم، أود الاستفسار عن طلب العضوية رقم ${inquiryResult.applicationNumber}`)}`}
+                          href={formatWhatsAppUrl(data.settings.whatsapp, `السلام عليكم، أود الاستفسار عن طلب العضوية رقم ${inquiryResult.applicationNumber}`)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors cursor-pointer shrink-0"
@@ -5301,11 +5392,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 للتواصل المباشر مع أمانة قسم ثالث أكتوبر بمحافظة الجيزة
               </p>
               <a
-                href="tel:01003070108"
+                href={`tel:${data.settings.phone || '01003070108'}`}
                 className="inline-block text-lg font-mono font-bold text-red-700 hover:underline pt-1"
                 dir="ltr"
               >
-                01003070108
+                {data.settings.phone || '01003070108'}
               </a>
             </div>
 
@@ -5321,7 +5412,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 إرسال استفسارات ومقترحات المواطنين مباشرة
               </p>
               <a
-                href="https://wa.me/201003070108"
+                href={data.settings.whatsappLink || formatWhatsAppUrl(data.settings.whatsapp || data.settings.phone)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold transition-colors shadow-xs mt-1"
@@ -5407,53 +5498,50 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 </div>
               </div>
 
-              {/* Map Canvas */}
-              <div className="aspect-[16/10] sm:aspect-[16/9] w-full bg-stone-100 relative">
-                <iframe
-                  title="موقع أمانة حزب الجبهة الوطنية قسم ثالث أكتوبر"
-                  src={
-                    data.settings.mapEmbedUrl ||
-                    'https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed'
-                  }
-                  className="w-full h-full border-0"
-                  allowFullScreen
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
+              {/* Interactive Google Maps Platform Canvas */}
+              <HeadquartersGoogleMap
+                coordinates={data.settings.coordinates}
+                address={data.settings.address}
+                locationUrl={data.settings.locationUrl}
+                fallbackEmbedUrl={data.settings.mapEmbedUrl}
+                siteBrand="حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر"
+              />
 
-                {/* Party Location Badge Overlay */}
-                <div className="absolute bottom-3 right-3 left-3 sm:left-auto bg-stone-900/90 backdrop-blur-md text-white p-3 rounded-2xl border border-amber-500/40 shadow-xl max-w-sm pointer-events-auto">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="w-2.5 h-2.5 rounded-full bg-red-600 border border-amber-300" />
-                    <span className="text-xs font-black text-amber-300">
-                      مقر أمانة قسم ثالث أكتوبر الرسمي
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-stone-200 line-clamp-2">
-                    {data.settings.address || 'قسم ثالث أكتوبر، محافظة الجيزة، جمهورية مصر العربية'}
+              {/* Address & Copy Controls Footer */}
+              <div className="bg-stone-950 text-white px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-stone-800">
+                <div className="flex items-start gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-600 border border-amber-300 shrink-0 mt-1" />
+                  <p className="text-xs text-stone-200 leading-relaxed">
+                    {data.settings.address || 'مقر أمانة قسم ثالث أكتوبر – طريق الشاذلي، ابني بيتك 7، قسم ثالث 6 أكتوبر، محافظة الجيزة 3265020'}
                   </p>
-                  <div className="flex items-center gap-2 mt-2 pt-2 border-t border-stone-800 text-[10px]">
-                    <a
-                      href="https://www.google.com/maps/dir/?api=1&destination=29.980836,30.840788"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-amber-400 hover:underline font-bold flex items-center gap-1"
-                    >
-                      <span>الاتجاهات والمسار</span>
-                      <ExternalLink className="w-2.5 h-2.5" />
-                    </a>
-                    <span className="text-stone-600">·</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(data.settings.address || 'قسم ثالث أكتوبر، محافظة الجيزة');
-                        alert('تم نسخ عنوان المقر بنجاح!');
-                      }}
-                      className="text-stone-300 hover:text-white cursor-pointer font-medium"
-                    >
-                      نسخ العنوان
-                    </button>
-                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0 text-[11px]">
+                  <a
+                    href={
+                      data.settings.locationUrl ||
+                      'https://www.google.com/maps/dir/?api=1&destination=29.980836,30.840788'
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-amber-400 hover:underline font-bold flex items-center gap-1"
+                  >
+                    <span>الاتجاهات والمسار</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                  <span className="text-stone-600">·</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(
+                        data.settings.address || 'قسم ثالث أكتوبر، محافظة الجيزة'
+                      );
+                      setCopiedAddress(true);
+                      window.setTimeout(() => setCopiedAddress(false), 2500);
+                    }}
+                    className="text-stone-300 hover:text-white cursor-pointer font-semibold"
+                  >
+                    {copiedAddress ? 'تم نسخ العنوان ✓' : 'نسخ العنوان'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -5468,29 +5556,31 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               </p>
 
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">
+                <label htmlFor="quick-msg-input" className="block text-xs font-bold text-stone-700 mb-1">
                   نص الرسالة أو الاستفسار
                 </label>
                 <textarea
                   id="quick-msg-input"
                   rows={3}
+                  value={quickMsg}
+                  onChange={(e) => setQuickMsg(e.target.value)}
                   placeholder="اكتب استفسارك أو مقترحك هنا..."
                   className="w-full border border-stone-300 rounded-xl p-3 text-xs text-stone-900 focus:outline-hidden focus:border-emerald-600"
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const val = (document.getElementById('quick-msg-input') as HTMLTextAreaElement)?.value || 'مرحباً، أود التواصل مع أمانة قسم ثالث أكتوبر لحزب الجبهة الوطنية.';
-                  const encoded = encodeURIComponent(val);
-                  window.open(`https://wa.me/201003070108?text=${encoded}`, '_blank');
-                }}
+              <a
+                href={formatWhatsAppUrl(
+                  data.settings.whatsapp || data.settings.phone || '01003070108',
+                  quickMsg.trim() || 'مرحباً، أود التواصل مع أمانة قسم ثالث أكتوبر لحزب الجبهة الوطنية.'
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-xs"
               >
                 <MessageCircle className="w-4 h-4" />
-                <span>إرسال عبر واتساب إلى (01003070108)</span>
-              </button>
+                <span>إرسال عبر واتساب إلى ({data.settings.whatsapp || data.settings.phone || '01003070108'})</span>
+              </a>
             </div>
 
           </div>
@@ -6140,7 +6230,13 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               )}
 
               {selectedNews.videoUrl && (
-                <div className="pt-4 border-t border-stone-100">
+                <div className="pt-4 border-t border-stone-100 space-y-3">
+                  <VideoPlayer
+                    url={selectedNews.videoUrl}
+                    title={selectedNews.title}
+                    poster={selectedNews.coverImage}
+                    autoPlayInView={false}
+                  />
                   <a
                     href={selectedNews.videoUrl}
                     target="_blank"
@@ -6148,7 +6244,7 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     className="inline-flex items-center gap-2 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 px-4 py-2 rounded-lg"
                   >
                     <Play className="w-4 h-4 fill-current" />
-                    <span>مشاهدة الفيديو المرفق</span>
+                    <span>فتح الفيديو في نافذة مستقلة</span>
                   </a>
                 </div>
               )}

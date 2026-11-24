@@ -1,5 +1,9 @@
-import React from 'react';
-import { Play, ExternalLink } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  hasVisitorInteracted,
+  onVisitorFirstInteraction,
+  setExternalVideoAudioActive
+} from '../utils/heroAudio';
 
 interface VideoPlayerProps {
   url: string;
@@ -7,6 +11,7 @@ interface VideoPlayerProps {
   poster?: string;
   className?: string;
   autoPlay?: boolean;
+  autoPlayInView?: boolean;
   muted?: boolean;
   loop?: boolean;
 }
@@ -16,7 +21,6 @@ export function parseVideoUrl(url: string): { type: 'youtube' | 'facebook' | 'di
   const trimmed = url.trim();
 
   // YouTube matchers
-  // 1. youtu.be/ID
   const youtuBeMatch = trimmed.match(/youtu\.be\/([a-zA-Z0-9_-]+)/i);
   if (youtuBeMatch && youtuBeMatch[1]) {
     return {
@@ -25,7 +29,6 @@ export function parseVideoUrl(url: string): { type: 'youtube' | 'facebook' | 'di
     };
   }
 
-  // 2. youtube.com/watch?v=ID
   const ytWatchMatch = trimmed.match(/[?&]v=([a-zA-Z0-9_-]+)/i);
   if (ytWatchMatch && ytWatchMatch[1]) {
     return {
@@ -34,7 +37,6 @@ export function parseVideoUrl(url: string): { type: 'youtube' | 'facebook' | 'di
     };
   }
 
-  // 3. youtube.com/shorts/ID
   const ytShortsMatch = trimmed.match(/youtube\.com\/shorts\/([a-zA-Z0-9_-]+)/i);
   if (ytShortsMatch && ytShortsMatch[1]) {
     return {
@@ -43,7 +45,6 @@ export function parseVideoUrl(url: string): { type: 'youtube' | 'facebook' | 'di
     };
   }
 
-  // 4. youtube.com/embed/ID
   if (trimmed.includes('youtube.com/embed/')) {
     return {
       type: 'youtube',
@@ -59,21 +60,6 @@ export function parseVideoUrl(url: string): { type: 'youtube' | 'facebook' | 'di
     };
   }
 
-  // Direct MP4 / WebM or Data URL
-  if (
-    trimmed.startsWith('data:video/') ||
-    trimmed.endsWith('.mp4') ||
-    trimmed.endsWith('.webm') ||
-    trimmed.endsWith('.ogg') ||
-    trimmed.endsWith('.mov') ||
-    trimmed.includes('/video/')
-  ) {
-    return {
-      type: 'direct',
-      embedUrl: trimmed
-    };
-  }
-
   return {
     type: 'direct',
     embedUrl: trimmed
@@ -86,16 +72,90 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   poster,
   className = 'w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-md',
   autoPlay = false,
-  muted = false,
+  autoPlayInView = true,
+  muted,
   loop = false
 }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [inView, setInView] = useState(false);
+  const [visitorInteracted, setVisitorInteracted] = useState(() => hasVisitorInteracted());
+  const userToggledMuteRef = useRef(false);
+
+  useEffect(() => {
+    const unsub = onVisitorFirstInteraction(() => {
+      setVisitorInteracted(true);
+    });
+    return () => {
+      unsub();
+      setExternalVideoAudioActive(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setInView(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) {
+          setInView(entry.isIntersecting && entry.intersectionRatio >= 0.35);
+        }
+      },
+      { threshold: [0, 0.35, 0.65] }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [url]);
+
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid) return;
+
+    const shouldAuto = autoPlay || autoPlayInView;
+    if (!shouldAuto) return;
+
+    if (inView && !document.hidden) {
+      const allowSound = muted === false ? true : (muted !== true && visitorInteracted && !userToggledMuteRef.current);
+      vid.muted = !allowSound;
+      if (allowSound) {
+        setExternalVideoAudioActive(true);
+      }
+      vid.play().catch(() => {
+        vid.muted = true;
+        setExternalVideoAudioActive(false);
+        vid.play().catch(() => {});
+      });
+    } else if (!vid.paused) {
+      vid.pause();
+      setExternalVideoAudioActive(false);
+    }
+  }, [inView, autoPlay, autoPlayInView, muted, visitorInteracted]);
+
+  // If visitor interacts for the first time while video is already visible, unlock sound cleanly
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid || muted === true) return;
+    if (visitorInteracted && inView && !userToggledMuteRef.current && vid.muted) {
+      vid.muted = false;
+      if (!vid.paused) {
+        setExternalVideoAudioActive(true);
+      }
+    }
+  }, [visitorInteracted, inView, muted]);
+
   if (!url) return null;
 
   const { type, embedUrl } = parseVideoUrl(url);
 
   if (type === 'youtube' || type === 'facebook') {
     return (
-      <div className={`relative ${className}`}>
+      <div ref={containerRef} className={`relative ${className}`}>
         <iframe
           src={embedUrl}
           title={title}
@@ -108,15 +168,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }
 
   return (
-    <div className={`relative ${className}`}>
+    <div ref={containerRef} className={`relative ${className}`}>
       <video
+        ref={videoRef}
         src={url}
         controls
         playsInline
-        autoPlay={autoPlay}
-        muted={muted}
+        muted={muted !== undefined ? muted : !visitorInteracted}
         loop={loop}
+        preload="metadata"
         poster={poster}
+        onPlay={(e) => {
+          setExternalVideoAudioActive(!e.currentTarget.muted);
+        }}
+        onPause={() => {
+          setExternalVideoAudioActive(false);
+        }}
+        onEnded={() => {
+          setExternalVideoAudioActive(false);
+        }}
+        onVolumeChange={(e) => {
+          if (visitorInteracted) {
+            userToggledMuteRef.current = e.currentTarget.muted;
+          }
+          setExternalVideoAudioActive(!e.currentTarget.paused && !e.currentTarget.muted);
+        }}
         className="w-full h-full object-contain bg-black"
       >
         <source src={url} type="video/mp4" />

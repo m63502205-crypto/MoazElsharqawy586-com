@@ -11,7 +11,7 @@ import { PublicPages } from './components/PublicPages';
 import { AdminPanel } from './components/AdminPanel';
 import { api } from './api';
 import { PublicPortalData } from './types';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertTriangle, X, ExternalLink } from 'lucide-react';
 import { initGoogleAnalytics, trackPageView, DEFAULT_GA4_MEASUREMENT_ID } from './utils/analytics';
 import { SiteSearchModal, SearchResultItem } from './components/SiteSearchModal';
 import { resolvePersonInSecretariats } from './utils/personSecretariat';
@@ -71,6 +71,13 @@ function MainApp() {
   const [loading, setLoading] = useState<boolean>(!bootstrappedData);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState<boolean>(false);
+  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState<boolean>(false);
+
+  useEffect(() => {
+    const onQuotaExceeded = () => setMapsQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+  }, []);
 
   const basePortalDataRef = useRef<PublicPortalData | null>(bootstrappedData);
   const dataSnapshotRef = useRef<string>(bootstrappedData ? JSON.stringify(bootstrappedData) : '');
@@ -394,6 +401,35 @@ function MainApp() {
   // Public View
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900 flex flex-col selection:bg-red-700 selection:text-white w-full max-w-full overflow-x-hidden" dir="rtl">
+      {mapsQuotaExceeded && (
+        <div className="sticky top-0 z-50 bg-amber-100 border-b border-amber-300 text-amber-950 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>
+              تم تجاوز الحد التجريبي لخدمة خرائط جوجل (Google Maps Demo Key). يمكنك التحويل إلى مشروع Google Cloud خاص أو إعادة المحاولة لاحقاً.
+            </span>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <a
+              href="https://ai.google.dev/gemini-api/docs/maps?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-black text-red-800 hover:underline"
+            >
+              <span>التفاصيل والإعداد</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            <button
+              type="button"
+              onClick={() => setMapsQuotaExceeded(false)}
+              aria-label="إغلاق التنبيه"
+              className="p-1 rounded-lg hover:bg-amber-200/70 text-amber-900 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
       <Navbar
         currentView={currentView}
         setCurrentView={handleSetCurrentView}

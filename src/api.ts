@@ -645,5 +645,26 @@ export const api = {
       checkedAt: string;
     }>('/api/admin/seo/audit', {
       method: 'POST'
+    }),
+
+  // Verified Backup & Restore (Super Admin Only)
+  exportBackup: () =>
+    apiFetch<{
+      success: boolean;
+      exportedAt: string;
+      sha256: string;
+      counts: Record<string, number>;
+      database: any;
+    }>('/api/admin/backup/export'),
+
+  restoreBackup: (database: any, confirmRestore = true) =>
+    apiFetch<{
+      success: boolean;
+      message: string;
+      preRestoreBackupFile?: string;
+      counts?: Record<string, number>;
+    }>('/api/admin/backup/restore', {
+      method: 'POST',
+      body: JSON.stringify({ database, confirmRestore })
     })
 };

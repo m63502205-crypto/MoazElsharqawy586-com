@@ -33,30 +33,11 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
   const cleanSummary = summary ? summary.replace(/\r?\n/g, ' ').slice(0, 140).trim() + '...' : '';
   const typeIcon = itemType === 'news' ? '📰' : itemType === 'event' ? '📅' : '🤝';
 
-  const handleWhatsApp = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const waText = `${typeIcon} *${cleanTitle}*\n\n${cleanSummary ? cleanSummary + '\n\n' : ''}🏛️ حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر\n${shareUrl}`;
-    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleFacebook = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
-    window.open(fbUrl, '_blank', 'noopener,noreferrer,width=600,height=500');
-  };
-
-  const handleTwitter = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const twUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(cleanTitle)}&url=${encodeURIComponent(shareUrl)}`;
-    window.open(twUrl, '_blank', 'noopener,noreferrer,width=600,height=400');
-  };
-
-  const handleTelegram = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const tgUrl = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(cleanTitle)}`;
-    window.open(tgUrl, '_blank', 'noopener,noreferrer');
-  };
+  const waText = `${typeIcon} *${cleanTitle}*\n\n${cleanSummary ? cleanSummary + '\n\n' : ''}🏛️ حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر\n${shareUrl}`;
+  const waHref = `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
+  const fbHref = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
+  const twHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(cleanTitle)}&url=${encodeURIComponent(shareUrl)}`;
+  const tgHref = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(cleanTitle)}`;
 
   const handleCopyLink = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -92,10 +73,13 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
         </span>
 
         {/* WhatsApp */}
-        <button
-          type="button"
-          onClick={handleWhatsApp}
+        <a
+          href={waHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           title="مشاركة عبر واتساب"
+          aria-label="مشاركة عبر واتساب"
           className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
             dark
               ? 'bg-emerald-500/15 hover:bg-emerald-600 text-emerald-300 hover:text-white border-emerald-500/30'
@@ -103,13 +87,16 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           }`}
         >
           <MessageCircle className="w-3.5 h-3.5" />
-        </button>
+        </a>
 
         {/* Facebook */}
-        <button
-          type="button"
-          onClick={handleFacebook}
+        <a
+          href={fbHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           title="مشاركة عبر فيسبوك"
+          aria-label="مشاركة عبر فيسبوك"
           className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs transition-colors cursor-pointer border ${
             dark
               ? 'bg-blue-500/15 hover:bg-blue-600 text-blue-300 hover:text-white border-blue-500/30'
@@ -117,13 +104,16 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           }`}
         >
           f
-        </button>
+        </a>
 
         {/* X / Twitter */}
-        <button
-          type="button"
-          onClick={handleTwitter}
+        <a
+          href={twHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           title="مشاركة عبر إكس (تويتر)"
+          aria-label="مشاركة عبر إكس (تويتر)"
           className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
             dark
               ? 'bg-white/10 hover:bg-black text-stone-200 hover:text-white border-white/15'
@@ -131,13 +121,16 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           }`}
         >
           <Twitter className="w-3.5 h-3.5" />
-        </button>
+        </a>
 
         {/* Telegram */}
-        <button
-          type="button"
-          onClick={handleTelegram}
+        <a
+          href={tgHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           title="مشاركة عبر تيليجرام"
+          aria-label="مشاركة عبر تيليجرام"
           className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer border ${
             dark
               ? 'bg-sky-500/15 hover:bg-sky-500 text-sky-300 hover:text-white border-sky-500/30'
@@ -145,7 +138,7 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
           }`}
         >
           <Send className="w-3.5 h-3.5" />
-        </button>
+        </a>
 
         {/* Copy Link */}
         <button
@@ -198,44 +191,52 @@ export const SocialShareButtons: React.FC<SocialShareButtonsProps> = ({
 
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {/* WhatsApp */}
-        <button
-          type="button"
-          onClick={handleWhatsApp}
+        <a
+          href={waHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           className="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer shadow-xs"
         >
           <MessageCircle className="w-3.5 h-3.5" />
           <span>واتساب</span>
-        </button>
+        </a>
 
         {/* Facebook */}
-        <button
-          type="button"
-          onClick={handleFacebook}
+        <a
+          href={fbHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer shadow-xs"
         >
           <span className="font-black text-xs">f</span>
           <span>فيسبوك</span>
-        </button>
+        </a>
 
         {/* X / Twitter */}
-        <button
-          type="button"
-          onClick={handleTwitter}
+        <a
+          href={twHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           className="inline-flex items-center gap-1.5 bg-stone-900 hover:bg-black text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer shadow-xs"
         >
           <Twitter className="w-3.5 h-3.5" />
           <span>إكس (تويتر)</span>
-        </button>
+        </a>
 
         {/* Telegram */}
-        <button
-          type="button"
-          onClick={handleTelegram}
+        <a
+          href={tgHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
           className="inline-flex items-center gap-1.5 bg-sky-500 hover:bg-sky-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer shadow-xs"
         >
           <Send className="w-3.5 h-3.5" />
           <span>تيليجرام</span>
-        </button>
+        </a>
 
         {/* Copy Link */}
         <button

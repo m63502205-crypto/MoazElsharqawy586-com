@@ -193,6 +193,7 @@ export interface LiveStream {
   streamUrl: string;
   isActive: boolean;
   platform: 'youtube' | 'facebook' | 'other';
+  scheduledTime?: string;
   startedAt?: string;
   updatedAt?: string;
 }
@@ -291,8 +292,10 @@ export interface AdminUser {
   managedSecretariatId?: string; // معرف الأمانة المسندة في حالة التخصيص
   permissions: string[];
   isActive: boolean;
+  tokenVersion?: number;
   lastLogin?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface AuditLog {

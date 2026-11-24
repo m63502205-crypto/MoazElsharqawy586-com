@@ -22,13 +22,15 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
   const [newUrl, setNewUrl] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg(null);
 
     if (file.size > 45 * 1024 * 1024) {
-      alert('حجم الفيديو كبير، يرجى اختيار ملف أقل من 45 ميجابايت أو لصق رابط يوتيوب.');
+      setErrorMsg('حجم الفيديو كبير، يرجى اختيار ملف أقل من 45 ميجابايت أو لصق رابط يوتيوب.');
       return;
     }
 
@@ -49,7 +51,7 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
       setIsUploading(false);
     };
     reader.onerror = () => {
-      alert('تعذر قراءة ملف الفيديو');
+      setErrorMsg('تعذر قراءة ملف الفيديو');
       setIsUploading(false);
     };
     reader.readAsDataURL(file);
@@ -58,6 +60,7 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
 
   const handleAdd = () => {
     if (!newUrl.trim()) return;
+    setErrorMsg(null);
     onChange([
       ...videos,
       {
@@ -89,6 +92,15 @@ export const VideosRepeaterField: React.FC<VideosRepeaterFieldProps> = ({
         </label>
         {helpText && <span className="text-[10px] text-stone-400">{helpText}</span>}
       </div>
+
+      {errorMsg && (
+        <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-bold flex items-center justify-between gap-2">
+          <span>{errorMsg}</span>
+          <button type="button" onClick={() => setErrorMsg(null)} className="text-red-600 hover:text-red-900 cursor-pointer text-xs px-1.5">
+            ×
+          </button>
+        </div>
+      )}
 
       {/* New Video Input Box & Upload button */}
       <div className="space-y-2 p-2.5 bg-white border border-stone-200 rounded-xl">

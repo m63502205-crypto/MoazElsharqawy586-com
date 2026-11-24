@@ -1795,19 +1795,19 @@
     "mapEmbedUrl": "https://maps.google.com/maps?q=%D8%AD%D8%B2%D8%A8+%D8%A7%D9%84%D8%AC%D8%A8%D9%87%D8%A9+%D8%A7%D9%84%D9%88%D8%B7%D9%86%D9%8A%D8%A9+%D8%A3%D9%85%D8%A7%D9%86%D8%A9+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+%D8%A7%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D8%B7%D8%B1%D9%8A%D9%82+%D8%A7%D9%84%D8%B4%D8%A7%D8%B0%D9%84%D9%89+%D8%A7%D8%A8%D9%86%D9%89+%D8%A8%D9%8A%D8%AA%D9%83+7%D8%8C+%D9%82%D8%B3%D9%85+%D8%AB%D8%A7%D9%84%D8%AB+6+%D8%A3%D9%83%D8%AA%D9%88%D8%A8%D8%B1%D8%8C+%D9%85%D8%AD%D8%A7%D9%81%D8%B8%D8%A9+%D8%A7%D9%84%D8%AC%D9%8A%D8%B2%D8%A9&t=&z=16&ie=UTF8&iwloc=B&output=embed",
     "coordinates": "29.980836, 30.840788",
     "entranceImageUrl": "/assets/aistudio/______________________________20261114_203911_a06570e5.jpg",
-    "heroVideoUrl": "/uploads/upload_1795448950483_jc5wcz9.mp4",
+    "heroVideoUrl": "/uploads/upload_1795530941718_2fsjwyd.mp4",
     "heroMediaType": "video",
     "heroDefaultMuted": false,
     "googleAnalyticsId": "G-NX1MQ9NHXW",
     "googleTagManagerId": "GTM-TRZ4SG95",
     "googleSiteVerification": "1cduZPpTsH3JKgUxMdqnqFSWnhq88dU2o79mrvg63Mo",
     "officialSiteUrl": "https://nfp-october3.ai.studio",
-    "seoTitle": "حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي",
+    "seoTitle": "حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | الموقع الرسمي",
     "seoDescription": "الموقع الرسمي لأمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر بمحافظة الجيزة. تابع أخبار الأمانة وقيادات الحزب والأمانات والمبادرات المجتمعية والفعاليات وطلبات الانضمام.",
     "seoKeywords": "حزب الجبهة الوطنية، أمانة حزب الجبهة الوطنية، قسم ثالث أكتوبر، حزب الجبهة الوطنية قسم ثالث أكتوبر، أمانة ثالث أكتوبر، محافظة الجيزة، مبادرات مجتمعية، طلب عضوية حزب الجبهة الوطنية",
     "seoShareImage": "/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg",
     "secretariatsVersion": 25,
-    "rosterVersion": 9,
+    "rosterVersion": 10,
     "customTexts": {
       "initiativesBadge": "العمل الميداني",
       "partyLeadersTitle": "قيادات حزب الجبهة الوطنية",
@@ -1849,7 +1849,7 @@
     },
     "heroSlides": [],
     "heroImages": [],
-    "updatedAt": "2026-11-23T15:49:16.479Z",
+    "updatedAt": "2026-11-24T14:37:04.970Z",
     "heroPosterUrl": ""
   },
   "analytics": {
@@ -1871,27 +1871,46 @@
         "pageViews": 2,
         "mobile": 2,
         "desktop": 0
+      },
+      "2026-11-24": {
+        "visitors": [
+          "2500b0ef83095f"
+        ],
+        "pageViews": 3,
+        "mobile": 3,
+        "desktop": 0
       }
     },
     "pages": {
       "/": {
         "path": "/",
-        "title": "حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر | الموقع الرسمي",
-        "views": 4,
+        "title": "حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر | الموقع الرسمي",
+        "views": 6,
         "visitors": [
           "b8f2aaf1a94f33",
           "9ea705c57b4c41",
           "5e14c6fb0319e0",
-          "dac38270a8d7bf"
+          "dac38270a8d7bf",
+          "2500b0ef83095f"
         ],
-        "lastVisitedAt": "2026-11-23T19:35:23.000Z"
+        "lastVisitedAt": "2026-11-24T14:43:02.284Z"
+      },
+      "/contact": {
+        "path": "/contact",
+        "title": "تواصل معنا ومقر الأمانة | حزب الجبهة الوطنية – أمانة قسم ثالث أكتوبر",
+        "views": 1,
+        "visitors": [
+          "2500b0ef83095f"
+        ],
+        "lastVisitedAt": "2026-11-24T14:42:52.819Z"
       }
     },
     "sources": {
       "زيارة مباشرة (Direct)": 2,
-      "بحث Google": 2
+      "بحث Google": 5
     },
-    "updatedAt": "2026-11-23T19:35:23.000Z"
+    "updatedAt": "2026-11-24T14:43:02.284Z"
   },
-  "deletedTombstones": []
+  "deletedTombstones": [],
+  "revokedTokenHashes": []
 }

@@ -119,7 +119,39 @@ function MainApp() {
         setLoading(false);
       }
     });
-    return () => unsub();
+
+    let eventSource: EventSource | null = null;
+    const onSseRefresh = () => {
+      void loadData(true);
+    };
+    if (typeof EventSource !== 'undefined') {
+      try {
+        eventSource = new EventSource('/api/public/stream');
+        eventSource.addEventListener('db-update', onSseRefresh);
+        eventSource.addEventListener('update', onSseRefresh);
+      } catch {
+        // ignore SSE unavailability
+      }
+    }
+
+    const handleVisibilityRefresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void loadData(true);
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityRefresh);
+    }
+
+    return () => {
+      unsub();
+      if (eventSource) {
+        eventSource.close();
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityRefresh);
+      }
+    };
   }, []);
 
   // Global search shortcut (Ctrl+K or Cmd+K)
@@ -168,6 +200,9 @@ function MainApp() {
     setMeta('meta[name="keywords"]', 'name', 'keywords', seo.keywords);
     setMeta('meta[name="robots"]', 'name', 'robots', seo.robots);
     setMeta('meta[name="googlebot"]', 'name', 'googlebot', seo.robots);
+    setMeta('meta[name="author"]', 'name', 'author', seo.siteName);
+    setMeta('meta[name="application-name"]', 'name', 'application-name', seo.siteName);
+    setMeta('meta[name="apple-mobile-web-app-title"]', 'name', 'apple-mobile-web-app-title', seo.siteName);
     setMeta('meta[property="og:site_name"]', 'property', 'og:site_name', seo.siteName);
     setMeta('meta[property="og:type"]', 'property', 'og:type', seo.ogType);
     setMeta('meta[property="og:title"]', 'property', 'og:title', seo.title);

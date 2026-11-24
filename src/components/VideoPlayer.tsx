@@ -103,10 +103,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       (entries) => {
         const entry = entries[0];
         if (entry) {
-          setInView(entry.isIntersecting && entry.intersectionRatio >= 0.35);
+          setInView(entry.isIntersecting);
         }
       },
-      { threshold: [0, 0.35, 0.65] }
+      { threshold: [0, 0.05] }
     );
 
     observer.observe(node);
@@ -116,6 +116,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
+    vid.setAttribute('playsinline', '');
+    vid.setAttribute('webkit-playsinline', '');
 
     const shouldAuto = autoPlay || autoPlayInView;
     if (!shouldAuto) return;
@@ -126,11 +128,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (allowSound) {
         setExternalVideoAudioActive(true);
       }
-      vid.play().catch(() => {
-        vid.muted = true;
-        setExternalVideoAudioActive(false);
-        vid.play().catch(() => {});
-      });
+      if (vid.paused) {
+        vid.play().catch(() => {
+          vid.muted = true;
+          setExternalVideoAudioActive(false);
+          vid.play().catch(() => {});
+        });
+      }
     } else if (!vid.paused) {
       vid.pause();
       setExternalVideoAudioActive(false);

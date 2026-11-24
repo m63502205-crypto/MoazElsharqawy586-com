@@ -26,6 +26,9 @@ import {
   AlertCircle,
   ExternalLink,
   Play,
+  Pause,
+  Volume2,
+  VolumeX,
   Image as ImageIcon,
   HeartHandshake,
   Award,
@@ -46,6 +49,7 @@ import {
   Edit2,
   Sparkles,
   Maximize2,
+  Minimize2,
   X,
   Radio,
   ShieldCheck,
@@ -57,13 +61,7 @@ import { trackEvent } from '../utils/analytics';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { VideoPlayer } from './VideoPlayer';
 import { HeadquartersGoogleMap } from './HeadquartersGoogleMap';
-import {
-  syncHeroAudioState,
-  stopHeroAudio,
-  clearBrowserMediaSession,
-  isVisitorHeroAudioMuted,
-  onHeroAudioStateChange
-} from '../utils/heroAudio';
+import { stopHeroAudio } from '../utils/heroAudio';
 import {
   resolvePersonInSecretariats,
   getAllPeopleInSecretariat,
@@ -239,55 +237,65 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     setLightboxOpen(true);
   };
 
-  // Automated Hero Reel / Slider state ("يقعد يقلب تلقائي")
+  // Automated Hero Reel / Slider + Native HTML5 Unmuted Video Player state
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [isHeroHovered, setIsHeroHovered] = useState(false);
   const heroVideoRef = React.useRef<HTMLVideoElement | null>(null);
   const heroBoxRef = React.useRef<HTMLDivElement | null>(null);
-  const [isHeroInView, setIsHeroInView] = useState(true);
+  const heroUserPausedRef = React.useRef(false);
+  const heroUserMutedRef = React.useRef<boolean | null>(null);
+  const heroAutoplayBlockedRef = React.useRef(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [quickMsg, setQuickMsg] = useState('');
   const adminLockedMute = Boolean(data.settings.heroDefaultMuted);
-  const [visitorMuted, setVisitorMuted] = useState<boolean>(() => isVisitorHeroAudioMuted());
-  const effectiveHeroMuted = adminLockedMute || visitorMuted;
 
-  useEffect(() => {
-    setVisitorMuted(isVisitorHeroAudioMuted());
-    return onHeroAudioStateChange(() => {
-      setVisitorMuted(isVisitorHeroAudioMuted());
-    });
-  }, []);
+  const [heroIsPlaying, setHeroIsPlaying] = useState(false);
+  const [heroIsMuted, setHeroIsMuted] = useState(adminLockedMute);
+  const [heroVolume, setHeroVolume] = useState(1);
+  const [heroCurrentTime, setHeroCurrentTime] = useState(0);
+  const [heroDuration, setHeroDuration] = useState(0);
+  const [heroIsFullscreen, setHeroIsFullscreen] = useState(false);
 
-  // Observe whether hero reel container is in viewport
-  useEffect(() => {
-    if (currentView !== 'home') {
-      setIsHeroInView(false);
-      return;
-    }
-    const el = heroBoxRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      setIsHeroInView(true);
-      return;
-    }
-    const obs = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry) {
-          setIsHeroInView(entry.isIntersecting && entry.intersectionRatio >= 0.25);
-        }
-      },
-      { threshold: [0, 0.25, 0.5] }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [currentView]);
+  const formatVideoTime = (sec: number): string => {
+    if (!Number.isFinite(sec) || sec < 0) return '0:00';
+    const total = Math.floor(sec);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
 
-  // Stop hero audio when leaving PublicPages
+  // Keep WebAudio background track stopped so native <video> sound plays cleanly without duplication
   useEffect(() => {
+    stopHeroAudio();
     return () => {
       stopHeroAudio();
     };
   }, []);
+
+  // Track Fullscreen state across Desktop / Android / iOS Safari
+  useEffect(() => {
+    const syncFs = () => {
+      const fsEl = document.fullscreenElement || (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      setHeroIsFullscreen(Boolean(fsEl));
+    };
+    const vid = heroVideoRef.current as any;
+    const onWebkitBegin = () => setHeroIsFullscreen(true);
+    const onWebkitEnd = () => setHeroIsFullscreen(false);
+    document.addEventListener('fullscreenchange', syncFs);
+    document.addEventListener('webkitfullscreenchange', syncFs);
+    if (vid?.addEventListener) {
+      vid.addEventListener('webkitbeginfullscreen', onWebkitBegin);
+      vid.addEventListener('webkitendfullscreen', onWebkitEnd);
+    }
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFs);
+      document.removeEventListener('webkitfullscreenchange', syncFs);
+      if (vid?.removeEventListener) {
+        vid.removeEventListener('webkitbeginfullscreen', onWebkitBegin);
+        vid.removeEventListener('webkitendfullscreen', onWebkitEnd);
+      }
+    };
+  }, [currentView, heroSlideIndex]);
 
   // Construct hero slides based on heroMediaType ('video' | 'images' | 'both')
   const heroSlides = React.useMemo(() => {
@@ -304,7 +312,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     const mainVideoUrl = data.settings.heroVideoUrl || '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
     const mainPosterUrl = data.settings.heroPosterUrl || data.settings.officialLogo || '/assets/aistudio/FB_IMG_1793904484101_850eafaf.jpg';
 
-    // 1. VIDEO MODE or BOTH: Add verified party video
     if (mediaType === 'video' || mediaType === 'both') {
       list.push({
         id: 'hero-main-vid',
@@ -316,7 +323,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       });
     }
 
-    // 2. IMAGES MODE or BOTH: Add user-selected/uploaded photos only
     if (mediaType === 'images' || mediaType === 'both') {
       if (data.settings.heroImages && data.settings.heroImages.length > 0) {
         data.settings.heroImages.forEach((imgUrl, idx) => {
@@ -333,7 +339,6 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
       }
     }
 
-    // Fallback if empty
     return list.length > 0 ? list : [
       {
         id: 'hero-default-vid',
@@ -355,76 +360,290 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
   const activeHeroSlide = heroSlides[heroSlideIndex] || heroSlides[0];
   const activeHeroSlideType = activeHeroSlide?.type || '';
   const activeHeroSlideUrl = activeHeroSlide?.url || '';
-  const configuredHeroAudioSource =
-    data.settings.heroMediaType !== 'images'
-      ? data.settings.heroVideoUrl || '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
-      : '';
 
-  // Keep hero soundtrack continuous across public site pages once activated (respecting visitor mute & admin lock)
+  // Enforce admin-locked mute only if toggled in Admin
   useEffect(() => {
-    clearBrowserMediaSession();
-    const shouldRunSoundtrack =
-      Boolean(configuredHeroAudioSource) && !effectiveHeroMuted && !document.hidden;
-
-    syncHeroAudioState({
-      enabled: shouldRunSoundtrack,
-      videoUrl: shouldRunSoundtrack ? configuredHeroAudioSource : null,
-      getCurrentVideoTime: () => heroVideoRef.current?.currentTime || 0
-    });
-  }, [configuredHeroAudioSource, effectiveHeroMuted]);
-
-  // Autoplay hero <video> visually whenever Home hero is visible in viewport & pause cleanly off-screen
-  useEffect(() => {
-    clearBrowserMediaSession();
-
     const vid = heroVideoRef.current;
-    const isVideoSlide = activeHeroSlideType === 'video' && Boolean(activeHeroSlideUrl);
-    const shouldPlayVideo = currentView === 'home' && isHeroInView && isVideoSlide && !document.hidden;
-
-    if (!shouldPlayVideo) {
-      if (vid && !vid.paused) {
-        vid.pause();
-      }
-      return;
-    }
-
-    const syncPlayState = () => {
-      if (!vid || document.hidden || currentView !== 'home' || !isHeroInView) return;
-      vid.setAttribute('playsinline', '');
-      vid.setAttribute('webkit-playsinline', '');
-      vid.setAttribute('muted', '');
+    if (!vid) return;
+    if (adminLockedMute) {
       vid.muted = true;
       vid.defaultMuted = true;
       vid.volume = 0;
-      if (vid.paused) {
-        vid.play().catch(() => {});
+      setHeroIsMuted(true);
+    }
+  }, [adminLockedMute]);
+
+  // Reset counters when switching video URL
+  useEffect(() => {
+    heroUserPausedRef.current = false;
+    heroAutoplayBlockedRef.current = false;
+    setHeroCurrentTime(0);
+    setHeroDuration(0);
+  }, [activeHeroSlideUrl]);
+
+  // Real unmuted autoplay attempt on load, with honest browser-policy fallback & minimal-gesture sound activation
+  useEffect(() => {
+    const vid = heroVideoRef.current;
+    const isVideoSlide = activeHeroSlideType === 'video' && Boolean(activeHeroSlideUrl);
+    const shouldPlayVideo = currentView === 'home' && isVideoSlide && !document.hidden;
+
+    if (!vid) return;
+    vid.setAttribute('playsinline', '');
+    vid.setAttribute('webkit-playsinline', '');
+
+    if (!shouldPlayVideo) {
+      if (!vid.paused) vid.pause();
+      return;
+    }
+
+    let cancelled = false;
+
+    const removeUnlockListeners = () => {
+      window.removeEventListener('pointerdown', handleMinimalUnlock);
+      window.removeEventListener('touchstart', handleMinimalUnlock);
+      window.removeEventListener('click', handleMinimalUnlock);
+      window.removeEventListener('keydown', handleMinimalUnlock);
+    };
+
+    const handleMinimalUnlock = () => {
+      const el = heroVideoRef.current;
+      removeUnlockListeners();
+      if (!el || adminLockedMute || heroUserMutedRef.current === true) return;
+      heroAutoplayBlockedRef.current = false;
+      el.removeAttribute('muted');
+      el.muted = false;
+      el.defaultMuted = false;
+      try {
+        el.volume = heroVolume > 0 ? heroVolume : 1;
+      } catch {
+        // ignore iOS read-only volume
+      }
+      setHeroIsMuted(false);
+      if (el.paused && !heroUserPausedRef.current && !document.hidden && currentView === 'home') {
+        el.play().catch(() => {});
       }
     };
 
-    if (vid) {
-      syncPlayState();
-      vid.addEventListener('loadeddata', syncPlayState);
-      vid.addEventListener('canplay', syncPlayState);
-    }
+    const attachMinimalUnlock = () => {
+      window.addEventListener('pointerdown', handleMinimalUnlock, { once: true, passive: true });
+      window.addEventListener('touchstart', handleMinimalUnlock, { once: true, passive: true });
+      window.addEventListener('click', handleMinimalUnlock, { once: true, passive: true });
+      window.addEventListener('keydown', handleMinimalUnlock, { once: true, passive: true });
+    };
+
+    const attemptStart = async () => {
+      if (cancelled || heroUserPausedRef.current) return;
+      const shouldMute = adminLockedMute || heroUserMutedRef.current === true || heroAutoplayBlockedRef.current;
+
+      if (shouldMute) {
+        vid.muted = true;
+        vid.defaultMuted = true;
+        setHeroIsMuted(true);
+        try {
+          await vid.play();
+        } catch {
+          // ignore if element unmounted
+        }
+        return;
+      }
+
+      // Attempt real unmuted autoplay (video + audio together)
+      vid.removeAttribute('muted');
+      vid.muted = false;
+      vid.defaultMuted = false;
+      try {
+        vid.volume = heroVolume > 0 ? heroVolume : 1;
+      } catch {
+        // ignore iOS read-only volume
+      }
+
+      try {
+        await vid.play();
+        if (!cancelled) {
+          heroAutoplayBlockedRef.current = false;
+          setHeroIsMuted(false);
+        }
+      } catch {
+        if (cancelled) return;
+        // Browser policy blocked unmuted autoplay prior to interaction:
+        // keep moving video playing immediately (no black screen) and enable sound on minimal user gesture
+        heroAutoplayBlockedRef.current = true;
+        vid.muted = true;
+        vid.defaultMuted = true;
+        setHeroIsMuted(true);
+        attachMinimalUnlock();
+        try {
+          await vid.play();
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    void attemptStart();
 
     const handleVisibility = () => {
+      const el = heroVideoRef.current;
+      if (!el) return;
       if (document.hidden) {
-        if (vid && !vid.paused) vid.pause();
-      } else {
-        syncPlayState();
+        if (!el.paused) el.pause();
+      } else if (currentView === 'home' && !heroUserPausedRef.current && el.paused) {
+        el.play().catch(() => {});
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-
     return () => {
-      if (vid) {
-        vid.removeEventListener('loadeddata', syncPlayState);
-        vid.removeEventListener('canplay', syncPlayState);
-      }
+      cancelled = true;
+      removeUnlockListeners();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [currentView, isHeroInView, heroSlideIndex, activeHeroSlideType, activeHeroSlideUrl]);
+  }, [currentView, heroSlideIndex, activeHeroSlideType, activeHeroSlideUrl, adminLockedMute]);
+
+  // Interactive User-Gesture Controls (Play/Pause, Mute, Volume, Seek, Fullscreen)
+  const handleHeroPlayPause = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const vid = heroVideoRef.current;
+    if (!vid) return;
+    vid.setAttribute('playsinline', '');
+    vid.setAttribute('webkit-playsinline', '');
+
+    if (vid.paused || vid.ended) {
+      heroUserPausedRef.current = false;
+      if (!adminLockedMute && heroUserMutedRef.current !== true) {
+        heroAutoplayBlockedRef.current = false;
+        vid.removeAttribute('muted');
+        vid.muted = false;
+        vid.defaultMuted = false;
+        const nextVol = heroVolume > 0 ? heroVolume : 1;
+        try {
+          vid.volume = nextVol;
+        } catch {
+          // ignore iOS read-only volume
+        }
+        setHeroIsMuted(false);
+      }
+      vid.play().catch(() => {
+        vid.muted = true;
+        setHeroIsMuted(true);
+        vid.play().catch(() => {});
+      });
+    } else {
+      heroUserPausedRef.current = true;
+      vid.pause();
+    }
+  };
+
+  const handleHeroToggleMute = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const vid = heroVideoRef.current;
+    if (!vid || adminLockedMute) return;
+
+    if (vid.muted || vid.volume === 0) {
+      const nextVol = heroVolume > 0 ? heroVolume : 1;
+      heroAutoplayBlockedRef.current = false;
+      heroUserMutedRef.current = false;
+      vid.removeAttribute('muted');
+      vid.muted = false;
+      vid.defaultMuted = false;
+      try {
+        vid.volume = nextVol;
+      } catch {
+        // ignore iOS read-only volume
+      }
+      setHeroVolume(nextVol);
+      setHeroIsMuted(false);
+      if (vid.paused) {
+        heroUserPausedRef.current = false;
+        vid.play().catch(() => {});
+      }
+    } else {
+      heroUserMutedRef.current = true;
+      vid.muted = true;
+      vid.defaultMuted = true;
+      setHeroIsMuted(true);
+    }
+  };
+
+  const handleHeroVolumeChange = (nextRaw: number) => {
+    const clamped = Math.max(0, Math.min(1, nextRaw));
+    setHeroVolume(clamped);
+    const vid = heroVideoRef.current;
+    if (!vid || adminLockedMute) return;
+    try {
+      vid.volume = clamped;
+    } catch {
+      // ignore iOS read-only volume
+    }
+    const shouldMute = clamped === 0;
+    heroAutoplayBlockedRef.current = false;
+    heroUserMutedRef.current = shouldMute;
+    if (shouldMute) {
+      vid.muted = true;
+      vid.defaultMuted = true;
+    } else {
+      vid.removeAttribute('muted');
+      vid.muted = false;
+      vid.defaultMuted = false;
+    }
+    setHeroIsMuted(shouldMute);
+    if (!shouldMute && vid.paused) {
+      heroUserPausedRef.current = false;
+      vid.play().catch(() => {});
+    }
+  };
+
+  const handleHeroSeek = (nextSec: number) => {
+    const vid = heroVideoRef.current;
+    if (!vid || !Number.isFinite(nextSec)) return;
+    const maxDur = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : heroDuration;
+    const target = Math.max(0, Math.min(maxDur || nextSec, nextSec));
+    vid.currentTime = target;
+    setHeroCurrentTime(target);
+  };
+
+  const handleHeroFullscreen = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const box = heroBoxRef.current as any;
+    const vid = heroVideoRef.current as any;
+    const fsEl = document.fullscreenElement || (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+    if (fsEl) {
+      const exitFn = document.exitFullscreen || (document as unknown as { webkitExitFullscreen?: () => Promise<void> }).webkitExitFullscreen;
+      if (exitFn) {
+        Promise.resolve(exitFn.call(document)).catch(() => {});
+      }
+      return;
+    }
+    if (box?.requestFullscreen) {
+      Promise.resolve(box.requestFullscreen()).catch(() => {
+        if (vid?.webkitEnterFullscreen) {
+          try {
+            vid.webkitEnterFullscreen();
+          } catch {
+            // ignore
+          }
+        }
+      });
+    } else if (box?.webkitRequestFullscreen) {
+      box.webkitRequestFullscreen();
+    } else if (vid?.webkitEnterFullscreen) {
+      try {
+        vid.webkitEnterFullscreen();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const handleHeroSurfaceTap = () => {
+    const vid = heroVideoRef.current;
+    if (!vid) return;
+    if (!adminLockedMute && vid.muted) {
+      handleHeroToggleMute();
+      return;
+    }
+    handleHeroPlayPause();
+  };
 
   useEffect(() => {
     if (heroSlideIndex >= heroSlides.length && heroSlides.length > 0) {
@@ -432,14 +651,14 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
     }
   }, [heroSlideIndex, heroSlides.length]);
 
-  // Auto-flip effect every 5 seconds (only when more than 1 slide)
+  // Auto-flip effect every 5 seconds for image slides only (never interrupt an actively playing video)
   useEffect(() => {
-    if (heroSlides.length <= 1 || isHeroHovered) return;
+    if (heroSlides.length <= 1 || isHeroHovered || activeHeroSlideType === 'video') return;
     const interval = setInterval(() => {
       setHeroSlideIndex(prev => (prev + 1) % heroSlides.length);
     }, 5000);
     return () => clearInterval(interval);
-  }, [heroSlides.length, isHeroHovered]);
+  }, [heroSlides.length, isHeroHovered, activeHeroSlideType]);
 
   // Sync news selection from URL deep links (/news/:id or #news?id=xxx)
   useEffect(() => {
@@ -968,8 +1187,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
         {/* Band 1: Automated Hero Media Reel */}
         <section
           className="relative overflow-hidden bg-stone-50 border-b border-stone-200/80 pt-0 sm:pt-5 pb-8 sm:pb-10"
-          onMouseEnter={() => setIsHeroHovered(true)}
-          onMouseLeave={() => setIsHeroHovered(false)}
+          onMouseEnter={() => heroSlides.length > 1 && setIsHeroHovered(true)}
+          onMouseLeave={() => heroSlides.length > 1 && setIsHeroHovered(false)}
         >
           <div className="max-w-6xl mx-auto px-0 sm:px-6 lg:px-8">
 
@@ -985,68 +1204,50 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                   <div
                     key={slide.id || idx}
                     className={`absolute inset-0 w-full h-full transition-opacity duration-700 ease-in-out ${
-                      slide.type === 'video' ? 'pointer-events-none select-none' : ''
-                    } ${
                       isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
                     }`}
                   >
                     {slide.type === 'video' ? (
                       <video
+                        key={`${slide.id}-${slide.url}`}
                         ref={isActive ? heroVideoRef : undefined}
                         src={slide.url}
                         autoPlay
-                        muted
-                        loop
+                        loop={heroSlides.length <= 1}
                         playsInline
                         preload="auto"
-                        tabIndex={-1}
-                        aria-hidden="true"
-                        draggable={false}
                         disablePictureInPicture
-                        disableRemotePlayback
-                        controlsList="nodownload noplaybackrate noremoteplayback"
-                        onContextMenu={(e) => e.preventDefault()}
-                        onLoadedData={(e) => {
-                          e.currentTarget.muted = true;
-                          e.currentTarget.defaultMuted = true;
-                          e.currentTarget.volume = 0;
-                          if (!document.hidden && isHeroInView && e.currentTarget.paused) {
-                            e.currentTarget.play().catch(() => {});
-                          }
+                        controlsList="nodownload noremoteplayback"
+                        onClick={handleHeroSurfaceTap}
+                        onLoadedMetadata={(e) => {
+                          const dur = e.currentTarget.duration;
+                          if (Number.isFinite(dur) && dur > 0) setHeroDuration(dur);
                         }}
-                        onCanPlay={(e) => {
-                          e.currentTarget.muted = true;
-                          e.currentTarget.defaultMuted = true;
-                          e.currentTarget.volume = 0;
-                          if (!document.hidden && isHeroInView && e.currentTarget.paused) {
-                            e.currentTarget.play().catch(() => {});
-                          }
+                        onDurationChange={(e) => {
+                          const dur = e.currentTarget.duration;
+                          if (Number.isFinite(dur) && dur > 0) setHeroDuration(dur);
                         }}
-                        onPlaying={() => {
-                          clearBrowserMediaSession();
+                        onTimeUpdate={(e) => {
+                          setHeroCurrentTime(e.currentTarget.currentTime || 0);
                         }}
+                        onPlay={() => setHeroIsPlaying(true)}
+                        onPlaying={() => setHeroIsPlaying(true)}
+                        onPause={() => setHeroIsPlaying(false)}
                         onVolumeChange={(e) => {
-                          if (!e.currentTarget.muted || e.currentTarget.volume !== 0) {
-                            e.currentTarget.muted = true;
-                            e.currentTarget.defaultMuted = true;
-                            e.currentTarget.volume = 0;
+                          setHeroIsMuted(e.currentTarget.muted || e.currentTarget.volume === 0);
+                          if (!e.currentTarget.muted && Number.isFinite(e.currentTarget.volume)) {
+                            setHeroVolume(e.currentTarget.volume);
                           }
                         }}
-                        onError={(e) => {
-                          const target = e.currentTarget;
-                          const fallbackVid = '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
-                          if (!target.src.includes(fallbackVid)) {
-                            target.src = fallbackVid;
-                            target.muted = true;
-                            target.defaultMuted = true;
-                            target.volume = 0;
-                            if (isHeroInView && !document.hidden) {
-                              target.play().catch(() => {});
-                            }
+                        onEnded={() => {
+                          setHeroIsPlaying(false);
+                          if (heroSlides.length > 1) {
+                            setHeroSlideIndex(prev => (prev + 1) % heroSlides.length);
                           }
                         }}
-                        poster={slide.posterUrl || data.settings.heroPosterUrl || '/assets/aistudio/hero-poster.jpg'}
-                        className="w-full h-full object-cover object-[center_20%] pointer-events-none select-none"
+                        className={`w-full h-full cursor-pointer select-none ${
+                          heroIsFullscreen ? 'object-contain bg-black' : 'object-cover object-[center_20%]'
+                        }`}
                       />
                     ) : (
                       <img
@@ -1066,6 +1267,87 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                 );
               })}
 
+              {/* Interactive Player Controls Bar (Play/Pause, Seek, Mute, Volume, Fullscreen) — zero mute-prompt banner */}
+              {activeHeroSlideType === 'video' && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/85 via-black/55 to-transparent pt-6 pb-2.5 px-3 sm:px-4 space-y-1.5"
+                >
+                  <div className="flex items-center gap-2" dir="ltr">
+                    <input
+                      type="range"
+                      min={0}
+                      max={heroDuration > 0 ? heroDuration : 100}
+                      step={0.1}
+                      value={Math.min(heroCurrentTime, heroDuration || 100)}
+                      onChange={(e) => handleHeroSeek(parseFloat(e.target.value))}
+                      aria-label="تقديم أو تأخير الفيديو"
+                      className="w-full h-1.5 accent-amber-400 bg-white/25 rounded-full cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 text-white">
+                    <div className="flex items-center gap-1.5 sm:gap-2.5">
+                      <button
+                        type="button"
+                        onClick={handleHeroPlayPause}
+                        aria-label={heroIsPlaying ? 'إيقاف الفيديو مؤقتاً' : 'تشغيل الفيديو'}
+                        title={heroIsPlaying ? 'إيقاف مؤقت' : 'تشغيل'}
+                        className="w-9 h-9 rounded-full bg-amber-500 hover:bg-amber-400 text-stone-950 flex items-center justify-center shadow-md transition-colors cursor-pointer shrink-0"
+                      >
+                        {heroIsPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                      </button>
+
+                      {!adminLockedMute && (
+                        <div className="flex items-center gap-1.5 bg-black/45 border border-white/15 rounded-full px-2 py-1">
+                          <button
+                            type="button"
+                            onClick={handleHeroToggleMute}
+                            aria-label={heroIsMuted ? 'إلغاء كتم الصوت' : 'كتم الصوت'}
+                            title={heroIsMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
+                            className="w-7 h-7 rounded-full hover:bg-white/15 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                          >
+                            {heroIsMuted ? (
+                              <VolumeX className="w-4 h-4 text-red-400" />
+                            ) : (
+                              <Volume2 className="w-4 h-4 text-amber-400" />
+                            )}
+                          </button>
+
+                          <div className="flex items-center w-16 sm:w-24" dir="ltr">
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={heroIsMuted ? 0 : heroVolume}
+                              onChange={(e) => handleHeroVolumeChange(parseFloat(e.target.value))}
+                              aria-label="مستوى الصوت"
+                              title="مستوى الصوت"
+                              className="w-full h-1 accent-amber-400 bg-white/30 rounded-full cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <span className="text-[11px] sm:text-xs font-mono text-stone-200 tabular-nums px-1" dir="ltr">
+                        {formatVideoTime(heroCurrentTime)} / {formatVideoTime(heroDuration)}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleHeroFullscreen}
+                      aria-label={heroIsFullscreen ? 'إغلاق ملء الشاشة' : 'ملء الشاشة'}
+                      title={heroIsFullscreen ? 'إغلاق ملء الشاشة' : 'ملء الشاشة'}
+                      className="w-9 h-9 rounded-full bg-black/50 hover:bg-amber-500 hover:text-stone-950 text-white border border-white/20 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                    >
+                      {heroIsFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Prev / Next Controls (only when multiple slides exist) */}
               {heroSlides.length > 1 && (
                 <>
@@ -1084,7 +1366,11 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                     <ChevronRight className="w-5 h-5" />
                   </button>
 
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/45 backdrop-blur-xs px-3 py-1 rounded-full border border-white/10">
+                  <div
+                    className={`absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/45 backdrop-blur-xs px-3 py-1 rounded-full border border-white/10 ${
+                      activeHeroSlideType === 'video' ? 'bottom-20' : 'bottom-3'
+                    }`}
+                  >
                     {heroSlides.map((_, dotIdx) => (
                       <button
                         key={dotIdx}

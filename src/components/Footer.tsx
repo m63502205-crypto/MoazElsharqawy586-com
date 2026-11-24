@@ -1,11 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Volume2, VolumeX } from 'lucide-react';
+import React from 'react';
 import { SiteSettings } from '../types';
-import {
-  isVisitorHeroAudioMuted,
-  setVisitorHeroAudioMuted,
-  onHeroAudioStateChange
-} from '../utils/heroAudio';
 
 interface FooterProps {
   settings: SiteSettings;
@@ -13,17 +7,6 @@ interface FooterProps {
 }
 
 export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
-  const [visitorMuted, setVisitorMuted] = useState<boolean>(() => isVisitorHeroAudioMuted());
-
-  useEffect(() => {
-    setVisitorMuted(isVisitorHeroAudioMuted());
-    return onHeroAudioStateChange(() => {
-      setVisitorMuted(isVisitorHeroAudioMuted());
-    });
-  }, []);
-
-  const showAudioToggle = settings.heroMediaType !== 'images' && !settings.heroDefaultMuted;
-
   return (
     <footer className="bg-stone-900 text-stone-300 border-t-4 border-amber-600 no-print">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12 text-center flex flex-col items-center">
@@ -109,7 +92,7 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
         {/* Separator */}
         <div className="w-24 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent my-6" />
 
-        {/* Copyright & Discreet Visitor Audio Preference Control */}
+        {/* Copyright */}
         <div className="flex flex-wrap items-center justify-center gap-4 w-full text-xs text-stone-500 border-t border-stone-900 pt-6">
           <p className="tracking-wide">
             © 2026{' '}
@@ -125,26 +108,6 @@ export const Footer: React.FC<FooterProps> = ({ settings, setCurrentView }) => {
               All Rights Reserved.
             </button>
           </p>
-
-          {showAudioToggle && (
-            <button
-              type="button"
-              onClick={() => setVisitorHeroAudioMuted(!visitorMuted)}
-              className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-stone-400 hover:text-amber-300 transition-colors cursor-pointer"
-            >
-              {visitorMuted ? (
-                <>
-                  <VolumeX className="w-3.5 h-3.5 text-stone-400" />
-                  <span>تشغيل صوت العرض الترحيبي</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>إيقاف صوت العرض الترحيبي</span>
-                </>
-              )}
-            </button>
-          )}
         </div>
 
         {/* Developer Credit */}

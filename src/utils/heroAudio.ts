@@ -10,6 +10,7 @@ let audioCtx: AudioContext | null = null;
 let currentSource: AudioBufferSourceNode | null = null;
 let currentPlayingUrl: string | null = null;
 let desiredEnabled = false;
+let desiredVideoUrl: string | null = null;
 let desiredAudioUrl: string | null = null;
 let externalVideoActive = false;
 let visitorMutedState = false;
@@ -23,17 +24,15 @@ const stateChangeListeners = new Set<() => void>();
 const decodedBuffers = new Map<string, AudioBuffer>();
 const failedDecodeUrls = new Set<string>();
 const pendingFetches = new Map<string, Promise<AudioBuffer | null>>();
+const nativeFallbackVideoUrls = new Set<string>();
 
-function readStoredVisitorMuted(): boolean {
-  if (typeof window === 'undefined') return false;
+if (typeof window !== 'undefined') {
   try {
-    return window.sessionStorage?.getItem(VISITOR_MUTE_STORAGE_KEY) === '1';
+    window.sessionStorage?.removeItem(VISITOR_MUTE_STORAGE_KEY);
   } catch {
-    return false;
+    // Ignore storage failures
   }
 }
-
-visitorMutedState = readStoredVisitorMuted();
 
 function notifyStateListeners(): void {
   stateChangeListeners.forEach((cb) => {
@@ -51,17 +50,6 @@ export function isVisitorHeroAudioMuted(): boolean {
 
 export function setVisitorHeroAudioMuted(muted: boolean): void {
   visitorMutedState = Boolean(muted);
-  if (typeof window !== 'undefined') {
-    try {
-      if (visitorMutedState) {
-        window.sessionStorage?.setItem(VISITOR_MUTE_STORAGE_KEY, '1');
-      } else {
-        window.sessionStorage?.removeItem(VISITOR_MUTE_STORAGE_KEY);
-      }
-    } catch {
-      // Ignore storage failures
-    }
-  }
   if (visitorMutedState) {
     stopCurrentSource();
   } else {
@@ -75,6 +63,12 @@ export function onHeroAudioStateChange(cb: () => void): () => void {
   return () => {
     stateChangeListeners.delete(cb);
   };
+}
+
+export function isUsingNativeHeroVideoAudio(videoUrl?: string | null): boolean {
+  const clean = normalizeHeroVideoPath(videoUrl);
+  if (!clean || clean === DEFAULT_HERO_VIDEO_URL) return false;
+  return nativeFallbackVideoUrls.has(clean);
 }
 
 export function isHeroAudioCurrentlyPlaying(): boolean {
@@ -119,6 +113,7 @@ function markVisitorInteracted(): void {
     }
   });
   interactionListeners.clear();
+  notifyStateListeners();
 }
 
 function getAudioContextClass(): typeof AudioContext | undefined {
@@ -194,13 +189,30 @@ function stopCurrentSource(): void {
   currentPlayingUrl = null;
 }
 
-export function resolveHeroAudioUrl(videoUrl: string): string {
+function normalizeHeroVideoPath(videoUrl?: string | null): string {
   const trimmed = String(videoUrl || '').trim();
-  if (!trimmed || trimmed === DEFAULT_HERO_VIDEO_URL) {
+  if (!trimmed) return '';
+  if (typeof window !== 'undefined' && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.origin === window.location.origin && (parsed.pathname.startsWith('/uploads/') || parsed.pathname.startsWith('/assets/'))) {
+        return `${parsed.pathname}${parsed.search}`;
+      }
+    } catch {
+      // keep raw URL
+    }
+  }
+  return trimmed;
+}
+
+export function resolveHeroAudioUrl(videoUrl: string): string {
+  const trimmed = normalizeHeroVideoPath(videoUrl);
+  const pathWithoutQuery = trimmed.split('?')[0];
+  if (!pathWithoutQuery || pathWithoutQuery === DEFAULT_HERO_VIDEO_URL) {
     return DEFAULT_HERO_AUDIO_URL;
   }
-  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('/assets/')) {
-    return `/api/public/hero-audio?src=${encodeURIComponent(trimmed)}`;
+  if (pathWithoutQuery.startsWith('/uploads/') || pathWithoutQuery.startsWith('/assets/')) {
+    return `/api/public/hero-audio?src=${encodeURIComponent(pathWithoutQuery)}`;
   }
   return trimmed;
 }
@@ -223,7 +235,14 @@ function readBootHeroSettings(): { heroVideoUrl: string; heroDefaultMuted: boole
   }
 }
 
-async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
+async function decodeUrlDirectly(ctx: AudioContext, targetUrl: string): Promise<AudioBuffer> {
+  const res = await fetch(targetUrl);
+  if (!res.ok) throw new Error(`Audio fetch failed (${res.status})`);
+  const arr = await res.arrayBuffer();
+  return ctx.decodeAudioData(arr);
+}
+
+async function fetchAndDecodeAudio(url: string, rawVideoUrl?: string | null): Promise<AudioBuffer | null> {
   if (decodedBuffers.has(url)) {
     return decodedBuffers.get(url) || null;
   }
@@ -237,29 +256,39 @@ async function fetchAndDecodeAudio(url: string): Promise<AudioBuffer | null> {
     return null;
   }
 
-  const task = fetch(url)
-    .then((res) => {
-      if (!res.ok) throw new Error('Audio fetch failed');
-      return res.arrayBuffer();
-    })
-    .then((arr) => ctx.decodeAudioData(arr))
+  const cleanRawVideo = normalizeHeroVideoPath(rawVideoUrl);
+
+  const task = decodeUrlDirectly(ctx, url)
     .then((decoded) => {
       decodedBuffers.set(url, decoded);
       failedDecodeUrls.delete(url);
+      if (cleanRawVideo) nativeFallbackVideoUrls.delete(cleanRawVideo);
       pendingFetches.delete(url);
+      notifyStateListeners();
       return decoded;
     })
     .catch(async () => {
-      pendingFetches.delete(url);
-      if (url !== DEFAULT_HERO_AUDIO_URL) {
-        const fallback = await fetchAndDecodeAudio(DEFAULT_HERO_AUDIO_URL);
-        if (fallback) {
-          decodedBuffers.set(url, fallback);
+      // If extracted MP3 endpoint wasn't available for a custom video, try decoding the custom video itself (NEVER fallback to DEFAULT_HERO_AUDIO_URL)
+      if (cleanRawVideo && cleanRawVideo !== DEFAULT_HERO_VIDEO_URL && url !== cleanRawVideo) {
+        try {
+          const directVideoAudio = await decodeUrlDirectly(ctx, cleanRawVideo);
+          decodedBuffers.set(url, directVideoAudio);
           failedDecodeUrls.delete(url);
-          return fallback;
+          nativeFallbackVideoUrls.delete(cleanRawVideo);
+          pendingFetches.delete(url);
+          notifyStateListeners();
+          return directVideoAudio;
+        } catch {
+          // Fall through to native <video> audio fallback for this custom video
         }
       }
+
+      pendingFetches.delete(url);
       failedDecodeUrls.add(url);
+      if (cleanRawVideo && cleanRawVideo !== DEFAULT_HERO_VIDEO_URL) {
+        nativeFallbackVideoUrls.add(cleanRawVideo);
+        notifyStateListeners();
+      }
       return null;
     });
 
@@ -345,8 +374,9 @@ async function tryStartPlayback(attemptAutoResume = false): Promise<void> {
   }
 
   const targetUrl = desiredAudioUrl;
+  const targetVideo = desiredVideoUrl;
   if (!decodedBuffers.has(targetUrl)) {
-    await fetchAndDecodeAudio(targetUrl);
+    await fetchAndDecodeAudio(targetUrl, targetVideo);
   }
 
   if (!canPlayHeroAudioNow() || desiredAudioUrl !== targetUrl) {
@@ -426,17 +456,19 @@ export function initHeroAudioEarly(): void {
   const isAdminRoute = window.location.pathname.startsWith('/admin') || window.location.hash.includes('admin');
   if (!isAdminRoute) {
     const boot = readBootHeroSettings();
-    const preloadUrl = boot ? resolveHeroAudioUrl(boot.heroVideoUrl) : DEFAULT_HERO_AUDIO_URL;
+    const preloadVideoUrl = boot ? normalizeHeroVideoPath(boot.heroVideoUrl) : DEFAULT_HERO_VIDEO_URL;
+    const preloadUrl = resolveHeroAudioUrl(preloadVideoUrl);
 
     if (boot && !boot.heroDefaultMuted && boot.heroMediaType !== 'images') {
       desiredEnabled = true;
+      desiredVideoUrl = preloadVideoUrl;
       desiredAudioUrl = preloadUrl;
     }
 
     // Preload and decode hero audio early; start automatically if browser permits unmuted playback
-    fetchAndDecodeAudio(preloadUrl)
+    fetchAndDecodeAudio(preloadUrl, preloadVideoUrl)
       .then((buf) => {
-        if (buf && canPlayHeroAudioNow()) {
+        if (buf && canPlayHeroAudioNow() && desiredAudioUrl === preloadUrl) {
           void tryStartPlayback(true);
         }
       })
@@ -471,17 +503,24 @@ export function syncHeroAudioState(options: {
   clearBrowserMediaSession();
 
   const nextEnabled = options.enabled;
-  const nextAudioUrl = nextEnabled && options.videoUrl ? resolveHeroAudioUrl(options.videoUrl) : null;
+  const nextVideoUrl = nextEnabled && options.videoUrl ? normalizeHeroVideoPath(options.videoUrl) : null;
+  const nextAudioUrl = nextVideoUrl ? resolveHeroAudioUrl(nextVideoUrl) : null;
   if (options.getCurrentVideoTime) {
     videoTimeProvider = options.getCurrentVideoTime;
   }
 
   if (!nextEnabled || !nextAudioUrl) {
     desiredEnabled = false;
+    desiredVideoUrl = null;
     desiredAudioUrl = null;
     stopCurrentSource();
     notifyStateListeners();
     return;
+  }
+
+  // Stop previous video's audio immediately when switching to a different video
+  if (currentPlayingUrl && currentPlayingUrl !== nextAudioUrl) {
+    stopCurrentSource();
   }
 
   // Avoid stuttering or restarting across page transitions when the exact same soundtrack is already playing
@@ -496,10 +535,13 @@ export function syncHeroAudioState(options: {
   }
 
   desiredEnabled = true;
+  desiredVideoUrl = nextVideoUrl;
   desiredAudioUrl = nextAudioUrl;
+  failedDecodeUrls.delete(nextAudioUrl);
 
   const targetUrl = desiredAudioUrl;
-  fetchAndDecodeAudio(targetUrl).then((buf) => {
+  const targetVideo = desiredVideoUrl;
+  fetchAndDecodeAudio(targetUrl, targetVideo).then((buf) => {
     if (buf && canPlayHeroAudioNow() && desiredAudioUrl === targetUrl) {
       if (!startDecodedBufferNow()) {
         void tryStartPlayback(true);
@@ -511,6 +553,7 @@ export function syncHeroAudioState(options: {
 
 export function stopHeroAudio(): void {
   desiredEnabled = false;
+  desiredVideoUrl = null;
   desiredAudioUrl = null;
   externalVideoActive = false;
   stopCurrentSource();

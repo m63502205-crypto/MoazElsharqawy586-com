@@ -2,6 +2,7 @@ import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -112,8 +113,16 @@ function getPersistentUploadAsset(filename: string): StoredUploadAsset | null {
   return vault[safeName] || null;
 }
 
-app.use('/uploads', express.static(uploadsDir, { maxAge: '7d' }));
-app.use('/uploads', (req: Request, res: Response) => {
+const liveCacheDir = path.join(os.tmpdir(), 'nfp-live-cache');
+try {
+  if (!fs.existsSync(liveCacheDir)) fs.mkdirSync(liveCacheDir, { recursive: true });
+} catch {
+  // ignore tmp dir creation error
+}
+
+app.use('/uploads', express.static(uploadsDir, { maxAge: '7d', acceptRanges: true }));
+app.use('/uploads', express.static(liveCacheDir, { maxAge: '7d', acceptRanges: true }));
+app.use('/uploads', async (req: Request, res: Response) => {
   const safeName = path.basename(decodeURIComponent(req.path || '').split('?')[0].trim());
   if (safeName && !safeName.includes('..')) {
     const vaulted = getPersistentUploadAsset(safeName);
@@ -130,6 +139,14 @@ app.use('/uploads', (req: Request, res: Response) => {
         return res.send(buffer);
       } catch {
         // fall through
+      }
+    }
+
+    const reqHost = String(req.headers['x-forwarded-host'] || req.get('host') || '').toLowerCase();
+    if (process.env.NODE_ENV !== 'production' && !reqHost.includes('nfp-october3.ai.studio')) {
+      const syncedFile = await syncUploadFileFromLivePortal(`/uploads/${safeName}`).catch(() => null);
+      if (syncedFile && fs.existsSync(syncedFile)) {
+        return res.sendFile(syncedFile);
       }
     }
   }
@@ -149,6 +166,178 @@ app.use('/uploads', (req: Request, res: Response) => {
 
 const publicAssetsDir = path.resolve(process.cwd(), 'public', 'assets');
 const heroAudioExtractionInFlight = new Map<string, Promise<string | null>>();
+const videoCompatibilityInFlight = new Map<string, Promise<boolean>>();
+
+function isMp4MoovBeforeMdat(filePath: string): boolean {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      let offset = 0;
+      const header = Buffer.alloc(16);
+      for (let i = 0; i < 64 && offset + 8 <= stat.size; i++) {
+        const bytesRead = fs.readSync(fd, header, 0, 16, offset);
+        if (bytesRead < 8) break;
+        const size32 = header.readUInt32BE(0);
+        const type = header.toString('ascii', 4, 8);
+        if (type === 'moov') return true;
+        if (type === 'mdat') return false;
+        let boxSize = size32;
+        if (size32 === 1 && bytesRead >= 16) {
+          const big = header.readBigUInt64BE(8);
+          boxSize = Number(big);
+        } else if (size32 === 0) {
+          break;
+        }
+        if (!Number.isFinite(boxSize) || boxSize < 8) break;
+        offset += boxSize;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // ignore header inspection errors
+  }
+  return true;
+}
+
+async function ensureWebCompatibleMp4(videoPath?: string | null): Promise<boolean> {
+  if (!videoPath || !fs.existsSync(videoPath)) return false;
+  const ext = path.extname(videoPath).toLowerCase();
+  if (!['.mp4', '.mov', '.m4v', '.webm'].includes(ext)) return false;
+
+  const existingTask = videoCompatibilityInFlight.get(videoPath);
+  if (existingTask) return existingTask;
+
+  const task = (async () => {
+    const tmpOut = `${videoPath}.webcompat.${Date.now()}.mp4`;
+    try {
+      const { stdout } = await execFileAsync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'format=bit_rate:stream=codec_type,codec_name,pix_fmt,width,height,has_b_frames,r_frame_rate,avg_frame_rate',
+          '-of',
+          'json',
+          videoPath
+        ],
+        { timeout: 20000 }
+      );
+      const parsed = JSON.parse(stdout || '{}');
+      const formatBitRate = Number(parsed?.format?.bit_rate || 0);
+      const streams: Array<{
+        codec_type?: string;
+        codec_name?: string;
+        pix_fmt?: string;
+        width?: number;
+        height?: number;
+        has_b_frames?: number;
+        r_frame_rate?: string;
+        avg_frame_rate?: string;
+      }> = Array.isArray(parsed?.streams) ? parsed.streams : [];
+      const vStream = streams.find(s => s.codec_type === 'video');
+      const aStream = streams.find(s => s.codec_type === 'audio');
+      if (!vStream) return false;
+
+      const width = Number(vStream.width || 0);
+      const height = Number(vStream.height || 0);
+      const evenDimensions = width > 0 && height > 0 && width % 2 === 0 && height % 2 === 0;
+      const smoothDecodeOk =
+        vStream.codec_name === 'h264' &&
+        vStream.pix_fmt === 'yuv420p' &&
+        evenDimensions &&
+        Number(vStream.has_b_frames || 0) === 0 &&
+        (!formatBitRate || formatBitRate <= 1350000);
+      const audioOk = !aStream || aStream.codec_name === 'aac';
+      const fastStartOk = ext === '.mp4' ? isMp4MoovBeforeMdat(videoPath) : false;
+
+      if (smoothDecodeOk && audioOk && fastStartOk) {
+        return true;
+      }
+
+      if (smoothDecodeOk && audioOk && !fastStartOk) {
+        await execFileAsync(
+          'ffmpeg',
+          ['-y', '-i', videoPath, '-c', 'copy', '-movflags', '+faststart', tmpOut],
+          { timeout: 60000 }
+        );
+      } else {
+        await execFileAsync(
+          'ffmpeg',
+          [
+            '-y',
+            '-i',
+            videoPath,
+            '-vf',
+            'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+            '-c:v',
+            'libx264',
+            '-profile:v',
+            'main',
+            '-level',
+            '3.1',
+            '-pix_fmt',
+            'yuv420p',
+            '-bf',
+            '0',
+            '-r',
+            '30',
+            '-vsync',
+            'cfr',
+            '-g',
+            '30',
+            '-keyint_min',
+            '30',
+            '-sc_threshold',
+            '0',
+            '-preset',
+            'veryfast',
+            '-crf',
+            '23',
+            '-maxrate',
+            '950k',
+            '-bufsize',
+            '1900k',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-ar',
+            '44100',
+            '-ac',
+            '2',
+            '-shortest',
+            '-movflags',
+            '+faststart',
+            tmpOut
+          ],
+          { timeout: 180000 }
+        );
+      }
+
+      if (fs.existsSync(tmpOut) && fs.statSync(tmpOut).size > 1024) {
+        fs.renameSync(tmpOut, videoPath);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.warn('[Video Compatibility] Could not optimize video:', err);
+      return false;
+    } finally {
+      try {
+        if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+      } catch {
+        // ignore cleanup errors
+      }
+      videoCompatibilityInFlight.delete(videoPath);
+    }
+  })();
+
+  videoCompatibilityInFlight.set(videoPath, task);
+  return task;
+}
 
 function resolveSafeLocalMediaFile(rawUrl?: string | null): string | null {
   const clean = String(rawUrl || '').split('?')[0].trim();
@@ -157,15 +346,28 @@ function resolveSafeLocalMediaFile(rawUrl?: string | null): string | null {
     const rel = clean.slice('/uploads/'.length);
     if (!rel || rel.includes('..')) return null;
     const target = path.resolve(uploadsDir, rel);
-    if (!target.startsWith(uploadsDir + path.sep)) return null;
-    return fs.existsSync(target) && fs.statSync(target).isFile() ? target : null;
+    if (target.startsWith(uploadsDir + path.sep) && fs.existsSync(target) && fs.statSync(target).isFile()) {
+      return target;
+    }
+    const cachedTarget = path.resolve(liveCacheDir, rel);
+    if (cachedTarget.startsWith(liveCacheDir + path.sep) && fs.existsSync(cachedTarget) && fs.statSync(cachedTarget).isFile()) {
+      return cachedTarget;
+    }
+    return null;
   }
   if (clean.startsWith('/assets/')) {
     const rel = clean.slice('/assets/'.length);
     if (!rel || rel.includes('..')) return null;
     const target = path.resolve(publicAssetsDir, rel);
-    if (!target.startsWith(publicAssetsDir + path.sep)) return null;
-    return fs.existsSync(target) && fs.statSync(target).isFile() ? target : null;
+    if (target.startsWith(publicAssetsDir + path.sep) && fs.existsSync(target) && fs.statSync(target).isFile()) {
+      return target;
+    }
+    const distAssetsDir = path.resolve(process.cwd(), 'dist', 'assets');
+    const distTarget = path.resolve(distAssetsDir, rel);
+    if (distTarget.startsWith(distAssetsDir + path.sep) && fs.existsSync(distTarget) && fs.statSync(distTarget).isFile()) {
+      return distTarget;
+    }
+    return null;
   }
   return null;
 }
@@ -196,7 +398,10 @@ async function ensureHeroAudioMp3(rawVideoUrl?: string | null): Promise<string |
     if (fs.existsSync(bundled)) return bundled;
   }
 
-  const videoPath = resolveSafeLocalMediaFile(clean);
+  let videoPath = resolveSafeLocalMediaFile(clean);
+  if (!videoPath && clean.startsWith('/uploads/') && process.env.NODE_ENV !== 'production') {
+    videoPath = await syncUploadFileFromLivePortal(clean).catch(() => null);
+  }
   if (!videoPath) return null;
 
   const stat = fs.statSync(videoPath);
@@ -205,7 +410,7 @@ async function ensureHeroAudioMp3(rawVideoUrl?: string | null): Promise<string |
     .update(`${videoPath}:${stat.size}:${stat.mtimeMs}`)
     .digest('hex')
     .slice(0, 16);
-  const outMp3 = path.join(uploadsDir, `hero_audio_${hash}.mp3`);
+  const outMp3 = path.join(liveCacheDir, `hero_audio_${hash}.mp3`);
   if (fs.existsSync(outMp3) && fs.statSync(outMp3).size > 256) {
     return outMp3;
   }
@@ -543,6 +748,210 @@ async function hydrateDbFromPublicFirestoreRest(force = false): Promise<boolean>
   })();
 
   return firestoreHydrateInFlight;
+}
+
+const LIVE_PORTAL_ORIGIN = 'https://nfp-october3.ai.studio';
+const liveUploadFetchInFlight = new Map<string, Promise<string | null>>();
+let lastLivePortalSyncAt = 0;
+let livePortalSyncInFlight: Promise<boolean> | null = null;
+
+async function syncUploadFileFromLivePortal(rawUrl?: string | null): Promise<string | null> {
+  const clean = String(rawUrl || '').split('?')[0].trim();
+  if (!clean.startsWith('/uploads/')) return null;
+  const existing = resolveSafeLocalMediaFile(clean);
+  if (existing) return existing;
+  if (process.env.NODE_ENV === 'production') return null;
+
+  const rel = path.basename(clean.slice('/uploads/'.length));
+  if (!rel || rel.includes('..')) return null;
+  const destPath = path.join(liveCacheDir, rel);
+  if (!destPath.startsWith(liveCacheDir + path.sep)) return null;
+
+  const inflight = liveUploadFetchInFlight.get(rel);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const tmpPath = `${destPath}.tmp.${Date.now()}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+      const res = await fetch(`${LIVE_PORTAL_ORIGIN}/uploads/${encodeURIComponent(rel)}`, {
+        signal: controller.signal
+      });
+      if (!res.ok) return null;
+      if (String(res.headers.get('cache-control') || '').toLowerCase() === 'no-store') {
+        return null;
+      }
+      const arr = await res.arrayBuffer();
+      const buf = Buffer.from(arr);
+      if (buf.length === 0) return null;
+      fs.writeFileSync(tmpPath, buf);
+      fs.renameSync(tmpPath, destPath);
+      if (/\.(mp4|webm|mov|m4v|ogg)$/i.test(rel)) {
+        await ensureWebCompatibleMp4(destPath);
+        void ensureHeroAudioMp3(`/uploads/${rel}`);
+      }
+      return destPath;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {
+        // ignore
+      }
+      liveUploadFetchInFlight.delete(rel);
+    }
+  })();
+
+  liveUploadFetchInFlight.set(rel, task);
+  return task;
+}
+
+async function syncFromOfficialLivePortal(force = false): Promise<boolean> {
+  if (process.env.NODE_ENV === 'production') return false;
+  const now = Date.now();
+  if (!force && now - lastLocalAdminMutationAt < 10000) return false;
+  if (!force && now - lastLivePortalSyncAt < 20000) return false;
+  if (livePortalSyncInFlight) return livePortalSyncInFlight;
+
+  livePortalSyncInFlight = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    try {
+      const res = await fetch(`${LIVE_PORTAL_ORIGIN}/api/public/data`, {
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: controller.signal
+      });
+      lastLivePortalSyncAt = Date.now();
+      if (!res.ok) return false;
+      const live: any = await res.json();
+      if (!live || typeof live !== 'object' || !live.settings) return false;
+
+      const data = db.get();
+      let changed = false;
+
+      const tombSet = new Set<string>(Array.isArray(data.deletedTombstones) ? data.deletedTombstones : []);
+      if (Array.isArray(live.deletedTombstones)) {
+        for (const k of live.deletedTombstones) {
+          if (typeof k === 'string' && k) tombSet.add(k);
+        }
+      }
+      const toSafeId = (id: string) => String(id || '').trim().replace(/[^a-zA-Z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 128);
+      const isTombstoned = (col: string, id: string) =>
+        tombSet.has(`${col}:${id}`) || tombSet.has(`${col}:${toSafeId(id)}`);
+
+      const mergeArr = (col: string, currentArr: any[], liveArr: any[], bySlug = false) => {
+        if (!Array.isArray(liveArr)) return currentArr;
+        const beforeStr = JSON.stringify(currentArr);
+        const map = new Map<string, any>();
+        for (const item of currentArr || []) {
+          if (!item || !item.id || isTombstoned(col, item.id)) continue;
+          const k = bySlug && item.slug ? `slug:${item.slug}` : `id:${item.id}`;
+          map.set(k, item);
+        }
+        for (const liveItem of liveArr) {
+          if (!liveItem || !liveItem.id || isTombstoned(col, liveItem.id)) continue;
+          const k = bySlug && liveItem.slug ? `slug:${liveItem.slug}` : `id:${liveItem.id}`;
+          const existing = map.get(k);
+          if (!existing) {
+            map.set(k, liveItem);
+          } else {
+            const existingTs = String(existing.updatedAt || existing.createdAt || '');
+            const liveTs = String(liveItem.updatedAt || liveItem.createdAt || '');
+            if (liveTs && (!existingTs || liveTs > existingTs)) {
+              map.set(k, liveItem);
+            }
+          }
+        }
+        const merged = Array.from(map.values());
+        if (JSON.stringify(merged) !== beforeStr) {
+          changed = true;
+        }
+        return merged;
+      };
+
+      data.partyLeaders = mergeArr('party_leaders', data.partyLeaders, live.partyLeaders);
+      data.secretariatLeaders = mergeArr('secretariat_leaders', data.secretariatLeaders, live.secretariatLeaders);
+      data.specializedSecretariats = mergeArr('secretariats', data.specializedSecretariats, live.specializedSecretariats, true);
+      data.secretariatMembers = mergeArr('secretariat_members', data.secretariatMembers, live.secretariatMembers);
+      data.initiatives = mergeArr('initiatives', data.initiatives, live.initiatives);
+      data.news = mergeArr('news', data.news, live.news);
+      data.events = mergeArr('events', data.events, live.events);
+      data.media = mergeArr('media', data.media, live.media);
+      data.pages = mergeArr('pages', data.pages || [], live.pages);
+
+      const liveSettings = live.settings;
+      const liveUpdated = String(liveSettings?.updatedAt || '');
+      const localUpdated = String(data.settings?.updatedAt || '');
+      if (liveUpdated && (!localUpdated || liveUpdated > localUpdated)) {
+        const nextSettings = {
+          ...data.settings,
+          ...liveSettings,
+          rosterVersion: Math.max(Number(data.settings?.rosterVersion || 0), Number(liveSettings?.rosterVersion || 0))
+        };
+        if (JSON.stringify(nextSettings) !== JSON.stringify(data.settings)) {
+          data.settings = nextSettings;
+          changed = true;
+        }
+      }
+
+      if (live.liveStream) {
+        const liveStreamUpdated = String(live.liveStream.updatedAt || '');
+        const localStreamUpdated = String(data.liveStream?.updatedAt || '');
+        if (liveStreamUpdated && (!localStreamUpdated || liveStreamUpdated > localStreamUpdated)) {
+          const nextLive = { ...data.liveStream, ...live.liveStream };
+          if (JSON.stringify(nextLive) !== JSON.stringify(data.liveStream)) {
+            data.liveStream = nextLive;
+            changed = true;
+          }
+        }
+      }
+
+      if (tombSet.size > (data.deletedTombstones?.length || 0)) {
+        data.deletedTombstones = Array.from(tombSet);
+        changed = true;
+      }
+
+      // Sync any /uploads/... media files referenced by live settings/content (e.g. heroVideoUrl)
+      const uploadPaths = new Set<string>();
+      const scanForUploads = (val: any) => {
+        if (!val) return;
+        if (typeof val === 'string') {
+          if (val.startsWith('/uploads/')) uploadPaths.add(val.split('?')[0]);
+        } else if (Array.isArray(val)) {
+          val.forEach(scanForUploads);
+        } else if (typeof val === 'object') {
+          Object.values(val).forEach(scanForUploads);
+        }
+      };
+      scanForUploads(data.settings);
+      scanForUploads(live);
+      for (const up of uploadPaths) {
+        if (up === String(data.settings?.heroVideoUrl || '').split('?')[0]) {
+          await syncUploadFileFromLivePortal(up);
+        } else {
+          void syncUploadFileFromLivePortal(up);
+        }
+      }
+
+      if (changed) {
+        db.save();
+        if (data.settings?.heroVideoUrl) {
+          void ensureHeroAudioMp3(data.settings.heroVideoUrl);
+        }
+      }
+      return changed;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      livePortalSyncInFlight = null;
+    }
+  })();
+
+  return livePortalSyncInFlight;
 }
 
 function recordLocalTombstone(data: ReturnType<typeof db.get>, col: string, rawId: string) {
@@ -1940,6 +2349,7 @@ function injectDynamicSiteMetaWithStatus(html: string, req: Request): { html: st
   const organizationSchema: Record<string, any> = {
     '@context': 'https://schema.org',
     '@type': 'PoliticalParty',
+    '@id': `${siteUrl}/#organization`,
     name: seo.siteName,
     url: `${siteUrl}/`,
     description: seo.siteDescription,
@@ -1970,10 +2380,14 @@ function injectDynamicSiteMetaWithStatus(html: string, req: Request): { html: st
     {
       '@context': 'https://schema.org',
       '@type': 'WebSite',
+      '@id': `${siteUrl}/#website`,
       name: seo.siteName,
       alternateName: ['حزب الجبهة الوطنية أمانة قسم ثالث أكتوبر', 'أمانة حزب الجبهة الوطنية – قسم ثالث أكتوبر', 'أمانة قسم ثالث أكتوبر'],
       url: `${siteUrl}/`,
       description: seo.siteDescription,
+      publisher: {
+        '@id': `${siteUrl}/#organization`
+      },
       inLanguage: 'ar'
     },
     organizationSchema
@@ -2019,6 +2433,7 @@ function injectDynamicSiteMetaWithStatus(html: string, req: Request): { html: st
     `\n    ${verificationMetaTags}`
   );
 
+  out = out.replace(/<meta\s+name="author"\s+content="[^"]*"\s*\/?>/i, `<meta name="author" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+name="application-name"\s+content="[^"]*"\s*\/?>/i, `<meta name="application-name" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+name="apple-mobile-web-app-title"\s+content="[^"]*"\s*\/?>/i, `<meta name="apple-mobile-web-app-title" content="${escapeHtml(seo.siteName)}" />`);
   out = out.replace(/<meta\s+property="og:site_name"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:site_name" content="${escapeHtml(seo.siteName)}" />`);
@@ -2097,10 +2512,13 @@ function buildPublicPortalPayload(
   const ext = Boolean(options?.externalizeInlineImages);
   const rawSettingsInput = data.settings || ({} as any);
   const rawHeroVideoUrl = String(rawSettingsInput.heroVideoUrl || '').trim();
+  const isDevPreview = process.env.NODE_ENV !== 'production';
   const resolvedHeroVideoUrl =
-    rawHeroVideoUrl.startsWith('/uploads/') && !resolveSafeLocalMediaFile(rawHeroVideoUrl)
+    !rawHeroVideoUrl
       ? '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
-      : rawSettingsInput.heroVideoUrl;
+      : rawHeroVideoUrl.startsWith('/uploads/') && !isDevPreview && !resolveSafeLocalMediaFile(rawHeroVideoUrl)
+        ? '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4'
+        : rawSettingsInput.heroVideoUrl;
   const cleanField = (val: string | undefined, collection: string, id: string, field: string): string => {
     const cleaned = sanitizeMediaUrlForRead(val);
     if (!cleaned) return '';
@@ -2471,14 +2889,13 @@ app.get('/api/public/firestore-asset/:assetId', async (req: Request, res: Respon
 // Extracted lightweight MP3 track for custom hero videos (prevents mobile OS lockscreen media bars)
 app.get('/api/public/hero-audio', async (req: Request, res: Response) => {
   const src = typeof req.query?.src === 'string' ? req.query.src : '';
-  let mp3Path = await ensureHeroAudioMp3(src);
-  if (!mp3Path || !fs.existsSync(mp3Path)) {
-    const cleanSrc = src.split('?')[0].trim();
-    if (!cleanSrc || cleanSrc.startsWith('/uploads/')) {
-      const bundledFallback = path.resolve(publicAssetsDir, 'aistudio', 'hero-audio.mp3');
-      if (fs.existsSync(bundledFallback)) {
-        mp3Path = bundledFallback;
-      }
+  const cleanSrc = src.split('?')[0].trim();
+  const isDefaultHeroVideo = !cleanSrc || cleanSrc === '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
+  let mp3Path = await ensureHeroAudioMp3(cleanSrc);
+  if ((!mp3Path || !fs.existsSync(mp3Path)) && isDefaultHeroVideo) {
+    const bundledFallback = path.resolve(publicAssetsDir, 'aistudio', 'hero-audio.mp3');
+    if (fs.existsSync(bundledFallback)) {
+      mp3Path = bundledFallback;
     }
   }
   if (!mp3Path || !fs.existsSync(mp3Path)) {
@@ -2519,8 +2936,9 @@ app.get('/api/public/stream', (req: Request, res: Response) => {
 });
 
 // 1. Get all public portal data
-app.get('/api/public/data', async (_req: Request, res: Response) => {
-  await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
+app.get('/api/public/data', (_req: Request, res: Response) => {
+  void hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
+  void syncFromOfficialLivePortal(false).catch(() => undefined);
   const data = db.get();
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -3331,9 +3749,10 @@ app.get('/api/admin/analytics', authenticateAdmin, (req: Request, res: Response)
 });
 
 // Full DB for admin (filters collections by caller RBAC permissions + specialized secretariat scope)
-app.get('/api/admin/full-db', authenticateAdmin, async (req: Request, res: Response) => {
+app.get('/api/admin/full-db', authenticateAdmin, (req: Request, res: Response) => {
   const admin = (req as any).admin as AdminUser;
-  await hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
+  void hydrateDbFromPublicFirestoreRest(false).catch(() => undefined);
+  void syncFromOfficialLivePortal(false).catch(() => undefined);
   const data = db.get();
   const specialized = isSpecializedAdmin(admin);
   const managedSecId = getManagedSecretariatId(admin);
@@ -5408,7 +5827,7 @@ app.delete('/api/admin/roles/:id', authenticateAdmin, requirePermission('roles',
 });
 
 // Upload API (requires content/management permission)
-app.post('/api/admin/upload', authenticateAdmin, requireAnyPermission(['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'news', 'events', 'media', 'pages', 'settings']), (req: Request, res: Response) => {
+app.post('/api/admin/upload', authenticateAdmin, requireAnyPermission(['leaders_party', 'leaders_secretariat', 'secretariats', 'initiatives', 'news', 'events', 'media', 'pages', 'settings']), async (req: Request, res: Response) => {
   const { data: fileData } = req.body || {};
   if (!fileData || typeof fileData !== 'string') {
     return res.status(400).json({ error: 'لم يتم إرسال أي ملف صالح للرفع' });
@@ -5417,7 +5836,11 @@ app.post('/api/admin/upload', authenticateAdmin, requireAnyPermission(['leaders_
   if (!result.ok || !result.url) {
     return res.status(400).json({ error: result.error || 'تعذر حفظ الملف المرفوع؛ تأكد من صحة صيغة الصورة' });
   }
-  if (/\.(mp4|webm|mov|ogg)$/i.test(result.url)) {
+  if (/\.(mp4|webm|mov|m4v|ogg)$/i.test(result.url)) {
+    const localVideo = resolveSafeLocalMediaFile(result.url);
+    if (localVideo) {
+      await ensureWebCompatibleMp4(localVideo);
+    }
     void ensureHeroAudioMp3(result.url);
   }
   res.json({ success: true, url: result.url });
@@ -5709,8 +6132,6 @@ app.get(['/api/news/:id/image', '/api/events/:id/image', '/api/initiatives/:id/i
 
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
-  await hydrateDbFromPublicFirestoreRest(true).catch(() => undefined);
-  void ensureHeroAudioMp3(db.get().settings?.heroVideoUrl);
 
   if (!isProduction) {
     const vite = await createViteServer({
@@ -5791,6 +6212,20 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[NFP Platform] Server successfully running at http://0.0.0.0:${PORT}`);
+    void Promise.all([
+      hydrateDbFromPublicFirestoreRest(true).catch(() => undefined),
+      syncFromOfficialLivePortal(true).catch(() => undefined)
+    ]).finally(() => {
+      const heroVidUrl = db.get().settings?.heroVideoUrl;
+      const localHeroVid = resolveSafeLocalMediaFile(heroVidUrl);
+      if (localHeroVid) {
+        void ensureWebCompatibleMp4(localHeroVid).finally(() => {
+          void ensureHeroAudioMp3(heroVidUrl);
+        });
+      } else {
+        void ensureHeroAudioMp3(heroVidUrl);
+      }
+    });
   });
 }
 

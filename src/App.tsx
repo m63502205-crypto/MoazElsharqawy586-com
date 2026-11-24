@@ -22,11 +22,7 @@ import {
   parseLocationToRoute,
   getPageSeoMeta
 } from './utils/routes';
-import {
-  subscribeLivePortalData,
-  mergeWithCurrentLiveSnapshots,
-  subscribeLiveSyncBus
-} from './utils/firestoreSync';
+import { subscribeLivePublicPortal, setLiveBasePublicData } from './utils/firestoreSync';
 
 let cachedBootstrappedData: PublicPortalData | null | undefined = undefined;
 
@@ -79,17 +75,7 @@ function MainApp() {
     return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
   }, []);
 
-  const basePortalDataRef = useRef<PublicPortalData | null>(bootstrappedData);
-  const dataSnapshotRef = useRef<string>(bootstrappedData ? JSON.stringify(bootstrappedData) : '');
-
-  const applyPortalData = (portal: PublicPortalData) => {
-    const nextSerialized = JSON.stringify(portal);
-    if (nextSerialized !== dataSnapshotRef.current) {
-      dataSnapshotRef.current = nextSerialized;
-      setData(portal);
-    }
-  };
-
+  const dataSnapshotRef = useRef<string>('');
   useEffect(() => {
     dataSnapshotRef.current = data ? JSON.stringify(data) : '';
   }, [data]);
@@ -97,8 +83,11 @@ function MainApp() {
   const loadData = async (silent = false) => {
     try {
       const portal = await api.getPublicData();
-      basePortalDataRef.current = portal;
-      applyPortalData(mergeWithCurrentLiveSnapshots(portal));
+      const nextSerialized = JSON.stringify(portal);
+      if (nextSerialized !== dataSnapshotRef.current) {
+        dataSnapshotRef.current = nextSerialized;
+        setData(portal);
+      }
       setLoadError(null);
     } catch (err: any) {
       if (!silent) {
@@ -118,56 +107,19 @@ function MainApp() {
   };
 
   useEffect(() => {
+    if (bootstrappedData) {
+      setLiveBasePublicData(bootstrappedData);
+    }
     loadData(false);
-
-    const unsubFirestore = subscribeLivePortalData(
-      () => basePortalDataRef.current,
-      mergedPortal => {
-        applyPortalData(mergedPortal);
-      }
-    );
-
-    let syncRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-    const triggerSilentServerRefresh = () => {
-      if (syncRefreshTimer) clearTimeout(syncRefreshTimer);
-      syncRefreshTimer = setTimeout(() => {
-        void loadData(true);
-      }, 80);
-    };
-
-    const unsubBus = subscribeLiveSyncBus(signal => {
-      if (signal.scope === 'public' || signal.scope === 'all') {
-        triggerSilentServerRefresh();
+    const unsub = subscribeLivePublicPortal(mergedPortal => {
+      const nextSerialized = JSON.stringify(mergedPortal);
+      if (nextSerialized !== dataSnapshotRef.current) {
+        dataSnapshotRef.current = nextSerialized;
+        setData(mergedPortal);
+        setLoading(false);
       }
     });
-
-    let eventSource: EventSource | null = null;
-    if (typeof window !== 'undefined' && 'EventSource' in window) {
-      try {
-        eventSource = new EventSource('/api/public/stream');
-        eventSource.addEventListener('db-update', (ev: MessageEvent) => {
-          try {
-            const payload = JSON.parse(String(ev.data || '{}'));
-            if (!payload.scope || payload.scope === 'public' || payload.scope === 'all') {
-              triggerSilentServerRefresh();
-            }
-          } catch {
-            triggerSilentServerRefresh();
-          }
-        });
-      } catch {
-        eventSource = null;
-      }
-    }
-
-    return () => {
-      if (syncRefreshTimer) clearTimeout(syncRefreshTimer);
-      unsubFirestore();
-      unsubBus();
-      if (eventSource) {
-        eventSource.close();
-      }
-    };
+    return () => unsub();
   }, []);
 
   // Global search shortcut (Ctrl+K or Cmd+K)

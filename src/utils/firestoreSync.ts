@@ -8,114 +8,12 @@ import {
   query,
   setDoc,
   where,
+  type QuerySnapshot,
   type Unsubscribe
 } from 'firebase/firestore';
 import { signInWithPopup, signOut } from 'firebase/auth';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../firebase';
 import { LiveStream, PublicPortalData, SiteSettings } from '../types';
-
-const DEFAULT_BUNDLED_HERO_VIDEO = '/assets/aistudio/VID-20261023-WA0156_a7a2c2e2.mp4';
-const LIVE_SYNC_CHANNEL = 'nfp_live_sync_bus';
-const LIVE_SYNC_STORAGE_KEY = 'nfp_live_sync_ping';
-
-export type LiveSyncScope = 'public' | 'admin' | 'all';
-
-export interface LiveSyncSignal {
-  scope: LiveSyncScope;
-  entity?: string;
-  ts: number;
-  origin?: string;
-}
-
-const INSTANCE_ORIGIN_ID =
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-
-const inProcessSyncListeners = new Set<(signal: LiveSyncSignal) => void>();
-
-export function broadcastLiveSyncEvent(scope: LiveSyncScope = 'all', entity?: string): void {
-  const signal: LiveSyncSignal = {
-    scope,
-    entity,
-    ts: Date.now(),
-    origin: INSTANCE_ORIGIN_ID
-  };
-  inProcessSyncListeners.forEach(cb => {
-    try {
-      cb(signal);
-    } catch {
-      // ignore listener errors
-    }
-  });
-
-  if (typeof window === 'undefined') return;
-  try {
-    if ('BroadcastChannel' in window) {
-      const ch = new BroadcastChannel(LIVE_SYNC_CHANNEL);
-      ch.postMessage(signal);
-      ch.close();
-    }
-  } catch {
-    // ignore BroadcastChannel restrictions in sandboxed iframes
-  }
-  try {
-    localStorage.setItem(LIVE_SYNC_STORAGE_KEY, JSON.stringify(signal));
-  } catch {
-    // ignore storage quota / private mode
-  }
-}
-
-export function subscribeLiveSyncBus(onSignal: (signal: LiveSyncSignal) => void): () => void {
-  inProcessSyncListeners.add(onSignal);
-  let channel: BroadcastChannel | null = null;
-
-  if (typeof window !== 'undefined') {
-    try {
-      if ('BroadcastChannel' in window) {
-        channel = new BroadcastChannel(LIVE_SYNC_CHANNEL);
-        channel.onmessage = (ev: MessageEvent) => {
-          const payload = ev?.data as LiveSyncSignal | undefined;
-          if (payload && payload.origin !== INSTANCE_ORIGIN_ID) {
-            onSignal(payload);
-          }
-        };
-      }
-    } catch {
-      channel = null;
-    }
-  }
-
-  const handleStorage = (ev: StorageEvent) => {
-    if (ev.key !== LIVE_SYNC_STORAGE_KEY || !ev.newValue) return;
-    try {
-      const payload = JSON.parse(ev.newValue) as LiveSyncSignal;
-      if (payload && payload.origin !== INSTANCE_ORIGIN_ID) {
-        onSignal(payload);
-      }
-    } catch {
-      // ignore invalid JSON
-    }
-  };
-
-  if (typeof window !== 'undefined') {
-    window.addEventListener('storage', handleStorage);
-  }
-
-  return () => {
-    inProcessSyncListeners.delete(onSignal);
-    if (channel) {
-      try {
-        channel.close();
-      } catch {
-        // ignore
-      }
-    }
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('storage', handleStorage);
-    }
-  };
-}
 
 export const BOOTSTRAPPED_ADMIN_EMAILS = [
   'moazmahmoud586@gmail.com',
@@ -156,62 +54,23 @@ export const PUBLIC_COLLECTIONS: PublicCollectionName[] = [
   'pages'
 ];
 
+export const PRIVATE_COLLECTIONS: PrivateCollectionName[] = [
+  'applications',
+  'members',
+  'roles',
+  'admin_users',
+  'audit_logs',
+  'subscribers',
+  'email_dispatch_logs'
+];
+
 const SEO_UPGRADE_CUTOFF_ISO = '2026-11-23T15:00:00.000Z';
+const LIVE_SYNC_CHANNEL_NAME = 'nfp_portal_live_sync';
 
-const localUploadReachableCache = new Map<string, boolean>();
-const localUploadPendingChecks = new Map<string, Promise<boolean>>();
-
-export async function isLocalUploadReachable(rawUrl?: string): Promise<boolean> {
-  const clean = String(rawUrl || '').split('?')[0].trim();
-  if (!clean) return false;
-  if (!clean.startsWith('/uploads/')) return true;
-  if (localUploadReachableCache.has(clean)) {
-    return Boolean(localUploadReachableCache.get(clean));
-  }
-  if (typeof window === 'undefined' || typeof fetch !== 'function') {
-    return true;
-  }
-  const existing = localUploadPendingChecks.get(clean);
-  if (existing) return existing;
-
-  const task = fetch(clean, { method: 'HEAD', cache: 'no-store' })
-    .then(res => {
-      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
-      const valid = res.ok && !contentType.includes('text/html');
-      localUploadReachableCache.set(clean, valid);
-      localUploadPendingChecks.delete(clean);
-      return valid;
-    })
-    .catch(() => {
-      localUploadReachableCache.set(clean, false);
-      localUploadPendingChecks.delete(clean);
-      return false;
-    });
-
-  localUploadPendingChecks.set(clean, task);
-  return task;
-}
-
-function resolveHeroVideoSync(cloudHeroVideo: string, localHeroVideo: string): string {
-  const cloudClean = String(cloudHeroVideo || '').trim();
-  const localClean = String(localHeroVideo || '').trim();
-  if (!cloudClean) return localClean || DEFAULT_BUNDLED_HERO_VIDEO;
-  if (cloudClean.startsWith('/uploads/')) {
-    const known = localUploadReachableCache.get(cloudClean.split('?')[0]);
-    if (known === false) {
-      return localClean && (!localClean.startsWith('/uploads/') || localUploadReachableCache.get(localClean.split('?')[0]) === true)
-        ? localClean
-        : DEFAULT_BUNDLED_HERO_VIDEO;
-    }
-    if (known === undefined) {
-      // Trigger async check so any subsequent snapshot/render resolves cleanly; meanwhile preserve verified local fallback if cloud upload isn't verified yet
-      void isLocalUploadReachable(cloudClean);
-      if (localClean && !localClean.startsWith('/uploads/')) {
-        return localClean;
-      }
-    }
-  }
-  return cloudClean;
+export interface CloudDocRecord {
+  id: string;
+  data: any;
+  updatedAt: string;
 }
 
 export function toFirestoreDocId(rawId: string): string {
@@ -377,7 +236,6 @@ export async function persistImageUrlToFirestore(rawUrl: string): Promise<string
 
   const hash = await hashStringShort(prepared.base64.slice(0, 8192) + ':' + prepared.base64.length);
   const assetId = `asset_${hash}`;
-  const targetPath = `uploads_public/${assetId}`;
 
   try {
     const ref = doc(db, 'uploads_public', assetId);
@@ -574,20 +432,167 @@ export async function deletePrivateRecordFromFirestore(col: PrivateCollectionNam
   }
 }
 
+// ============================================================================
+// REAL-TIME IN-MEMORY LIVE MERGE ENGINE
+// ============================================================================
+
+const liveCloudCollections = new Map<string, CloudDocRecord[]>();
+const livePrivateCollections = new Map<string, CloudDocRecord[]>();
+const liveLoadedCols = new Set<string>();
+const liveForceOverrideDocs = new Map<string, Map<string, CloudDocRecord>>();
+const liveRemovedDocKeys = new Set<string>();
+
+let liveBasePublicData: PublicPortalData | null = null;
+let liveBaseAdminDb: any | null = null;
+
+type PublicLiveListener = (merged: PublicPortalData) => void;
+type AdminLiveListener = {
+  onMergedDb: (mergedDb: any, changedCols: string[]) => void;
+  onLocalBroadcast?: () => void;
+};
+
+const publicLiveListeners = new Set<PublicLiveListener>();
+const adminLiveListeners = new Set<AdminLiveListener>();
+let activePublicUnsubs: Unsubscribe[] = [];
+let activePrivateUnsubs: Unsubscribe[] = [];
+let publicBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+let broadcastChannel: BroadcastChannel | null = null;
+let broadcastListenerAttached = false;
+
+function getBroadcastChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  if (!broadcastChannel) {
+    try {
+      broadcastChannel = new BroadcastChannel(LIVE_SYNC_CHANNEL_NAME);
+    } catch {
+      return null;
+    }
+  }
+  return broadcastChannel;
+}
+
+function logFirestoreSnapshotError(error: unknown, path: string): void {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    operationType: OperationType.GET,
+    path,
+    authInfo: {
+      userId: auth.currentUser?.uid ?? null,
+      email: auth.currentUser?.email ?? null,
+      emailVerified: auth.currentUser?.emailVerified ?? null
+    }
+  };
+  console.warn('Firestore live listener notice:', JSON.stringify(errInfo));
+}
+
+function getPublicFieldForCollection(col: PublicCollectionName): keyof PublicPortalData {
+  switch (col) {
+    case 'party_leaders':
+      return 'partyLeaders';
+    case 'secretariat_leaders':
+      return 'secretariatLeaders';
+    case 'secretariats':
+      return 'specializedSecretariats';
+    case 'secretariat_members':
+      return 'secretariatMembers';
+    case 'initiatives':
+      return 'initiatives';
+    case 'news':
+      return 'news';
+    case 'events':
+      return 'events';
+    case 'media':
+      return 'media';
+    case 'pages':
+      return 'pages';
+  }
+}
+
+function getPrivateFieldForCollection(col: PrivateCollectionName): string {
+  switch (col) {
+    case 'applications':
+      return 'applications';
+    case 'members':
+      return 'members';
+    case 'roles':
+      return 'roles';
+    case 'admin_users':
+      return 'admins';
+    case 'audit_logs':
+      return 'auditLogs';
+    case 'subscribers':
+      return 'subscribers';
+    case 'email_dispatch_logs':
+      return 'emailDispatchLogs';
+  }
+}
+
+function markDocRemovedInSession(col: string, rawId: string) {
+  if (!rawId) return;
+  const safeId = toFirestoreDocId(rawId);
+  liveRemovedDocKeys.add(`${col}:${rawId}`);
+  liveRemovedDocKeys.add(`${col}:${safeId}`);
+  const colOverrides = liveForceOverrideDocs.get(col);
+  if (colOverrides) {
+    colOverrides.delete(rawId);
+    colOverrides.delete(safeId);
+  }
+}
+
+function markDocUpsertedInSession(col: string, record: CloudDocRecord) {
+  if (!record) return;
+  const rawId = String(record.data?.id || record.id || '');
+  if (!rawId) return;
+  const safeId = toFirestoreDocId(rawId);
+  liveRemovedDocKeys.delete(`${col}:${rawId}`);
+  liveRemovedDocKeys.delete(`${col}:${safeId}`);
+
+  let colOverrides = liveForceOverrideDocs.get(col);
+  if (!colOverrides) {
+    colOverrides = new Map();
+    liveForceOverrideDocs.set(col, colOverrides);
+  }
+  colOverrides.set(rawId, record);
+  colOverrides.set(safeId, record);
+}
+
+function extractTombstoneSet(
+  siteConfigDocs: CloudDocRecord[],
+  extraTombstones?: string[]
+): Set<string> {
+  const tombstones = new Set<string>(liveRemovedDocKeys);
+  const tombDoc = siteConfigDocs.find(d => d.id === 'portal_tombstones');
+  const rawList = tombDoc?.data?.deletedKeys;
+  if (Array.isArray(rawList)) {
+    for (const k of rawList) {
+      if (typeof k === 'string' && k) tombstones.add(k);
+    }
+  }
+  if (Array.isArray(extraTombstones)) {
+    for (const k of extraTombstones) {
+      if (typeof k === 'string' && k) tombstones.add(k);
+    }
+  }
+  return tombstones;
+}
+
 function mergeCollectionWithTombstones(
-  col: PublicCollectionName,
+  col: string,
   localItems: any[],
-  cloudDocs: Array<{ id: string; data: any; updatedAt: string }>,
+  cloudDocs: CloudDocRecord[],
   tombstones: Set<string>,
   matchBySlug = false
 ): any[] {
-  const isDeleted = (item: any) => {
-    const rawId = String(item?.id || '');
+  const isDeleted = (item: any, docId?: string) => {
+    const rawId = String(item?.id || docId || '');
+    if (!rawId) return true;
     const safeId = toFirestoreDocId(rawId);
     return tombstones.has(`${col}:${rawId}`) || tombstones.has(`${col}:${safeId}`);
   };
 
+  const colOverrides = liveForceOverrideDocs.get(col);
   const map = new Map<string, any>();
+
   for (const item of localItems || []) {
     if (!item || !item.id || isDeleted(item)) continue;
     const key = matchBySlug && item.slug ? `slug:${item.slug}` : `id:${item.id}`;
@@ -596,15 +601,18 @@ function mergeCollectionWithTombstones(
 
   for (const docItem of cloudDocs) {
     const raw = docItem.data;
-    if (!raw || !raw.id || isDeleted(raw)) continue;
+    if (!raw || !raw.id || isDeleted(raw, docItem.id)) continue;
     const key = matchBySlug && raw.slug ? `slug:${raw.slug}` : `id:${raw.id}`;
     const existing = map.get(key);
-    if (!existing) {
+    const hasLiveOverride =
+      colOverrides?.has(String(raw.id)) || colOverrides?.has(String(docItem.id));
+
+    if (!existing || hasLiveOverride) {
       map.set(key, raw);
     } else {
       const existingTs = String(existing.updatedAt || existing.createdAt || '');
       const cloudTs = String(raw.updatedAt || docItem.updatedAt || '');
-      if (!existingTs || (Boolean(cloudTs) && cloudTs >= existingTs)) {
+      if (!existingTs || (Boolean(cloudTs) && cloudTs > existingTs)) {
         map.set(key, raw);
       }
     }
@@ -613,235 +621,554 @@ function mergeCollectionWithTombstones(
   return Array.from(map.values());
 }
 
-type CloudDocEntry = { id: string; data: any; updatedAt: string };
-
-interface LiveSnapshotStoreState {
-  siteConfigDocs: Map<string, CloudDocEntry>;
-  collections: Record<PublicCollectionName, Map<string, CloudDocEntry>>;
-  deletedKeysDuringSession: Set<string>;
-}
-
-function createEmptySnapshotStore(): LiveSnapshotStoreState {
-  return {
-    siteConfigDocs: new Map(),
-    collections: {
-      party_leaders: new Map(),
-      secretariat_leaders: new Map(),
-      secretariats: new Map(),
-      secretariat_members: new Map(),
-      initiatives: new Map(),
-      news: new Map(),
-      events: new Map(),
-      media: new Map(),
-      pages: new Map()
-    },
-    deletedKeysDuringSession: new Set()
-  };
-}
-
-const sharedLiveStore: LiveSnapshotStoreState = createEmptySnapshotStore();
-let hasAnyLiveSnapshotData = false;
-
-function logStructuredFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
-  try {
-    const errInfo = {
-      error: error instanceof Error ? error.message : String(error),
-      authInfo: {
-        userId: auth.currentUser?.uid,
-        email: auth.currentUser?.email,
-        emailVerified: auth.currentUser?.emailVerified,
-        isAnonymous: auth.currentUser?.isAnonymous,
-        tenantId: auth.currentUser?.tenantId,
-        providerInfo:
-          auth.currentUser?.providerData?.map(provider => ({
-            providerId: provider.providerId,
-            email: provider.email
-          })) || []
-      },
-      operationType,
-      path
-    };
-    console.warn('Firestore Error: ', JSON.stringify(errInfo));
-  } catch {
-    console.warn('Firestore Error:', error);
-  }
-}
-
-function mergeSnapshotStoreIntoPortalData(
-  baseData: PublicPortalData,
-  store: LiveSnapshotStoreState
-): PublicPortalData {
-  const tombstones = new Set<string>();
-  const tombDoc = store.siteConfigDocs.get('portal_tombstones');
-  const rawCloudTombs = tombDoc?.data?.deletedKeys;
-  if (Array.isArray(rawCloudTombs)) {
-    for (const k of rawCloudTombs) {
-      if (typeof k === 'string' && k) tombstones.add(k);
-    }
-  }
-  if (Array.isArray(baseData.deletedTombstones)) {
-    for (const k of baseData.deletedTombstones) {
-      if (typeof k === 'string' && k) tombstones.add(k);
-    }
-  }
-  for (const k of store.deletedKeysDuringSession) {
-    tombstones.add(k);
-  }
-
-  let nextSettings: SiteSettings = { ...baseData.settings };
-  let nextLiveStream: LiveStream = baseData.liveStream
-    ? { ...baseData.liveStream }
+function mergeSiteConfigIntoBase(
+  baseSettings: SiteSettings,
+  baseLiveStream: LiveStream | undefined,
+  siteConfigDocs: CloudDocRecord[]
+): { settings: SiteSettings; liveStream: LiveStream } {
+  let nextSettings: SiteSettings = { ...baseSettings };
+  let nextLiveStream: LiveStream = baseLiveStream
+    ? { ...baseLiveStream }
     : { id: 'live-1', title: '', description: '', streamUrl: '', isActive: false, platform: 'youtube' };
 
-  const publicCfg = store.siteConfigDocs.get('public');
-  if (publicCfg?.data) {
-    const cloudSettings = publicCfg.data as Partial<SiteSettings>;
-    const cloudUpdated = String(cloudSettings.updatedAt || publicCfg.updatedAt || '');
-    const localUpdated = String(nextSettings.updatedAt || '');
-    const isPreUpgradeSnapshot =
-      (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < SEO_UPGRADE_CUTOFF_ISO);
-    const isNewerThanLocal = !localUpdated || (Boolean(cloudUpdated) && cloudUpdated >= localUpdated);
-    if (isNewerThanLocal) {
-      const safeHeroVideoUrl = resolveHeroVideoSync(
-        String(cloudSettings.heroVideoUrl || ''),
-        String(nextSettings.heroVideoUrl || '')
-      );
-      nextSettings = {
-        ...nextSettings,
-        ...cloudSettings,
-        heroVideoUrl: safeHeroVideoUrl,
-        seoTitle: isPreUpgradeSnapshot ? nextSettings.seoTitle : (cloudSettings.seoTitle || nextSettings.seoTitle),
-        officialSiteUrl: isPreUpgradeSnapshot ? nextSettings.officialSiteUrl : (cloudSettings.officialSiteUrl || nextSettings.officialSiteUrl),
-        googleAnalyticsId: cloudSettings.googleAnalyticsId || nextSettings.googleAnalyticsId,
-        googleTagManagerId: cloudSettings.googleTagManagerId || nextSettings.googleTagManagerId,
-        googleSiteVerification: cloudSettings.googleSiteVerification || nextSettings.googleSiteVerification
-      };
+  const cfgOverrides = liveForceOverrideDocs.get('site_config');
+
+  for (const cfgDoc of siteConfigDocs) {
+    if (cfgDoc.id === 'public' && cfgDoc.data) {
+      const cloudSettings = cfgDoc.data as Partial<SiteSettings>;
+      const cloudUpdated = String(cloudSettings.updatedAt || cfgDoc.updatedAt || '');
+      const localUpdated = String(nextSettings.updatedAt || '');
+      const isPreUpgradeSnapshot =
+        (cloudSettings.rosterVersion || 0) < 9 && (!cloudUpdated || cloudUpdated < SEO_UPGRADE_CUTOFF_ISO);
+      const hasLiveOverride = Boolean(cfgOverrides?.has('public'));
+      const isNewerThanLocal =
+        hasLiveOverride || !localUpdated || (Boolean(cloudUpdated) && cloudUpdated > localUpdated);
+
+      if (isNewerThanLocal) {
+        nextSettings = {
+          ...nextSettings,
+          ...cloudSettings,
+          seoTitle: isPreUpgradeSnapshot ? nextSettings.seoTitle : (cloudSettings.seoTitle || nextSettings.seoTitle),
+          officialSiteUrl: isPreUpgradeSnapshot ? nextSettings.officialSiteUrl : (cloudSettings.officialSiteUrl || nextSettings.officialSiteUrl),
+          googleAnalyticsId: cloudSettings.googleAnalyticsId || nextSettings.googleAnalyticsId,
+          googleTagManagerId: cloudSettings.googleTagManagerId || nextSettings.googleTagManagerId,
+          googleSiteVerification: cloudSettings.googleSiteVerification || nextSettings.googleSiteVerification
+        };
+      }
+    } else if (cfgDoc.id === 'livestream' && cfgDoc.data) {
+      const cloudLiveUpdated = String(cfgDoc.data.updatedAt || cfgDoc.updatedAt || '');
+      const localLiveUpdated = String(nextLiveStream.updatedAt || '');
+      const hasLiveOverride = Boolean(cfgOverrides?.has('livestream'));
+      if (hasLiveOverride || !localLiveUpdated || (Boolean(cloudLiveUpdated) && cloudLiveUpdated > localLiveUpdated)) {
+        nextLiveStream = { ...nextLiveStream, ...cfgDoc.data };
+      }
     }
   }
 
-  const liveCfg = store.siteConfigDocs.get('livestream');
-  if (liveCfg?.data) {
-    const cloudLiveUpdated = String(liveCfg.data.updatedAt || liveCfg.updatedAt || '');
-    const localLiveUpdated = String(nextLiveStream.updatedAt || '');
-    if (!localLiveUpdated || (Boolean(cloudLiveUpdated) && cloudLiveUpdated >= localLiveUpdated)) {
-      nextLiveStream = { ...nextLiveStream, ...liveCfg.data };
-    }
-  }
+  return { settings: nextSettings, liveStream: nextLiveStream };
+}
 
-  const getCloudList = (col: PublicCollectionName) => Array.from(store.collections[col].values());
+export function mergePublicPortalWithLiveCache(baseData: PublicPortalData): PublicPortalData {
+  const siteConfigDocs = liveCloudCollections.get('site_config') || [];
+  const tombstones = extractTombstoneSet(siteConfigDocs, baseData.deletedTombstones);
+  const { settings, liveStream } = mergeSiteConfigIntoBase(baseData.settings, baseData.liveStream, siteConfigDocs);
 
-  const partyLeaders = mergeCollectionWithTombstones(
+  const mergedPartyLeaders = mergeCollectionWithTombstones(
     'party_leaders',
     baseData.partyLeaders,
-    getCloudList('party_leaders'),
+    liveCloudCollections.get('party_leaders') || [],
     tombstones
   )
     .filter(l => l.isVisible !== false)
     .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 
-  const secretariatLeaders = mergeCollectionWithTombstones(
+  const mergedSecretariatLeaders = mergeCollectionWithTombstones(
     'secretariat_leaders',
     baseData.secretariatLeaders,
-    getCloudList('secretariat_leaders'),
+    liveCloudCollections.get('secretariat_leaders') || [],
     tombstones
   )
     .filter(l => l.isVisible !== false)
     .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 
-  const specializedSecretariats = mergeCollectionWithTombstones(
+  const mergedSecretariats = mergeCollectionWithTombstones(
     'secretariats',
     baseData.specializedSecretariats,
-    getCloudList('secretariats'),
+    liveCloudCollections.get('secretariats') || [],
     tombstones,
     true
   )
     .filter(s => s.isActive !== false)
     .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 
-  const secretariatMembers = mergeCollectionWithTombstones(
+  const mergedSecretariatMembers = mergeCollectionWithTombstones(
     'secretariat_members',
     baseData.secretariatMembers,
-    getCloudList('secretariat_members'),
+    liveCloudCollections.get('secretariat_members') || [],
     tombstones
   );
 
-  const initiatives = mergeCollectionWithTombstones(
+  const mergedInitiatives = mergeCollectionWithTombstones(
     'initiatives',
     baseData.initiatives,
-    getCloudList('initiatives'),
+    liveCloudCollections.get('initiatives') || [],
     tombstones
   ).filter(i => i.isVisible !== false);
 
-  const news = mergeCollectionWithTombstones(
+  const mergedNews = mergeCollectionWithTombstones(
     'news',
     baseData.news,
-    getCloudList('news'),
+    liveCloudCollections.get('news') || [],
     tombstones
   )
     .filter(n => !n.isDraft)
-    .sort((a, b) => new Date(b.publishDate || b.createdAt || 0).getTime() - new Date(a.publishDate || a.createdAt || 0).getTime());
+    .sort(
+      (a, b) =>
+        new Date(b.publishDate || b.createdAt || 0).getTime() -
+        new Date(a.publishDate || a.createdAt || 0).getTime()
+    );
 
-  const events = mergeCollectionWithTombstones(
+  const mergedEvents = mergeCollectionWithTombstones(
     'events',
     baseData.events,
-    getCloudList('events'),
+    liveCloudCollections.get('events') || [],
     tombstones
   )
     .filter(e => e.isVisible !== false)
-    .sort((a, b) => new Date(b.dateTime || b.createdAt || 0).getTime() - new Date(a.dateTime || a.createdAt || 0).getTime());
+    .sort(
+      (a, b) =>
+        new Date(b.dateTime || b.createdAt || 0).getTime() -
+        new Date(a.dateTime || a.createdAt || 0).getTime()
+    );
 
-  const media = mergeCollectionWithTombstones(
+  const mergedMedia = mergeCollectionWithTombstones(
     'media',
     baseData.media,
-    getCloudList('media'),
+    liveCloudCollections.get('media') || [],
     tombstones
   )
     .filter(m => m.isVisible !== false)
     .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
 
-  const pages = mergeCollectionWithTombstones(
+  const mergedPages = mergeCollectionWithTombstones(
     'pages',
     baseData.pages || [],
-    getCloudList('pages'),
+    liveCloudCollections.get('pages') || [],
     tombstones
   ).filter(p => p.isPublished !== false);
 
   return {
     ...baseData,
-    settings: nextSettings,
-    liveStream: nextLiveStream,
-    partyLeaders,
-    secretariatLeaders,
-    specializedSecretariats,
-    secretariatMembers,
-    initiatives,
-    news,
-    events,
-    media,
-    pages,
+    settings,
+    liveStream,
+    partyLeaders: mergedPartyLeaders,
+    secretariatLeaders: mergedSecretariatLeaders,
+    specializedSecretariats: mergedSecretariats,
+    secretariatMembers: mergedSecretariatMembers,
+    initiatives: mergedInitiatives,
+    news: mergedNews,
+    events: mergedEvents,
+    media: mergedMedia,
+    pages: mergedPages,
     deletedTombstones: Array.from(tombstones)
   };
 }
 
-export function mergeWithCurrentLiveSnapshots(baseData: PublicPortalData): PublicPortalData {
-  if (!hasAnyLiveSnapshotData) return baseData;
-  return mergeSnapshotStoreIntoPortalData(baseData, sharedLiveStore);
+export function mergeAdminDbWithLiveCache(baseAdminDb: any): any {
+  if (!baseAdminDb) return baseAdminDb;
+  const siteConfigDocs = liveCloudCollections.get('site_config') || [];
+  const tombstones = extractTombstoneSet(siteConfigDocs, baseAdminDb.deletedTombstones);
+  const { settings, liveStream } = mergeSiteConfigIntoBase(
+    baseAdminDb.settings || {},
+    baseAdminDb.liveStream,
+    siteConfigDocs
+  );
+
+  const nextDb: any = {
+    ...baseAdminDb,
+    settings,
+    liveStream,
+    partyLeaders: mergeCollectionWithTombstones(
+      'party_leaders',
+      baseAdminDb.partyLeaders || [],
+      liveCloudCollections.get('party_leaders') || [],
+      tombstones
+    ).sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+    secretariatLeaders: mergeCollectionWithTombstones(
+      'secretariat_leaders',
+      baseAdminDb.secretariatLeaders || [],
+      liveCloudCollections.get('secretariat_leaders') || [],
+      tombstones
+    ).sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+    specializedSecretariats: mergeCollectionWithTombstones(
+      'secretariats',
+      baseAdminDb.specializedSecretariats || [],
+      liveCloudCollections.get('secretariats') || [],
+      tombstones,
+      true
+    ).sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+    secretariatMembers: mergeCollectionWithTombstones(
+      'secretariat_members',
+      baseAdminDb.secretariatMembers || [],
+      liveCloudCollections.get('secretariat_members') || [],
+      tombstones
+    ),
+    initiatives: mergeCollectionWithTombstones(
+      'initiatives',
+      baseAdminDb.initiatives || [],
+      liveCloudCollections.get('initiatives') || [],
+      tombstones
+    ),
+    news: mergeCollectionWithTombstones(
+      'news',
+      baseAdminDb.news || [],
+      liveCloudCollections.get('news') || [],
+      tombstones
+    ).sort(
+      (a, b) =>
+        new Date(b.publishDate || b.createdAt || 0).getTime() -
+        new Date(a.publishDate || a.createdAt || 0).getTime()
+    ),
+    events: mergeCollectionWithTombstones(
+      'events',
+      baseAdminDb.events || [],
+      liveCloudCollections.get('events') || [],
+      tombstones
+    ).sort(
+      (a, b) =>
+        new Date(b.dateTime || b.createdAt || 0).getTime() -
+        new Date(a.dateTime || a.createdAt || 0).getTime()
+    ),
+    media: mergeCollectionWithTombstones(
+      'media',
+      baseAdminDb.media || [],
+      liveCloudCollections.get('media') || [],
+      tombstones
+    ).sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)),
+    pages: mergeCollectionWithTombstones(
+      'pages',
+      baseAdminDb.pages || [],
+      liveCloudCollections.get('pages') || [],
+      tombstones
+    )
+  };
+
+  if (isFirebaseAdminReady()) {
+    for (const privCol of PRIVATE_COLLECTIONS) {
+      const cloudPriv = livePrivateCollections.get(privCol);
+      if (!cloudPriv) continue;
+      const field = getPrivateFieldForCollection(privCol);
+      nextDb[field] = mergeCollectionWithTombstones(
+        privCol,
+        baseAdminDb[field] || [],
+        cloudPriv,
+        tombstones
+      );
+    }
+  }
+
+  return nextDb;
+}
+
+function emitLivePublicPortal() {
+  if (!liveBasePublicData || publicLiveListeners.size === 0) return;
+  const merged = mergePublicPortalWithLiveCache(liveBasePublicData);
+  publicLiveListeners.forEach(listener => {
+    try {
+      listener(merged);
+    } catch (err) {
+      console.warn('Public live subscriber callback error:', err);
+    }
+  });
+}
+
+function emitLiveAdminDb(changedCols: string[]) {
+  if (!liveBaseAdminDb || adminLiveListeners.size === 0) return;
+  const merged = mergeAdminDbWithLiveCache(liveBaseAdminDb);
+  adminLiveListeners.forEach(listener => {
+    try {
+      listener.onMergedDb(merged, changedCols);
+    } catch (err) {
+      console.warn('Admin live subscriber callback error:', err);
+    }
+  });
+}
+
+function scheduleCoalescedEmit(changedCols: string[], immediate: boolean) {
+  if (immediate) {
+    if (publicBroadcastTimer) {
+      clearTimeout(publicBroadcastTimer);
+      publicBroadcastTimer = null;
+    }
+    emitLivePublicPortal();
+    emitLiveAdminDb(changedCols);
+    return;
+  }
+
+  if (publicBroadcastTimer) clearTimeout(publicBroadcastTimer);
+  publicBroadcastTimer = setTimeout(() => {
+    publicBroadcastTimer = null;
+    emitLivePublicPortal();
+    emitLiveAdminDb(changedCols);
+  }, 50);
+}
+
+function snapshotToRecords(snap: QuerySnapshot): CloudDocRecord[] {
+  return snap.docs.map(d => {
+    const v: any = d.data();
+    return {
+      id: String(v.id || d.id),
+      data: v.data || {},
+      updatedAt: String(v.updatedAt || '')
+    };
+  });
+}
+
+function handleSnapshotUpdate(colName: string, snap: QuerySnapshot, isPrivate = false) {
+  const isInitialForCol = !liveLoadedCols.has(colName);
+  const records = snapshotToRecords(snap);
+
+  if (isPrivate) {
+    livePrivateCollections.set(colName, records);
+  } else {
+    liveCloudCollections.set(colName, records);
+  }
+
+  if (isInitialForCol) {
+    liveLoadedCols.add(colName);
+    scheduleCoalescedEmit([colName], false);
+    return;
+  }
+
+  for (const change of snap.docChanges()) {
+    const d = change.doc;
+    const val: any = d.data();
+    const rec: CloudDocRecord = {
+      id: String(val?.id || d.id),
+      data: val?.data || {},
+      updatedAt: String(val?.updatedAt || '')
+    };
+
+    if (change.type === 'removed') {
+      const rawId = String(rec.data?.id || rec.id || d.id);
+      markDocRemovedInSession(colName, rawId);
+      if (colName !== 'site_config') {
+        if (!isPrivate && liveBasePublicData) {
+          const field = getPublicFieldForCollection(colName as PublicCollectionName);
+          const curArr = (liveBasePublicData as any)[field];
+          if (Array.isArray(curArr)) {
+            (liveBasePublicData as any)[field] = curArr.filter(
+              (item: any) => item?.id !== rawId && toFirestoreDocId(String(item?.id || '')) !== toFirestoreDocId(rawId)
+            );
+          }
+        }
+        if (liveBaseAdminDb) {
+          const field = isPrivate
+            ? getPrivateFieldForCollection(colName as PrivateCollectionName)
+            : getPublicFieldForCollection(colName as PublicCollectionName);
+          const curArr = liveBaseAdminDb[field];
+          if (Array.isArray(curArr)) {
+            liveBaseAdminDb[field] = curArr.filter(
+              (item: any) => item?.id !== rawId && toFirestoreDocId(String(item?.id || '')) !== toFirestoreDocId(rawId)
+            );
+          }
+        }
+      }
+    } else if (change.type === 'added' || change.type === 'modified') {
+      markDocUpsertedInSession(colName, rec);
+    }
+  }
+
+  // Emit immediately so React UI components update with zero reload or delay
+  scheduleCoalescedEmit([colName], true);
+}
+
+function ensureSharedListenersStarted() {
+  if (typeof window !== 'undefined' && !broadcastListenerAttached) {
+    broadcastListenerAttached = true;
+    const ch = getBroadcastChannel();
+    if (ch) {
+      ch.onmessage = () => {
+        emitLivePublicPortal();
+        adminLiveListeners.forEach(l => l.onLocalBroadcast?.());
+      };
+    }
+  }
+
+  if (activePublicUnsubs.length === 0) {
+    const watchCols = ['site_config', ...PUBLIC_COLLECTIONS];
+    for (const colName of watchCols) {
+      try {
+        const q = query(collection(db, colName), where('isPublic', '==', true));
+        const unsub = onSnapshot(
+          q,
+          snap => handleSnapshotUpdate(colName, snap, false),
+          err => logFirestoreSnapshotError(err, colName)
+        );
+        activePublicUnsubs.push(unsub);
+      } catch {
+        // ignore setup failure
+      }
+    }
+  }
+
+  if (adminLiveListeners.size > 0 && isFirebaseAdminReady() && activePrivateUnsubs.length === 0) {
+    for (const privCol of PRIVATE_COLLECTIONS) {
+      try {
+        const unsub = onSnapshot(
+          collection(db, privCol),
+          snap => handleSnapshotUpdate(privCol, snap, true),
+          err => logFirestoreSnapshotError(err, privCol)
+        );
+        activePrivateUnsubs.push(unsub);
+      } catch {
+        // ignore setup failure
+      }
+    }
+  }
+}
+
+function cleanupUnusedSharedListeners() {
+  if (publicLiveListeners.size === 0 && adminLiveListeners.size === 0) {
+    activePublicUnsubs.forEach(u => u());
+    activePublicUnsubs = [];
+  }
+  if (adminLiveListeners.size === 0 || !isFirebaseAdminReady()) {
+    activePrivateUnsubs.forEach(u => u());
+    activePrivateUnsubs = [];
+  }
+}
+
+export function setLiveBasePublicData(baseData: PublicPortalData): void {
+  if (!baseData) return;
+  liveBasePublicData = baseData;
+}
+
+export function setLiveBaseAdminDb(fullDb: any): void {
+  if (!fullDb) return;
+  liveBaseAdminDb = fullDb;
+}
+
+export function notifyLocalPortalMutation(source?: string): void {
+  const ch = getBroadcastChannel();
+  if (ch) {
+    try {
+      ch.postMessage({ type: 'mutation', source: source || 'local', at: Date.now() });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function applyLocalPublicMutation(
+  col: PublicCollectionName,
+  mode: 'upsert' | 'delete',
+  recordOrId: any
+): void {
+  if (!recordOrId) return;
+
+  if (mode === 'delete') {
+    const rawId = String(recordOrId);
+    markDocRemovedInSession(col, rawId);
+    const existingCloud = liveCloudCollections.get(col);
+    if (existingCloud) {
+      const safeId = toFirestoreDocId(rawId);
+      liveCloudCollections.set(
+        col,
+        existingCloud.filter(c => c.id !== safeId && c.data?.id !== rawId)
+      );
+    }
+    const field = getPublicFieldForCollection(col);
+    if (liveBasePublicData) {
+      const cur = (liveBasePublicData as any)[field];
+      if (Array.isArray(cur)) {
+        (liveBasePublicData as any)[field] = cur.filter(
+          (i: any) => i?.id !== rawId && toFirestoreDocId(String(i?.id || '')) !== toFirestoreDocId(rawId)
+        );
+      }
+      const nextTombs = new Set<string>(liveBasePublicData.deletedTombstones || []);
+      nextTombs.add(`${col}:${rawId}`);
+      nextTombs.add(`${col}:${toFirestoreDocId(rawId)}`);
+      liveBasePublicData.deletedTombstones = Array.from(nextTombs);
+    }
+    if (liveBaseAdminDb) {
+      const cur = liveBaseAdminDb[field];
+      if (Array.isArray(cur)) {
+        liveBaseAdminDb[field] = cur.filter(
+          (i: any) => i?.id !== rawId && toFirestoreDocId(String(i?.id || '')) !== toFirestoreDocId(rawId)
+        );
+      }
+    }
+  } else if (recordOrId?.id) {
+    const safeId = toFirestoreDocId(String(recordOrId.id));
+    const rec: CloudDocRecord = {
+      id: safeId,
+      data: recordOrId,
+      updatedAt: String(recordOrId.updatedAt || recordOrId.createdAt || new Date().toISOString())
+    };
+    markDocUpsertedInSession(col, rec);
+    const existingCloud = liveCloudCollections.get(col) || [];
+    const idx = existingCloud.findIndex(c => c.id === safeId || c.data?.id === recordOrId.id);
+    const nextCloud = [...existingCloud];
+    if (idx >= 0) nextCloud[idx] = rec;
+    else nextCloud.push(rec);
+    liveCloudCollections.set(col, nextCloud);
+
+    const field = getPublicFieldForCollection(col);
+    const upsertInArr = (arr: any[]) => {
+      const existingIdx = arr.findIndex((i: any) => i?.id === recordOrId.id);
+      if (existingIdx >= 0) {
+        const copy = [...arr];
+        copy[existingIdx] = recordOrId;
+        return copy;
+      }
+      return [recordOrId, ...arr];
+    };
+    if (liveBasePublicData && Array.isArray((liveBasePublicData as any)[field])) {
+      (liveBasePublicData as any)[field] = upsertInArr((liveBasePublicData as any)[field]);
+    }
+    if (liveBaseAdminDb && Array.isArray(liveBaseAdminDb[field])) {
+      liveBaseAdminDb[field] = upsertInArr(liveBaseAdminDb[field]);
+    }
+  }
+
+  emitLivePublicPortal();
+  notifyLocalPortalMutation(col);
+}
+
+export function applyLocalSiteConfigMutation(configId: 'public' | 'livestream', payload: any): void {
+  if (!payload) return;
+  const nowIso = String(payload.updatedAt || new Date().toISOString());
+  const rec: CloudDocRecord = { id: configId, data: payload, updatedAt: nowIso };
+  markDocUpsertedInSession('site_config', rec);
+
+  const existingSiteCfg = liveCloudCollections.get('site_config') || [];
+  const nextSiteCfg = [...existingSiteCfg.filter(d => d.id !== configId), rec];
+  liveCloudCollections.set('site_config', nextSiteCfg);
+
+  if (configId === 'public') {
+    if (liveBasePublicData) {
+      liveBasePublicData = { ...liveBasePublicData, settings: { ...liveBasePublicData.settings, ...payload } };
+    }
+    if (liveBaseAdminDb) {
+      liveBaseAdminDb = { ...liveBaseAdminDb, settings: { ...liveBaseAdminDb.settings, ...payload } };
+    }
+  } else {
+    if (liveBasePublicData) {
+      liveBasePublicData = { ...liveBasePublicData, liveStream: { ...liveBasePublicData.liveStream, ...payload } };
+    }
+    if (liveBaseAdminDb) {
+      liveBaseAdminDb = { ...liveBaseAdminDb, liveStream: { ...liveBaseAdminDb.liveStream, ...payload } };
+    }
+  }
+
+  emitLivePublicPortal();
+  notifyLocalPortalMutation(`site_config:${configId}`);
 }
 
 export async function hydratePortalDataFromFirestore(baseData: PublicPortalData): Promise<PublicPortalData> {
+  setLiveBasePublicData(baseData);
   try {
-    const heroUrlCandidate = String(baseData.settings?.heroVideoUrl || '').trim();
-    if (heroUrlCandidate.startsWith('/uploads/')) {
-      await isLocalUploadReachable(heroUrlCandidate);
-    }
-
-    const tombstones = await readTombstoneSet();
-    if (Array.isArray(baseData.deletedTombstones)) {
-      for (const k of baseData.deletedTombstones) {
-        if (typeof k === 'string' && k) tombstones.add(k);
-      }
-    }
-
     const [
       siteConfigSnap,
       partyLeadersSnap,
@@ -866,303 +1193,76 @@ export async function hydratePortalDataFromFirestore(baseData: PublicPortalData)
       getDocs(query(collection(db, 'pages'), where('isPublic', '==', true)))
     ]);
 
-    const toRecords = (snap: Awaited<ReturnType<typeof getDocs>>) =>
-      snap.docs.map(d => {
-        const v: any = d.data();
-        return { id: String(v.id || d.id), data: v.data || {}, updatedAt: String(v.updatedAt || '') };
-      });
+    liveCloudCollections.set('site_config', snapshotToRecords(siteConfigSnap));
+    liveCloudCollections.set('party_leaders', snapshotToRecords(partyLeadersSnap));
+    liveCloudCollections.set('secretariat_leaders', snapshotToRecords(secretariatLeadersSnap));
+    liveCloudCollections.set('secretariats', snapshotToRecords(secretariatsSnap));
+    liveCloudCollections.set('secretariat_members', snapshotToRecords(secretariatMembersSnap));
+    liveCloudCollections.set('initiatives', snapshotToRecords(initiativesSnap));
+    liveCloudCollections.set('news', snapshotToRecords(newsSnap));
+    liveCloudCollections.set('events', snapshotToRecords(eventsSnap));
+    liveCloudCollections.set('media', snapshotToRecords(mediaSnap));
+    liveCloudCollections.set('pages', snapshotToRecords(pagesSnap));
 
-    sharedLiveStore.siteConfigDocs.clear();
-    for (const d of siteConfigSnap.docs) {
-      const v: any = d.data();
-      sharedLiveStore.siteConfigDocs.set(d.id, {
-        id: String(v.id || d.id),
-        data: v.data || {},
-        updatedAt: String(v.updatedAt || '')
-      });
-    }
-
-    const snapMap: Record<PublicCollectionName, Awaited<ReturnType<typeof getDocs>>> = {
-      party_leaders: partyLeadersSnap,
-      secretariat_leaders: secretariatLeadersSnap,
-      secretariats: secretariatsSnap,
-      secretariat_members: secretariatMembersSnap,
-      initiatives: initiativesSnap,
-      news: newsSnap,
-      events: eventsSnap,
-      media: mediaSnap,
-      pages: pagesSnap
-    };
-
-    for (const colName of PUBLIC_COLLECTIONS) {
-      const colMap = sharedLiveStore.collections[colName];
-      colMap.clear();
-      for (const rec of toRecords(snapMap[colName])) {
-        colMap.set(rec.id, rec);
-      }
-    }
-    hasAnyLiveSnapshotData = true;
-
-    const publicDoc = sharedLiveStore.siteConfigDocs.get('public');
-    const cloudHeroUrl = String(publicDoc?.data?.heroVideoUrl || '').trim();
-    if (cloudHeroUrl.startsWith('/uploads/')) {
-      await isLocalUploadReachable(cloudHeroUrl);
-    }
-
-    return mergeSnapshotStoreIntoPortalData(
-      {
-        ...baseData,
-        deletedTombstones: Array.from(tombstones)
-      },
-      sharedLiveStore
-    );
+    return mergePublicPortalWithLiveCache(baseData);
   } catch (error) {
-    logStructuredFirestoreError(error, OperationType.LIST, 'public_portal_hydration');
+    console.warn('Firestore hydration fallback to server data:', error);
     return baseData;
   }
 }
 
-export function subscribeLivePortalData(
-  getBaseData: () => PublicPortalData | null,
-  onMergedData: (nextData: PublicPortalData) => void
-): Unsubscribe {
-  const unsubs: Unsubscribe[] = [];
-  let disposed = false;
-  let flushQueued = false;
+export function subscribeLivePublicPortal(onUpdate: PublicLiveListener): Unsubscribe {
+  publicLiveListeners.add(onUpdate);
+  ensureSharedListenersStarted();
 
-  const flushNow = () => {
-    flushQueued = false;
-    if (disposed) return;
-    const base = getBaseData();
-    if (!base) return;
-
-    const publicDoc = sharedLiveStore.siteConfigDocs.get('public');
-    const cloudHeroUrl = String(publicDoc?.data?.heroVideoUrl || '').trim();
-    if (cloudHeroUrl.startsWith('/uploads/')) {
-      const cleanPath = cloudHeroUrl.split('?')[0];
-      if (!localUploadReachableCache.has(cleanPath)) {
-        void isLocalUploadReachable(cloudHeroUrl).then(reachable => {
-          if (!disposed && !reachable) {
-            scheduleFlush();
-          }
-        });
-      }
-    }
-
-    const merged = mergeSnapshotStoreIntoPortalData(base, sharedLiveStore);
-    onMergedData(merged);
-  };
-
-  const scheduleFlush = () => {
-    if (disposed || flushQueued) return;
-    flushQueued = true;
-    queueMicrotask(flushNow);
-  };
-
-  try {
-    const siteCfgQuery = query(collection(db, 'site_config'), where('isPublic', '==', true));
-    const uSite = onSnapshot(
-      siteCfgQuery,
-      snap => {
-        for (const change of snap.docChanges()) {
-          const docId = change.doc.id;
-          if (change.type === 'removed') {
-            sharedLiveStore.siteConfigDocs.delete(docId);
-          } else {
-            const v: any = change.doc.data();
-            sharedLiveStore.siteConfigDocs.set(docId, {
-              id: String(v.id || docId),
-              data: v.data || {},
-              updatedAt: String(v.updatedAt || '')
-            });
-          }
-        }
-        hasAnyLiveSnapshotData = true;
-        scheduleFlush();
-      },
-      err => {
-        logStructuredFirestoreError(err, OperationType.GET, 'site_config');
-      }
-    );
-    unsubs.push(uSite);
-  } catch (error) {
-    logStructuredFirestoreError(error, OperationType.GET, 'site_config');
-  }
-
-  for (const colName of PUBLIC_COLLECTIONS) {
+  if (liveBasePublicData && liveLoadedCols.size > 0) {
     try {
-      const q = query(collection(db, colName), where('isPublic', '==', true));
-      let hasReceivedInitial = false;
-      const u = onSnapshot(
-        q,
-        snap => {
-          const colMap = sharedLiveStore.collections[colName];
-          if (!hasReceivedInitial) {
-            colMap.clear();
-            for (const d of snap.docs) {
-              const v: any = d.data();
-              const recId = String(v.id || d.id);
-              colMap.set(recId, {
-                id: recId,
-                data: v.data || {},
-                updatedAt: String(v.updatedAt || '')
-              });
-            }
-            hasReceivedInitial = true;
-          } else {
-            for (const change of snap.docChanges()) {
-              const v: any = change.doc.data();
-              const docKey = String(v?.id || change.doc.id);
-              const rawItemId = String(v?.data?.id || docKey);
-              if (change.type === 'removed') {
-                colMap.delete(docKey);
-                sharedLiveStore.deletedKeysDuringSession.add(`${colName}:${rawItemId}`);
-                sharedLiveStore.deletedKeysDuringSession.add(`${colName}:${toFirestoreDocId(rawItemId)}`);
-              } else {
-                colMap.set(docKey, {
-                  id: docKey,
-                  data: v.data || {},
-                  updatedAt: String(v.updatedAt || '')
-                });
-                sharedLiveStore.deletedKeysDuringSession.delete(`${colName}:${rawItemId}`);
-                sharedLiveStore.deletedKeysDuringSession.delete(`${colName}:${toFirestoreDocId(rawItemId)}`);
-              }
-            }
-          }
-          hasAnyLiveSnapshotData = true;
-          scheduleFlush();
-        },
-        err => {
-          logStructuredFirestoreError(err, OperationType.GET, colName);
-        }
-      );
-      unsubs.push(u);
-    } catch (error) {
-      logStructuredFirestoreError(error, OperationType.GET, colName);
+      onUpdate(mergePublicPortalWithLiveCache(liveBasePublicData));
+    } catch {
+      // ignore
     }
   }
 
   return () => {
-    disposed = true;
-    flushQueued = false;
-    unsubs.forEach(u => u());
+    publicLiveListeners.delete(onUpdate);
+    cleanupUnusedSharedListeners();
+  };
+}
+
+export function subscribeLiveAdminDatabase(options: AdminLiveListener): Unsubscribe {
+  adminLiveListeners.add(options);
+  ensureSharedListenersStarted();
+
+  const handleVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      options.onLocalBroadcast?.();
+    }
+  };
+  const handleFocus = () => {
+    options.onLocalBroadcast?.();
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleFocus);
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibility);
+  }
+
+  return () => {
+    adminLiveListeners.delete(options);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', handleFocus);
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    }
+    cleanupUnusedSharedListeners();
   };
 }
 
 export function subscribePublicFirestoreChanges(onChange: () => void): Unsubscribe {
-  const unsubs: Unsubscribe[] = [];
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const initialBurst = new Set<string>();
-
-  const scheduleRefresh = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      onChange();
-    }, 150);
-  };
-
-  const watchCols = ['site_config', ...PUBLIC_COLLECTIONS];
-  for (const colName of watchCols) {
-    try {
-      const q = query(collection(db, colName), where('isPublic', '==', true));
-      const u = onSnapshot(
-        q,
-        () => {
-          if (!initialBurst.has(colName)) {
-            initialBurst.add(colName);
-            return;
-          }
-          scheduleRefresh();
-        },
-        err => {
-          logStructuredFirestoreError(err, OperationType.GET, colName);
-        }
-      );
-      unsubs.push(u);
-    } catch (error) {
-      logStructuredFirestoreError(error, OperationType.GET, colName);
-    }
-  }
-
-  return () => {
-    if (timer) clearTimeout(timer);
-    unsubs.forEach(u => u());
-  };
-}
-
-export function subscribeAdminFirestoreChanges(
-  includePrivateCollections: boolean,
-  onChange: (collectionName: string) => void
-): Unsubscribe {
-  const unsubs: Unsubscribe[] = [];
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let pendingCol = 'all';
-  const initialBurst = new Set<string>();
-
-  const trigger = (col: string) => {
-    pendingCol = col;
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      onChange(pendingCol);
-    }, 180);
-  };
-
-  for (const colName of ['site_config', ...PUBLIC_COLLECTIONS]) {
-    try {
-      const q = query(collection(db, colName), where('isPublic', '==', true));
-      const u = onSnapshot(
-        q,
-        () => {
-          if (!initialBurst.has(colName)) {
-            initialBurst.add(colName);
-            return;
-          }
-          trigger(colName);
-        },
-        err => {
-          logStructuredFirestoreError(err, OperationType.LIST, colName);
-        }
-      );
-      unsubs.push(u);
-    } catch (error) {
-      logStructuredFirestoreError(error, OperationType.LIST, colName);
-    }
-  }
-
-  if (includePrivateCollections && isFirebaseAdminReady()) {
-    const privateCols: PrivateCollectionName[] = [
-      'applications',
-      'members',
-      'roles',
-      'admin_users',
-      'audit_logs'
-    ];
-    for (const colName of privateCols) {
-      try {
-        const u = onSnapshot(
-          collection(db, colName),
-          () => {
-            if (!initialBurst.has(colName)) {
-              initialBurst.add(colName);
-              return;
-            }
-            trigger(colName);
-          },
-          err => {
-            logStructuredFirestoreError(err, OperationType.LIST, colName);
-          }
-        );
-        unsubs.push(u);
-      } catch (error) {
-        logStructuredFirestoreError(error, OperationType.LIST, colName);
-      }
-    }
-  }
-
-  return () => {
-    if (timer) clearTimeout(timer);
-    unsubs.forEach(u => u());
-  };
+  return subscribeLivePublicPortal(() => onChange());
 }
 
 let lastAdminReconcileAt = 0;
@@ -1187,7 +1287,6 @@ export async function reconcileAdminFirestore(localFullDb: any): Promise<boolean
       { col: 'pages', items: localFullDb.pages || [] }
     ];
 
-    // Push any newer local items or missing items (excluding tombstoned ones) to Firestore
     for (const { col, items } of mappings) {
       const snap = await getDocs(collection(db, col));
       const cloudMap = new Map<string, any>();
@@ -1212,7 +1311,6 @@ export async function reconcileAdminFirestore(localFullDb: any): Promise<boolean
       }
     }
 
-    // Ensure site_config/public reflects latest settings if cloud was pre-upgrade
     if (localFullDb.settings) {
       const publicCfgSnap = await getDoc(doc(db, 'site_config', 'public'));
       const cfgData: any = publicCfgSnap.exists() ? publicCfgSnap.data() : null;

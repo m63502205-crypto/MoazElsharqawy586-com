@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AdminUser,
   PartyLeader,
@@ -25,7 +25,6 @@ import { MultiImageGalleryField } from './MultiImageGalleryField';
 import { MediaPickerModal } from './MediaPickerModal';
 import { VideoUploadField } from './VideoUploadField';
 import { PersonAttributionFields } from './PersonAttributionFields';
-import { WorkspaceIntegrationCard } from './admin/WorkspaceIntegrationCard';
 import {
   Shield,
   Users,
@@ -70,7 +69,6 @@ import {
   CheckSquare,
   Video,
   Upload,
-  Download,
   MapPin,
   BarChart3,
   Activity,
@@ -89,8 +87,8 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { readAndCompressImageFile } from '../utils/imageCompression';
 import {
   reconcileAdminFirestore,
-  subscribeAdminFirestoreChanges,
-  subscribeLiveSyncBus
+  subscribeLiveAdminDatabase,
+  mergeAdminDbWithLiveCache
 } from '../utils/firestoreSync';
 
 const MEMBERSHIP_FORM_FIELDS = [
@@ -123,7 +121,7 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshPublicData }) => {
-  const { user, firebaseReady, login, loginWithGoogle, logout, hasPermission } = useAuth();
+  const { user, firebaseReady, login, logout, hasPermission } = useAuth();
 
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
@@ -131,13 +129,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
   const [showLoginPass, setShowLoginPass] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
-  const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
-  const [backupLoading, setBackupLoading] = useState(false);
-  const [restorePendingData, setRestorePendingData] = useState<{
-    fileName: string;
-    database: any;
-    counts: Record<string, number>;
-  } | null>(null);
 
   // Active admin tab
   const [activeTab, setActiveTab] = useState<
@@ -322,84 +313,89 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
     onRefreshPublicData();
   };
 
-  const activeTabRef = React.useRef(activeTab);
+  const activeTabRef = useRef(activeTab);
   useEffect(() => {
     activeTabRef.current = activeTab;
   }, [activeTab]);
 
-  // Load all DB data on login, explicit refresh, or live silent sync
-  const loadAdminData = async (options?: { silent?: boolean }) => {
+  const computeStatsFromFull = (full: any, prevStats: AdminStats | null): AdminStats => {
+    const apps = full.applications || [];
+    const inits = full.initiatives || [];
+    return {
+      partyLeadersCount: (full.partyLeaders || []).length,
+      secretariatLeadersCount: (full.secretariatLeaders || []).length,
+      secretariatsCount: (full.specializedSecretariats || []).length,
+      membersCount: (full.members || []).length,
+      initiativesCount: inits.length,
+      activeInitiativesCount: inits.filter((i: any) => i.status === 'active').length,
+      applicationsCount: apps.length,
+      newApplicationsCount: apps.filter((a: any) => a.status === 'جديد').length,
+      reviewingApplicationsCount: apps.filter((a: any) => a.status === 'قيد المراجعة').length,
+      acceptedApplicationsCount: apps.filter((a: any) => a.status === 'مقبول').length,
+      rejectedApplicationsCount: apps.filter((a: any) => a.status === 'مرفوض').length,
+      newsCount: (full.news || []).length,
+      eventsCount: (full.events || []).length,
+      mediaCount: (full.media || []).length,
+      pagesCount: (full.pages || []).length,
+      rolesCount: (full.roles || []).length,
+      subscribersCount: Array.isArray(full.subscribers)
+        ? full.subscribers.filter((s: any) => s.status === 'active').length
+        : (prevStats?.subscribersCount || 0)
+    };
+  };
+
+  const applyFullAdminState = (rawFull: any, isLivePatch = false) => {
+    const full = mergeAdminDbWithLiveCache(rawFull);
+    setPartyLeaders(full.partyLeaders || []);
+    setSecretariatLeaders(full.secretariatLeaders || []);
+    setSecretariats(full.specializedSecretariats || []);
+    setSecretariatMembers(full.secretariatMembers || []);
+    setInitiatives(full.initiatives || []);
+    setApplications(full.applications || []);
+    setMembers(full.members || []);
+    setNews(full.news || []);
+    setEvents(full.events || []);
+    setMedia(full.media || []);
+    setLiveStream(full.liveStream || {});
+    setCmsPages(full.pages || []);
+    setRoles(full.roles || []);
+    setAdminUsers(full.admins || []);
+    setAuditLogs(full.auditLogs || []);
+    const editingSettingsForm =
+      isLivePatch && (activeTabRef.current === 'settings' || activeTabRef.current === 'seo');
+    if (!editingSettingsForm) {
+      setSettings(full.settings || null);
+    }
+    setStats(prev => computeStatsFromFull(full, prev));
+    return full;
+  };
+
+  // Load all DB data on login or refresh
+  const loadAdminData = async (isLiveRefresh = false) => {
     if (!user) return;
-    const isSilent = Boolean(options?.silent);
     try {
       const full = await api.getFullDatabase();
-      setPartyLeaders(full.partyLeaders || []);
-      setSecretariatLeaders(full.secretariatLeaders || []);
-      setSecretariats(full.specializedSecretariats || []);
-      setSecretariatMembers(full.secretariatMembers || []);
-      setInitiatives(full.initiatives || []);
-      setApplications(full.applications || []);
-      setMembers(full.members || []);
-      setNews(full.news || []);
-      setEvents(full.events || []);
-      setMedia(full.media || []);
-      setLiveStream(full.liveStream || {});
-      setCmsPages(full.pages || []);
-      setRoles(full.roles || []);
-      setAdminUsers(full.admins || []);
-      setAuditLogs(full.auditLogs || []);
-      if (!isSilent || activeTabRef.current !== 'settings') {
-        setSettings(full.settings || null);
-      }
+      applyFullAdminState(full, isLiveRefresh);
 
       const st = await api.getAdminStats();
       setStats(st);
 
-      if (!isSilent && firebaseReady) {
+      if (firebaseReady) {
         reconcileAdminFirestore(full)
           .then(didSync => {
             if (didSync) onRefreshPublicData();
           })
           .catch(() => undefined);
       }
-    } catch (err: any) {
-      if (!isSilent) {
-        console.error('Error fetching admin data:', err);
-        showBanner('error', err?.message || 'تعذر تحميل بيانات لوحة التحكم');
-      }
+    } catch (err) {
+      console.error('Error fetching admin data:', err);
     }
   };
 
-  const isSpecializedAdmin = Boolean(
-    user && user.role !== 'super_admin' && user.adminScope === 'specialized'
-  );
-  const managedSecId = isSpecializedAdmin ? String(user?.managedSecretariatId || '') : '';
-  const managedSecObj = managedSecId ? secretariats.find(s => s.id === managedSecId) : undefined;
-
-  // Permission helper to determine if current user has access to a given tab and scope
+  // Permission helper to determine if current user has access to a given tab
   const isTabPermitted = (tab: typeof activeTab) => {
     if (!user) return false;
     if (user.role === 'super_admin') return true;
-    if (isSpecializedAdmin) {
-      switch (tab) {
-        case 'stats':
-        case 'analytics':
-          return true;
-        case 'secretariats':
-        case 'secretariat-members':
-          return Boolean(managedSecId) && hasPermission('secretariats');
-        case 'initiatives':
-          return Boolean(managedSecId) && hasPermission('initiatives');
-        case 'news':
-          return Boolean(managedSecId) && hasPermission('news');
-        case 'events':
-          return Boolean(managedSecId) && hasPermission('events');
-        case 'media':
-          return Boolean(managedSecId) && hasPermission('media');
-        default:
-          return false;
-      }
-    }
     switch (tab) {
       case 'stats':
       case 'analytics':
@@ -450,45 +446,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
   useEffect(() => {
     if (!user) return;
-    loadAdminData();
-
-    let silentTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleSilentSync = () => {
-      if (silentTimer) clearTimeout(silentTimer);
-      silentTimer = setTimeout(() => {
-        void loadAdminData({ silent: true });
-      }, 220);
-    };
-
-    const unsubFirestore = subscribeAdminFirestoreChanges(firebaseReady, () => {
-      scheduleSilentSync();
-      onRefreshPublicData();
-    });
-
-    const unsubBus = subscribeLiveSyncBus(() => {
-      scheduleSilentSync();
-    });
-
-    let eventSource: EventSource | null = null;
-    if (typeof window !== 'undefined' && 'EventSource' in window) {
-      try {
-        eventSource = new EventSource('/api/public/stream');
-        eventSource.addEventListener('db-update', () => {
-          scheduleSilentSync();
-        });
-      } catch {
-        eventSource = null;
+    loadAdminData(false);
+    const unsub = subscribeLiveAdminDatabase({
+      onMergedDb: mergedDb => {
+        applyFullAdminState(mergedDb, true);
+        onRefreshPublicData();
+      },
+      onLocalBroadcast: () => {
+        loadAdminData(true);
       }
-    }
-
-    return () => {
-      if (silentTimer) clearTimeout(silentTimer);
-      unsubFirestore();
-      unsubBus();
-      if (eventSource) {
-        eventSource.close();
-      }
-    };
+    });
+    return () => unsub();
   }, [user, firebaseReady]);
 
   useEffect(() => {
@@ -517,18 +485,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
       setLoginError(err.message || 'فشل تسجيل الدخول، تأكد من صحة البريد الإلكتروني أو رقم الهاتف وكلمة المرور');
     } finally {
       setLoginLoading(false);
-    }
-  };
-
-  const handleGoogleLoginClick = async () => {
-    setLoginError(null);
-    setGoogleLoginLoading(true);
-    try {
-      await loginWithGoogle();
-    } catch (err: any) {
-      setLoginError(err?.message || 'تعذر تسجيل الدخول عبر حساب Google المعتمد');
-    } finally {
-      setGoogleLoginLoading(false);
     }
   };
 
@@ -606,29 +562,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
 
             <button
               type="submit"
-              disabled={loginLoading || googleLoginLoading}
+              disabled={loginLoading}
               className="w-full bg-red-700 hover:bg-red-800 text-white font-extrabold py-3 px-4 rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
             >
               <Key className="w-4 h-4 text-amber-300" />
               <span>{loginLoading ? 'جاري التحقق...' : 'تسجيل الدخول الآمن'}</span>
             </button>
           </form>
-
-          <div className="relative flex items-center py-1">
-            <div className="grow border-t border-stone-200" />
-            <span className="shrink mx-3 text-[11px] font-bold text-stone-400">أو</span>
-            <div className="grow border-t border-stone-200" />
-          </div>
-
-          <button
-            type="button"
-            disabled={loginLoading || googleLoginLoading}
-            onClick={handleGoogleLoginClick}
-            className="w-full bg-white hover:bg-stone-50 text-stone-800 font-extrabold py-2.5 px-4 rounded-xl text-xs border border-stone-300 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 shadow-xs"
-          >
-            <Globe className="w-4 h-4 text-red-700" />
-            <span>{googleLoginLoading ? 'جاري التحقق عبر Google...' : 'تسجيل الدخول بحساب Google المعتمد'}</span>
-          </button>
 
           <div className="text-center pt-1">
             <button
@@ -663,11 +603,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 {user.name}
               </span>
               <span className="text-[10px] text-amber-400">
-                {user.role === 'super_admin'
-                  ? 'المدير الرئيسي (Super Admin)'
-                  : isSpecializedAdmin
-                  ? `مشرف أمانة: ${managedSecObj?.name || 'أمانة تخصصية'}`
-                  : 'مشرف فرعي — إدارة عامة (Sub Admin)'}
+                {user.role === 'super_admin' ? 'المدير الرئيسي (Super Admin)' : 'مشرف فرعي (Sub Admin)'}
               </span>
             </div>
           </div>
@@ -1110,14 +1046,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <li>يمكنكم إضافة قيادات الحزب وقيادات أمانة أكتوبر والأعضاء والأمانات بحرية تامة من القائمة الجانبية.</li>
                   </ul>
                 </div>
-
-                <WorkspaceIntegrationCard
-                  secretariatsCount={secretariats.length}
-                  newsCount={news.length}
-                  initiativesCount={initiatives.length}
-                  eventsCount={events.length}
-                  onNotify={showBanner}
-                />
               </div>
             )}
 
@@ -1206,14 +1134,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                 <button
                                   onClick={async () => {
                                     if (confirm(`هل أنت متأكد من حذف ${l.name}؟`)) {
-                                      try {
-                                        await api.deletePartyLeader(l.id);
-                                        await loadAdminData();
-                                        onRefreshPublicData();
-                                        showBanner('success', `تم حذف ${l.name} من السجل بنجاح`);
-                                      } catch (err: any) {
-                                        showBanner('error', err.message || 'تعذر حذف القيادي');
-                                      }
+                                      await api.deletePartyLeader(l.id);
+                                      loadAdminData();
+                                      onRefreshPublicData();
                                     }
                                   }}
                                   className="text-stone-400 hover:text-red-600 p-1 cursor-pointer"
@@ -1230,15 +1153,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {/* Bottom Sync & Actions Bar (modal edits persist immediately upon modal submission) */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة وتحديث سجل قيادات الحزب</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد قيادات الحزب</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      يتم حفظ أي إضافة أو تعديل فور اعتماده من نافذة القيادي؛ اضغط مزامنة للتحقق من أحدث نسخة على الخادم
+                      اضغط حفظ لتأكيد وتحديث كافة تعديلات قيادات الحزب في الموقع فوراً
                     </p>
                   </div>
 
@@ -1261,15 +1184,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة أحدث بيانات قيادات الحزب من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة بيانات قيادات الحزب بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر الاتصال بالخادم لمزامنة القيادات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ القيادات');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -1348,14 +1271,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                 <button
                                   onClick={async () => {
                                     if (confirm(`هل أنت متأكد من حذف ${l.name}؟`)) {
-                                      try {
-                                        await api.deleteSecretariatLeader(l.id);
-                                        await loadAdminData();
-                                        onRefreshPublicData();
-                                        showBanner('success', `تم حذف ${l.name} بنجاح`);
-                                      } catch (err: any) {
-                                        showBanner('error', err.message || 'تعذر حذف القيادي');
-                                      }
+                                      await api.deleteSecretariatLeader(l.id);
+                                      loadAdminData();
+                                      onRefreshPublicData();
                                     }
                                   }}
                                   className="text-stone-400 hover:text-red-600 p-1 cursor-pointer"
@@ -1372,15 +1290,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة قيادات أمانة قسم ثالث أكتوبر</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد قيادات أمانة أكتوبر</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      يُحفظ كل تعديل أو إضافة فور الضغط على «حفظ» داخل نافذة القيادي؛ اضغط مزامنة لتحديث العرض من الخادم
+                      اضغط حفظ لتأكيد وتحديث قيادات أمانة قسم ثالث أكتوبر في المنصة فوراً
                     </p>
                   </div>
 
@@ -1403,15 +1321,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة قيادات أمانة قسم ثالث أكتوبر من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد قيادات أمانة قسم ثالث أكتوبر بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة القيادات من الخادم');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ القيادات');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -1436,24 +1354,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       تعديل أسماء الأمانات، تعيين الأمين والأمين المساعد، ضبط المهام والأهداف، حذف أمانة، أو إضافة أمانات جديدة. كافة التعديلات تُحفظ فورياً بقاعدة البيانات.
                     </p>
                   </div>
-                  {!isSpecializedAdmin && (
-                    <button
-                      onClick={() => {
-                        setEditingSecretariat({ isActive: true, sortOrder: secretariats.length + 1, duties: [], goals: [], assistantSecretaries: [] });
-                        setShowSecretariatModal(true);
-                      }}
-                      className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>إضافة أمانة جديدة</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      setEditingSecretariat({ isActive: true, sortOrder: secretariats.length + 1, duties: [], goals: [], assistantSecretaries: [] });
+                      setShowSecretariatModal(true);
+                    }}
+                    className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة أمانة جديدة</span>
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {secretariats
-                    .filter(sec => !isSpecializedAdmin || sec.id === managedSecId)
-                    .map(sec => {
+                  {secretariats.map(sec => {
                     const secBureauMembers = secretariatMembers.filter(
                       m => m.secretariatId === sec.id && m.tier !== 'secretary' && m.tier !== 'assistant_secretary'
                     );
@@ -1694,14 +1608,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                         type="button"
                                         onClick={async () => {
                                           if (confirm(`هل أنت متأكد من حذف عضو هيئة المكتب: ${member.name}؟`)) {
-                                            try {
-                                              await api.deleteSecretariatMember(member.id);
-                                              await loadAdminData();
-                                              onRefreshPublicData();
-                                              showBanner('success', `تم حذف ${member.name} من هيئة المكتب`);
-                                            } catch (err: any) {
-                                              showBanner('error', err.message || 'تعذر حذف عضو هيئة المكتب');
-                                            }
+                                            await api.deleteSecretariatMember(member.id);
+                                            loadAdminData();
+                                            onRefreshPublicData();
                                           }
                                         }}
                                         className="p-1 text-stone-400 hover:text-red-600 cursor-pointer"
@@ -1747,27 +1656,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               <Save className="w-3.5 h-3.5" />
                               <span>تعديل وحفظ الأمانة</span>
                             </button>
-                            {!isSpecializedAdmin && (
-                              <button
-                                onClick={async () => {
-                                  if (confirm(`هل أنت متأكد من رغبتك في شيل (حذف) أمانة "${sec.name}" نهائياً من الموقع؟`)) {
-                                    try {
-                                      await api.deleteSecretariat(sec.id);
-                                      await loadAdminData();
-                                      onRefreshPublicData();
-                                      showBanner('success', `تم حذف أمانة "${sec.name}" بنجاح`);
-                                    } catch (err: any) {
-                                      showBanner('error', err.message || 'تعذر حذف الأمانة');
-                                    }
+                            <button
+                              onClick={async () => {
+                                if (confirm(`هل أنت متأكد من رغبتك في شيل (حذف) أمانة "${sec.name}" نهائياً من الموقع؟`)) {
+                                  try {
+                                    await api.deleteSecretariat(sec.id);
+                                    await loadAdminData();
+                                    onRefreshPublicData();
+                                    showBanner('success', `تم حذف أمانة "${sec.name}" بنجاح`);
+                                  } catch (err: any) {
+                                    showBanner('error', err.message || 'تعذر حذف الأمانة');
                                   }
-                                }}
-                                className="bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 border border-red-200 px-3 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1 transition-colors"
-                                title="شيل الأمانة نهائياً من الموقع"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>شيل الأمانة</span>
-                              </button>
-                            )}
+                                }
+                              }}
+                              className="bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 border border-red-200 px-3 py-1.5 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1 transition-colors"
+                              title="شيل الأمانة نهائياً من الموقع"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>شيل الأمانة</span>
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -1775,8 +1682,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   })}
                 </div>
 
-                {/* END OF PAGE SAVE & ACTIONS BAR (General/Super Admins Only) */}
-                {!isSpecializedAdmin && (
+                {/* END OF PAGE SAVE & ACTIONS BAR */}
                 <div className="bg-gradient-to-r from-stone-900 via-stone-850 to-stone-900 text-white p-6 rounded-3xl shadow-xl border-2 border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-5 mt-8">
                   <div className="text-right space-y-1">
                     <div className="flex items-center gap-2">
@@ -1825,7 +1731,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </button>
                   </div>
                 </div>
-                )}
               </div>
             )}
 
@@ -1847,7 +1752,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   <button
                     onClick={() => {
                       setEditingSecMember({
-                        secretariatId: managedSecId || secretariats[0]?.id || '',
+                        secretariatId: secretariats[0]?.id || '',
                         tier: 'bureau',
                         role: 'عضو هيئة مكتب',
                         bureauTitle: 'مقرر هيئة المكتب',
@@ -1869,7 +1774,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       onClick={() => {
                         setEditingSecMember({
-                          secretariatId: managedSecId || secretariats[0]?.id || '',
+                          secretariatId: secretariats[0]?.id || '',
                           tier: 'bureau',
                           role: 'عضو هيئة مكتب',
                           bureauTitle: 'مقرر هيئة المكتب',
@@ -1949,30 +1854,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                     <Edit2 className="w-3 h-3" />
                                     <span>تعديل</span>
                                   </button>
-                                  {!isSpecializedAdmin && (
-                                    <button
-                                      onClick={() => {
-                                        setTransferringMember(m);
-                                        setTransferForm({ targetSecretariatId: '', newRole: m.role, notes: '' });
-                                      }}
-                                      className="bg-amber-100 hover:bg-amber-200 text-amber-900 px-2 py-1 rounded text-[11px] font-bold cursor-pointer flex items-center gap-1"
-                                      title="نقل لأمانة أخرى"
-                                    >
-                                      <ArrowLeftRight className="w-3 h-3" />
-                                      <span>نقل</span>
-                                    </button>
-                                  )}
+                                  <button
+                                    onClick={() => {
+                                      setTransferringMember(m);
+                                      setTransferForm({ targetSecretariatId: '', newRole: m.role, notes: '' });
+                                    }}
+                                    className="bg-amber-100 hover:bg-amber-200 text-amber-900 px-2 py-1 rounded text-[11px] font-bold cursor-pointer flex items-center gap-1"
+                                    title="نقل لأمانة أخرى"
+                                  >
+                                    <ArrowLeftRight className="w-3 h-3" />
+                                    <span>نقل</span>
+                                  </button>
                                   <button
                                     onClick={async () => {
                                       if (confirm(`هل تريد إزالة ${m.name} من تشكيل الأمانة مع الإبقاء على ملفه بالسجل؟`)) {
-                                        try {
-                                          await api.deleteSecretariatMember(m.id);
-                                          await loadAdminData();
-                                          onRefreshPublicData();
-                                          showBanner('success', `تمت إزالة ${m.name} من التشكيل الحالي مع حفظ السجل`);
-                                        } catch (err: any) {
-                                          showBanner('error', err.message || 'تعذر إزالة العضو');
-                                        }
+                                        await api.deleteSecretariatMember(m.id);
+                                        loadAdminData();
+                                        onRefreshPublicData();
                                       }
                                     }}
                                     className="text-stone-400 hover:text-red-600 p-1 cursor-pointer"
@@ -1990,15 +1888,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة أعضاء وهيئات المكاتب</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد أعضاء وهيئات المكاتب</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ التعيينات والنقل فور اعتمادها من نافذة العضو؛ اضغط مزامنة لتحديث البيانات من الخادم
+                      اضغط حفظ لتأكيد وتحديث هيئات المكاتب وتكليفات الأعضاء بالأمانات
                     </p>
                   </div>
 
@@ -2007,7 +1905,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       type="button"
                       onClick={() => {
                         setEditingSecMember({
-                          secretariatId: managedSecId || secretariats[0]?.id || '',
+                          secretariatId: secretariats[0]?.id || '',
                           role: 'member',
                           assignmentDate: ''
                         });
@@ -2025,15 +1923,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة تكليفات وأعضاء الأمانات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة تكليفات وأعضاء الأمانات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة الأعضاء من الخادم');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأعضاء');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2072,7 +1970,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         });
 
                         if (listToExport.length === 0) {
-                          showBanner('error', 'لا توجد طلبات لتصديرها وفق خيارات الفلترة المحددة.');
+                          alert('لا توجد طلبات لتصديرها وفق خيارات الفلترة المحددة.');
                           return;
                         }
 
@@ -2245,15 +2143,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {/* Bottom Sync Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>تحديث ومزامنة طلبات الانضمام</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد مراجعة طلبات الانضمام</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      قرارات الفحص والقبول تُحفظ تلقائياً عند اعتمادها داخل كل طلب؛ اضغط مزامنة لجلب أحدث الطلبات الواردة
+                      اضغط حفظ لتأكيد مراجعة الطلبات والقرارات الصادرة وحفظ التغييرات
                     </p>
                   </div>
 
@@ -2264,15 +2162,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تم تحديث سجل طلبات الانضمام من الخادم بنجاح');
+                          alert('تم حفظ واعتماد سجل طلبات الانضمام بنجاح!');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر تحديث سجل الطلبات من الخادم');
+                          alert(err.message || 'حدث خطأ أثناء حفظ الطلبات');
                         }
                       }}
-                      className="w-full sm:w-auto bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة الطلبات</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2295,7 +2193,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     type="button"
                     onClick={() => {
                       if (members.length === 0) {
-                        showBanner('error', 'لا يوجد أعضاء في السجل بعد.');
+                        alert('لا يوجد أعضاء في السجل بعد.');
                         return;
                       }
 
@@ -2402,14 +2300,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                                     <button
                                       onClick={async () => {
                                         if (confirm(`هل أنت متأكد من إنهاء التكليف الحالي لـ ${m.fullName} مع بقاء بياناته وسجله التاريخي محفوظة؟`)) {
-                                          try {
-                                            await api.endMemberAssignment(m.id);
-                                            await loadAdminData();
-                                            onRefreshPublicData();
-                                            showBanner('success', `تم إنهاء التكليف الحالي للعضو ${m.fullName} وحفظه بالسجل التاريخي`);
-                                          } catch (err: any) {
-                                            showBanner('error', err.message || 'تعذر إنهاء التكليف');
-                                          }
+                                          await api.endMemberAssignment(m.id);
+                                          loadAdminData();
+                                          onRefreshPublicData();
                                         }
                                       }}
                                       className="text-stone-400 hover:text-red-700 text-[10px] p-1 font-bold cursor-pointer"
@@ -2427,15 +2320,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                 )}
 
-                {/* Bottom Sync Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة السجل المركزي للأعضاء</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد السجل المركزي للأعضاء والتكليفات</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ قرارات التسكين والتكليفات فور تنفيذها؛ اضغط مزامنة لتحديث البيانات من الخادم
+                      اضغط حفظ لتأكيد وتحديث سجل الأعضاء والتكليفات التنظيمية النشطة والمنتهية
                     </p>
                   </div>
 
@@ -2446,15 +2339,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة السجل المركزي للأعضاء من الخادم بنجاح');
+                          alert('تم حفظ واعتماد السجل المركزي للأعضاء بنجاح!');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة سجل الأعضاء');
+                          alert(err.message || 'حدث خطأ أثناء حفظ سجل الأعضاء');
                         }
                       }}
-                      className="w-full sm:w-auto bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة السجل</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2475,13 +2368,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
-                      setEditingInitiative({
-                        status: 'active',
-                        isVisible: true,
-                        goals: [],
-                        activities: [],
-                        ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
-                      });
+                      setEditingInitiative({ status: 'active', isVisible: true, goals: [], activities: [] });
                       setShowInitiativeModal(true);
                     }}
                     className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -2555,14 +2442,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         <button
                           onClick={async () => {
                             if (confirm(`هل تريد حذف مبادرة: ${init.title}؟`)) {
-                              try {
-                                await api.deleteInitiative(init.id);
-                                await loadAdminData();
-                                onRefreshPublicData();
-                                showBanner('success', `تم حذف مبادرة "${init.title}" بنجاح`);
-                              } catch (err: any) {
-                                showBanner('error', err.message || 'تعذر حذف المبادرة');
-                              }
+                              await api.deleteInitiative(init.id);
+                              loadAdminData();
+                              onRefreshPublicData();
                             }
                           }}
                           className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
@@ -2574,15 +2456,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة المبادرات الميدانية والمجتمعية</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد المبادرات الميدانية والمجتمعية</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ التعديلات فور الضغط على زر الحفظ داخل نافذة المبادرة؛ اضغط مزامنة لتحديث البيانات من الخادم
+                      اضغط حفظ لتأكيد وحفظ كافة التعديلات والتحديثات للمبادرات التنموية فوراً
                     </p>
                   </div>
 
@@ -2590,13 +2472,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       type="button"
                       onClick={() => {
-                        setEditingInitiative({
-                          status: 'active',
-                          isVisible: true,
-                          goals: [],
-                          activities: [],
-                          ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
-                        });
+                        setEditingInitiative({ status: 'active', isVisible: true, goals: [], activities: [] });
                         setShowInitiativeModal(true);
                       }}
                       className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
@@ -2611,15 +2487,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة المبادرات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة المبادرات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة المبادرات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المبادرات');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2640,12 +2516,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
-                      setEditingNews({
-                        publishDate: new Date().toISOString().split('T')[0],
-                        isFeatured: false,
-                        isDraft: false,
-                        ...(isSpecializedAdmin ? { linkedSecretariatId: managedSecId } : {})
-                      });
+                      setEditingNews({ publishDate: new Date().toISOString().split('T')[0], isFeatured: false, isDraft: false });
                       setShowNewsModal(true);
                     }}
                     className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -2727,14 +2598,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         <button
                           onClick={async () => {
                             if (confirm(`هل تريد حذف خبر: ${item.title}؟`)) {
-                              try {
-                                await api.deleteNews(item.id);
-                                await loadAdminData();
-                                onRefreshPublicData();
-                                showBanner('success', `تم حذف الخبر "${item.title}" بنجاح`);
-                              } catch (err: any) {
-                                showBanner('error', err.message || 'تعذر حذف الخبر');
-                              }
+                              await api.deleteNews(item.id);
+                              loadAdminData();
+                              onRefreshPublicData();
                             }
                           }}
                           className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
@@ -2746,15 +2612,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة الأخبار والبيانات الرسمية</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد نشر الأخبار والبيانات الرسمية</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ الأخبار فور اعتمادها من نافذة الخبر؛ اضغط مزامنة لجلب أحدث النسخ المحفوظة على الخادم
+                      اضغط حفظ لتأكيد ونشر كافة التعديلات والتحديثات الإخبارية على المنصة فوراً
                     </p>
                   </div>
 
@@ -2762,13 +2628,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       type="button"
                       onClick={() => {
-                        setEditingNews({
-                          publishDate: new Date().toISOString().split('T')[0],
-                          isFeatured: false,
-                          isDraft: false,
-                          isUrgent: false,
-                          ...(isSpecializedAdmin ? { linkedSecretariatId: managedSecId } : {})
-                        });
+                        setEditingNews({ publishDate: new Date().toISOString().split('T')[0], isFeatured: false, isDraft: false, isUrgent: false });
                         setShowNewsModal(true);
                       }}
                       className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
@@ -2783,15 +2643,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة الأخبار والبيانات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة الأخبار والبيانات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة الأخبار');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأخبار');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2812,12 +2672,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
-                      setEditingEvent({
-                        status: 'upcoming',
-                        isVisible: true,
-                        dateTime: new Date().toISOString().substring(0, 16),
-                        ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
-                      });
+                      setEditingEvent({ status: 'upcoming', isVisible: true, dateTime: new Date().toISOString().substring(0, 16) });
                       setShowEventModal(true);
                     }}
                     className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -2897,14 +2752,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         <button
                           onClick={async () => {
                             if (confirm(`حذف فعالية: ${ev.title}؟`)) {
-                              try {
-                                await api.deleteEvent(ev.id);
-                                await loadAdminData();
-                                onRefreshPublicData();
-                                showBanner('success', `تم حذف فعالية "${ev.title}" بنجاح`);
-                              } catch (err: any) {
-                                showBanner('error', err.message || 'تعذر حذف الفعالية');
-                              }
+                              await api.deleteEvent(ev.id);
+                              loadAdminData();
+                              onRefreshPublicData();
                             }
                           }}
                           className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
@@ -2916,15 +2766,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة الأجندة والفعاليات الحزبية</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد الأجندة والفعاليات الحزبية</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ الفعاليات فور اعتمادها من نافذة الفعالية؛ اضغط مزامنة للتحقق من أحدث البيانات على الخادم
+                      اضغط حفظ لتأكيد وحفظ جدول الأنشطة والفعاليات الميدانية على الموقع
                     </p>
                   </div>
 
@@ -2932,12 +2782,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       type="button"
                       onClick={() => {
-                        setEditingEvent({
-                          status: 'upcoming',
-                          isVisible: true,
-                          dateTime: new Date().toISOString().substring(0, 16),
-                          ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
-                        });
+                        setEditingEvent({ status: 'upcoming', isVisible: true, dateTime: new Date().toISOString().substring(0, 16) });
                         setShowEventModal(true);
                       }}
                       className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
@@ -2952,15 +2797,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة الفعاليات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة الفعاليات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة الفعاليات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الفعاليات');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -2981,12 +2826,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   </div>
                   <button
                     onClick={() => {
-                      setEditingMedia({
-                        type: 'photo',
-                        isVisible: true,
-                        albumName: 'عام',
-                        ...(isSpecializedAdmin ? { linkedSecretariatId: managedSecId } : {})
-                      });
+                      setEditingMedia({ type: 'photo', isVisible: true, albumName: 'عام' });
                       setShowMediaModal(true);
                     }}
                     className="bg-red-700 hover:bg-red-800 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -3096,14 +2936,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <button
                             onClick={async () => {
                               if (confirm('حذف هذا الوسيط؟')) {
-                                try {
-                                  await api.deleteMedia(m.id);
-                                  await loadAdminData();
-                                  onRefreshPublicData();
-                                  showBanner('success', 'تم حذف الوسيط بنجاح');
-                                } catch (err: any) {
-                                  showBanner('error', err.message || 'تعذر حذف الوسيط');
-                                }
+                                await api.deleteMedia(m.id);
+                                loadAdminData();
+                                onRefreshPublicData();
                               }
                             }}
                             className="text-stone-400 hover:text-red-600 cursor-pointer"
@@ -3116,15 +2951,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة وسائط ومعارض الحزب</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد وسائط ومعارض الحزب</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      يُحفظ كل وسيط فور رفعه أو تعديله داخل النافذة؛ اضغط مزامنة لتحديث العرض من الخادم
+                      اضغط حفظ لتأكيد وحفظ كافة الصور والفيديوهات والتصنيفات في المعرض العام
                     </p>
                   </div>
 
@@ -3132,12 +2967,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     <button
                       type="button"
                       onClick={() => {
-                        setEditingMedia({
-                          type: 'photo',
-                          isVisible: true,
-                          albumName: 'عام',
-                          ...(isSpecializedAdmin ? { linkedSecretariatId: managedSecId } : {})
-                        });
+                        setEditingMedia({ type: 'photo', isVisible: true, albumName: 'عام' });
                         setShowMediaModal(true);
                       }}
                       className="bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs px-4 py-3 rounded-2xl flex items-center justify-center gap-2 cursor-pointer border border-stone-700 transition-colors shrink-0"
@@ -3152,15 +2982,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة وسائط المعرض من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة وسائط المعرض بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة المعرض');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المعرض');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -3370,14 +3200,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                             <button
                               onClick={async () => {
                                 if (confirm(`هل أنت متأكد من حذف صفحة "${page.title}"؟`)) {
-                                  try {
-                                    await api.deleteCMSPage(page.id);
-                                    await loadAdminData();
-                                    onRefreshPublicData();
-                                    showBanner('success', `تم حذف صفحة "${page.title}" بنجاح`);
-                                  } catch (err: any) {
-                                    showBanner('error', err.message || 'تعذر حذف الصفحة');
-                                  }
+                                  await api.deleteCMSPage(page.id);
+                                  loadAdminData();
+                                  onRefreshPublicData();
                                 }
                               }}
                               className="text-stone-400 hover:text-red-700 p-2 rounded-lg hover:bg-stone-100 cursor-pointer"
@@ -3392,15 +3217,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   )}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة الصفحات الثابتة (CMS)</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد محتوى الصفحات الثابتة (CMS)</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      تُحفظ تعديلات الصفحات فور اعتمادها من نافذة تعديل المحتوى؛ اضغط مزامنة لتحديث البيانات من الخادم
+                      اضغط حفظ لتأكيد وحفظ ونشر كافة تعديلات الصفحات الثابتة فوراً على الموقع
                     </p>
                   </div>
 
@@ -3432,15 +3257,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                         try {
                           await loadAdminData();
                           onRefreshPublicData();
-                          showBanner('success', 'تمت مزامنة الصفحات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة الصفحات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة الصفحات');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الصفحات');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -3540,13 +3365,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           <button
                             onClick={async () => {
                               if (confirm(`هل أنت متأكد من حذف الدور الإداري "${r.name}"؟`)) {
-                                try {
-                                  await api.deleteRole(r.id);
-                                  await loadAdminData();
-                                  showBanner('success', `تم حذف الدور "${r.name}" بنجاح`);
-                                } catch (err: any) {
-                                  showBanner('error', err.message || 'تعذر حذف الدور');
-                                }
+                                await api.deleteRole(r.id);
+                                loadAdminData();
                               }
                             }}
                             className="text-stone-400 hover:text-red-700 text-xs font-bold p-1 cursor-pointer flex items-center gap-1"
@@ -3564,15 +3384,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ))}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة الأدوار والصلاحيات (RBAC)</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد الأدوار والصلاحيات (RBAC)</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      يُحفظ كل تعديل فور اعتماده داخل نافذة الدور؛ اضغط مزامنة للتحقق من أحدث الصلاحيات على الخادم
+                      اضغط حفظ لتأكيد وحفظ مصفوفة الصلاحيات والأدوار الإدارية المخصصة
                     </p>
                   </div>
 
@@ -3599,15 +3419,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       onClick={async () => {
                         try {
                           await loadAdminData();
-                          showBanner('success', 'تمت مزامنة الأدوار والصلاحيات من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة الأدوار والصلاحيات بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة الأدوار');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ الأدوار');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -3690,13 +3510,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                               <button
                                 onClick={async () => {
                                   if (confirm(`حذف حساب المشرف: ${adm.name}؟`)) {
-                                    try {
-                                      await api.deleteAdminUser(adm.id);
-                                      await loadAdminData();
-                                      showBanner('success', `تم حذف حساب المشرف ${adm.name} بنجاح`);
-                                    } catch (err: any) {
-                                      showBanner('error', err.message || 'تعذر حذف حساب المشرف');
-                                    }
+                                    await api.deleteAdminUser(adm.id);
+                                    loadAdminData();
                                   }
                                 }}
                                 className="text-stone-400 hover:text-red-700 p-1.5 cursor-pointer"
@@ -3711,15 +3526,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   })}
                 </div>
 
-                {/* Bottom Sync & Actions Bar */}
+                {/* Bottom Save & Actions Bar */}
                 <div className="mt-8 pt-4 border-t-2 border-stone-200 bg-stone-900 text-white p-4 sm:p-5 rounded-3xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="text-center sm:text-right">
                     <h4 className="font-black text-sm text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      <span>مزامنة حسابات المشرفين</span>
+                      <Save className="w-4 h-4" />
+                      <span>تأكيد واعتماد حسابات المشرفين</span>
                     </h4>
                     <p className="text-[11px] text-stone-300 mt-0.5">
-                      يُحفظ كل تعديل لصلاحيات المشرف فور تأكيده داخل النافذة؛ اضغط مزامنة لتحديث البيانات من الخادم
+                      اضغط حفظ لتأكيد وحفظ بيانات حسابات المشرفين وصلاحياتهم الإدارية
                     </p>
                   </div>
 
@@ -3748,15 +3563,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       onClick={async () => {
                         try {
                           await loadAdminData();
-                          showBanner('success', 'تمت مزامنة حسابات المشرفين من الخادم بنجاح');
+                          showBanner('success', 'تم حفظ واعتماد كافة حسابات المشرفين بنجاح');
                         } catch (err: any) {
-                          showBanner('error', err.message || 'تعذر مزامنة المشرفين');
+                          showBanner('error', err.message || 'حدث خطأ أثناء حفظ المشرفين');
                         }
                       }}
-                      className="flex-1 sm:flex-none bg-stone-700 hover:bg-stone-600 text-white font-black text-sm px-6 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2 border border-amber-500/30 transition-all active:scale-95"
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-sm px-8 py-3 rounded-2xl cursor-pointer flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-900/40 transition-all active:scale-95"
                     >
-                      <RefreshCw className="w-4 h-4 text-amber-300" />
-                      <span>مزامنة من الخادم</span>
+                      <Save className="w-5 h-5 text-amber-300" />
+                      <span>حفظ</span>
                     </button>
                   </div>
                 </div>
@@ -5170,7 +4985,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                           type="button"
                           onClick={() => {
                             if (!settings.googleAnalyticsId?.trim()) {
-                              showBanner('error', 'يرجى أولاً إدخال معرّف القياس (Measurement ID) والضغط على "حفظ".');
+                              alert('يرجى أولاً إدخال معرّف القياس (Measurement ID) والضغط على "حفظ كافة الإعدادات".');
                               return;
                             }
                             initGoogleAnalytics(settings.googleAnalyticsId);
@@ -5543,137 +5358,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     </div>
                   </div>
                 </form>
-
-                {user?.role === 'super_admin' && (
-                  <div className="bg-stone-50 border-2 border-stone-200 rounded-3xl p-6 sm:p-8 space-y-5 mt-6">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-stone-200 pb-4">
-                      <div>
-                        <h3 className="text-base sm:text-lg font-black text-stone-900 flex items-center gap-2">
-                          <Shield className="w-5 h-5 text-red-700" />
-                          <span>النسخ الاحتياطي واستعادة قاعدة البيانات (Super Admin)</span>
-                        </h3>
-                        <p className="text-xs text-stone-500 mt-1">
-                          تصدير نسخة احتياطية كاملة مع بصمة تحقق SHA-256، أو استعادة نسخة معتمدة مع حفظ لقطة أمان تلقائية قبل الاستعادة.
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <button
-                          type="button"
-                          disabled={backupLoading}
-                          onClick={async () => {
-                            setBackupLoading(true);
-                            try {
-                              const res = await api.exportBackup();
-                              const blob = new Blob([JSON.stringify(res.database, null, 2)], { type: 'application/json;charset=utf-8' });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                              a.href = url;
-                              a.download = `nfp-october3-backup-${stamp}.json`;
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                              URL.revokeObjectURL(url);
-                              showBanner('success', `تم تنزيل النسخة الاحتياطية بنجاح (SHA-256: ${res.sha256.slice(0, 12)}...)`);
-                            } catch (err: any) {
-                              showBanner('error', err?.message || 'تعذر تصدير النسخة الاحتياطية');
-                            } finally {
-                              setBackupLoading(false);
-                            }
-                          }}
-                          className="bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 cursor-pointer shadow-xs"
-                        >
-                          <Download className="w-4 h-4" />
-                          <span>{backupLoading ? 'جاري التصدير...' : 'تنزيل نسخة احتياطية (JSON)'}</span>
-                        </button>
-
-                        <label className="bg-white hover:bg-stone-100 text-stone-800 border border-stone-300 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 cursor-pointer shadow-xs">
-                          <Upload className="w-4 h-4 text-red-700" />
-                          <span>اختيار ملف للاستعادة</span>
-                          <input
-                            type="file"
-                            accept="application/json,.json"
-                            className="hidden"
-                            onChange={async e => {
-                              const file = e.target.files?.[0];
-                              e.target.value = '';
-                              if (!file) return;
-                              try {
-                                const text = await file.text();
-                                const parsed = JSON.parse(text);
-                                const dbPayload = parsed?.database && typeof parsed.database === 'object' ? parsed.database : parsed;
-                                if (!dbPayload || typeof dbPayload !== 'object' || !Array.isArray(dbPayload.specializedSecretariats) || !Array.isArray(dbPayload.admins)) {
-                                  showBanner('error', 'ملف النسخة الاحتياطية غير صالح أو ينقصه الهيكل الأساسي');
-                                  return;
-                                }
-                                setRestorePendingData({
-                                  fileName: file.name,
-                                  database: dbPayload,
-                                  counts: {
-                                    secretariats: (dbPayload.specializedSecretariats || []).length,
-                                    news: (dbPayload.news || []).length,
-                                    events: (dbPayload.events || []).length,
-                                    media: (dbPayload.media || []).length,
-                                    admins: (dbPayload.admins || []).length
-                                  }
-                                });
-                              } catch {
-                                showBanner('error', 'تعذر قراءة ملف JSON المحدد');
-                              }
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </div>
-
-                    {restorePendingData && (
-                      <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 space-y-3">
-                        <div className="text-xs font-bold text-amber-950">
-                          ملف الاستعادة المحدد: <span className="font-mono" dir="ltr">{restorePendingData.fileName}</span>
-                        </div>
-                        <div className="text-[11px] text-amber-900 flex flex-wrap gap-3">
-                          <span>الأمانات: {restorePendingData.counts.secretariats}</span>
-                          <span>الأخبار: {restorePendingData.counts.news}</span>
-                          <span>الفعاليات: {restorePendingData.counts.events}</span>
-                          <span>الوسائط: {restorePendingData.counts.media}</span>
-                          <span>المشرفون: {restorePendingData.counts.admins}</span>
-                        </div>
-                        <div className="flex items-center gap-2.5 pt-1">
-                          <button
-                            type="button"
-                            disabled={backupLoading}
-                            onClick={async () => {
-                              setBackupLoading(true);
-                              try {
-                                const res = await api.restoreBackup(restorePendingData.database, true);
-                                setRestorePendingData(null);
-                                await loadAdminData();
-                                onRefreshPublicData();
-                                showBanner('success', res.message || 'تمت استعادة النسخة الاحتياطية بنجاح');
-                              } catch (err: any) {
-                                showBanner('error', err?.message || 'تعذر استعادة النسخة الاحتياطية');
-                              } finally {
-                                setBackupLoading(false);
-                              }
-                            }}
-                            className="bg-red-700 hover:bg-red-800 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
-                          >
-                            {backupLoading ? 'جاري الاستعادة...' : 'تأكيد الاستعادة الآن (مع حفظ لقطة أمان تلقائية)'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={backupLoading}
-                            onClick={() => setRestorePendingData(null)}
-                            className="bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
-                          >
-                            إلغاء
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -6409,17 +6093,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <button
                     onClick={async () => {
-                      try {
-                        await api.updateApplication(selectedApp.id, {
-                          status: selectedApp.status,
-                          internalNotes: selectedApp.internalNotes
-                        });
-                        await loadAdminData();
-                        showBanner('success', 'تم حفظ قرار المراجعة والملاحظات بنجاح');
-                        setSelectedApp(null);
-                      } catch (err: any) {
-                        showBanner('error', err.message || 'تعذر حفظ قرار المراجعة');
-                      }
+                      await api.updateApplication(selectedApp.id, {
+                        status: selectedApp.status,
+                        internalNotes: selectedApp.internalNotes
+                      });
+                      loadAdminData();
+                      alert('تم حفظ قرار المراجعة بنجاح');
+                      setSelectedApp(null);
                     }}
                     className="bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs px-6 py-2.5 rounded-xl cursor-pointer"
                   >
@@ -6510,11 +6190,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     await api.convertToMember(convertingAppId, convertForm);
                     setConvertingAppId(null);
                     setSelectedApp(null);
-                    await loadAdminData();
+                    loadAdminData();
                     onRefreshPublicData();
-                    showBanner('success', 'تم قبول العضو وإدراجه في السجل المركزي والأمانة بنجاح!');
+                    alert('تم قبول العضو وإدراجه في السجل المركزي والأمانة بنجاح!');
                   } catch (err: any) {
-                    showBanner('error', err.message || 'حدث خطأ أثناء الإدراج بالسجل');
+                    alert(err.message || 'حدث خطأ أثناء الإدراج بالسجل');
                   }
                 }}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
@@ -6580,15 +6260,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
             <div className="flex items-center gap-3 pt-3">
               <button
                 onClick={async () => {
-                  try {
-                    await api.assignMember(assigningMember.id, assignmentForm);
-                    setAssigningMember(null);
-                    await loadAdminData();
-                    onRefreshPublicData();
-                    showBanner('success', 'تم إصدار التكليف الجديد وتوثيقه في السجل التاريخي');
-                  } catch (err: any) {
-                    showBanner('error', err.message || 'تعذر حفظ التكليف الجديد');
-                  }
+                  await api.assignMember(assigningMember.id, assignmentForm);
+                  setAssigningMember(null);
+                  loadAdminData();
+                  onRefreshPublicData();
+                  alert('تم إصدار التكليف الجديد وتوثيقه في السجل التاريخي');
                 }}
                 className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
@@ -6651,23 +6327,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
               <button
                 onClick={async () => {
                   if (!transferForm.targetSecretariatId) {
-                    showBanner('error', 'يرجى اختيار الأمانة المستهدفة');
+                    alert('يرجى اختيار الأمانة المستهدفة');
                     return;
                   }
-                  try {
-                    await api.transferSecretariatMember({
-                      memberId: transferringMember.id,
-                      targetSecretariatId: transferForm.targetSecretariatId,
-                      newRole: transferForm.newRole,
-                      notes: transferForm.notes
-                    });
-                    setTransferringMember(null);
-                    await loadAdminData();
-                    onRefreshPublicData();
-                    showBanner('success', 'تم نقل العضو إلى الأمانة بنجاح');
-                  } catch (err: any) {
-                    showBanner('error', err.message || 'تعذر نقل العضو');
-                  }
+                  await api.transferSecretariatMember({
+                    memberId: transferringMember.id,
+                    targetSecretariatId: transferForm.targetSecretariatId,
+                    newRole: transferForm.newRole,
+                    notes: transferForm.notes
+                  });
+                  setTransferringMember(null);
+                  loadAdminData();
+                  onRefreshPublicData();
+                  alert('تم نقل العضو بنجاح');
                 }}
                 className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer flex-1"
               >
@@ -7445,10 +7117,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                       type="button"
                       onClick={() => {
                         if (!newSecVideoTitle || !newSecVideoUrl) {
-                          setModalError('يرجى إدخال عنوان ورابط الفيديو');
+                          alert('يرجى إدخال عنوان ورابط الفيديو');
                           return;
                         }
-                        setModalError(null);
                         const current = editingSecretariat.videos || [];
                         setEditingSecretariat({
                           ...editingSecretariat,
@@ -7627,10 +7298,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   الأمانة التابع لها <span className="text-red-600">*</span>
                 </label>
                 <select
-                  value={isSpecializedAdmin ? managedSecId : (editingSecMember.secretariatId || '')}
-                  disabled={isSpecializedAdmin}
+                  value={editingSecMember.secretariatId || ''}
                   onChange={e => setEditingSecMember({ ...editingSecMember, secretariatId: e.target.value })}
-                  className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs font-bold text-stone-900 disabled:bg-stone-100"
+                  className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs font-bold text-stone-900"
                 >
                   <option value="">اختر الأمانة...</option>
                   {secretariats.map(s => (
@@ -8310,8 +7980,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     goals: Array.isArray(editingInitiative.goals)
                       ? editingInitiative.goals.map(g => g.trim()).filter(Boolean)
                       : [],
-                    activities: (editingInitiative.activities || []).filter(a => a.title?.trim() || a.description?.trim()),
-                    ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
+                    activities: (editingInitiative.activities || []).filter(a => a.title?.trim() || a.description?.trim())
                   };
                   setModalError(null);
                   setIsSavingModal(true);
@@ -8416,10 +8085,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">أمانة مرتبطة</label>
                   <select
-                    value={isSpecializedAdmin ? managedSecId : (editingNews.linkedSecretariatId || '')}
-                    disabled={isSpecializedAdmin}
+                    value={editingNews.linkedSecretariatId || ''}
                     onChange={e => setEditingNews({ ...editingNews, linkedSecretariatId: e.target.value })}
-                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs disabled:bg-stone-100"
+                    className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
                   >
                     <option value="">عام (بدون ربط)</option>
                     {secretariats.map(s => (
@@ -8513,8 +8181,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     const payload: Partial<NewsItem> = {
                       ...editingNews,
                       title: trimmedTitle,
-                      content: trimmedContent,
-                      ...(isSpecializedAdmin ? { linkedSecretariatId: managedSecId } : {})
+                      content: trimmedContent
                     };
                     if (editingNews.id) {
                       await api.updateNews(editingNews.id, payload);
@@ -8705,8 +8372,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     const payload: Partial<EventItem> = {
                       ...editingEvent,
                       title: trimmedTitle,
-                      dateTime: trimmedDateTime,
-                      ...(isSpecializedAdmin ? { authorSecretariatId: managedSecId } : {})
+                      dateTime: trimmedDateTime
                     };
                     if (editingEvent.id) {
                       await api.updateEvent(editingEvent.id, payload);
@@ -8790,10 +8456,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   ربط بأمانة تخصصية (اختياري)
                 </label>
                 <select
-                  value={isSpecializedAdmin ? managedSecId : (editingMedia.linkedSecretariatId || '')}
-                  disabled={isSpecializedAdmin}
+                  value={editingMedia.linkedSecretariatId || ''}
                   onChange={e => setEditingMedia({ ...editingMedia, linkedSecretariatId: e.target.value })}
-                  className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs disabled:bg-stone-100"
+                  className="w-full border border-stone-300 rounded-xl px-3 py-2 text-xs"
                 >
                   <option value="">عام لكافة أمانات الحزب</option>
                   {secretariats.map(s => (
@@ -8989,13 +8654,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   setModalError(null);
                   setIsSavingModal(true);
                   try {
-                    const payload = isSpecializedAdmin
-                      ? { ...editingMedia, linkedSecretariatId: managedSecId }
-                      : editingMedia;
                     if (editingMedia.id) {
-                      await api.updateMedia(editingMedia.id, payload);
+                      await api.updateMedia(editingMedia.id, editingMedia);
                     } else {
-                      await api.createMedia(payload);
+                      await api.createMedia(editingMedia);
                     }
                     setShowMediaModal(false);
                     await loadAdminData();
@@ -9144,15 +8806,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     const selId = e.target.value;
                     const r = roles.find(item => item.id === selId);
                     if (r) {
-                      const callerIsSuper = user?.role === 'super_admin';
-                      const allowedPerms = callerIsSuper
-                        ? [...r.permissions]
-                        : r.permissions.filter(p => hasPermission(p));
                       setEditingUser({
                         ...editingUser,
                         roleId: r.id,
-                        role: r.id === 'role-super-admin' && callerIsSuper ? 'super_admin' : 'sub_admin',
-                        permissions: allowedPerms
+                        role: r.id === 'role-super-admin' && user?.role === 'super_admin' ? 'super_admin' : 'sub_admin',
+                        permissions: [...r.permissions]
                       });
                     } else {
                       setEditingUser({
@@ -9164,9 +8822,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                   className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-bold text-stone-800"
                 >
                   <option value="">-- تخصيص يدوي حر للصلاحيات --</option>
-                  {roles
-                    .filter(r => user?.role === 'super_admin' || (r.id !== 'role-super-admin' && r.permissions.every(p => hasPermission(p))))
-                    .map(r => (
+                  {roles.map(r => (
                     <option key={r.id} value={r.id}>
                       {r.name} {r.isSystem ? '(دور قياسي)' : '(دور مخصص)'} ({r.permissions.length} صلاحيات)
                     </option>
@@ -9251,15 +8907,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onBackToSite, onRefreshP
                     { id: 'audit', label: 'الاطلاع على سجل العمليات (Audit Log)' }
                   ].map(p => {
                     const checked = (editingUser.permissions || []).includes(p.id);
-                    const disabledPerm = user?.role !== 'super_admin' && !hasPermission(p.id);
                     return (
-                      <label key={p.id} className={`flex items-center gap-2 p-1 rounded ${disabledPerm ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer hover:bg-stone-100'}`}>
+                      <label key={p.id} className="flex items-center gap-2 cursor-pointer hover:bg-stone-100 p-1 rounded">
                         <input
                           type="checkbox"
-                          disabled={disabledPerm}
                           checked={checked}
                           onChange={e => {
-                            if (disabledPerm) return;
                             const cur = editingUser.permissions || [];
                             const updated = e.target.checked ? [...cur, p.id] : cur.filter((x: string) => x !== p.id);
                             setEditingUser({ ...editingUser, permissions: updated });

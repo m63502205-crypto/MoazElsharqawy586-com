@@ -31,7 +31,11 @@ import {
   syncPrivateRecordToFirestore,
   deletePrivateRecordFromFirestore,
   isFirebaseAdminReady,
-  broadcastLiveSyncEvent
+  setLiveBasePublicData,
+  setLiveBaseAdminDb,
+  applyLocalPublicMutation,
+  applyLocalSiteConfigMutation,
+  notifyLocalPortalMutation
 } from './utils/firestoreSync';
 
 const TOKEN_KEY = 'nfp_admin_token';
@@ -59,9 +63,7 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const method = String(options.method || 'GET').toUpperCase();
   const res = await fetch(endpoint, {
-    cache: method === 'GET' ? 'no-store' : options.cache,
     ...options,
     headers
   });
@@ -86,25 +88,6 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     throw new Error(data.error || `حدث خطأ أثناء معالجة الطلب (${res.status})`);
   }
 
-  if (
-    method !== 'GET' &&
-    !endpoint.includes('/analytics/') &&
-    !endpoint.includes('/inquire') &&
-    !endpoint.includes('/login') &&
-    !endpoint.includes('/logout') &&
-    !endpoint.includes('/seo/audit')
-  ) {
-    const isAdminOnly =
-      endpoint.includes('/applications') ||
-      endpoint.includes('/members') ||
-      endpoint.includes('/users') ||
-      endpoint.includes('/roles') ||
-      endpoint.includes('/subscribers') ||
-      endpoint.includes('/public/apply') ||
-      endpoint.includes('/public/subscribe');
-    broadcastLiveSyncEvent(isAdminOnly ? 'admin' : 'all', endpoint);
-  }
-
   return data as T;
 }
 
@@ -112,6 +95,7 @@ export const api = {
   // Public
   getPublicData: async (): Promise<PublicPortalData> => {
     const portal = await apiFetch<PublicPortalData>('/api/public/data');
+    setLiveBasePublicData(portal);
     return await hydratePortalDataFromFirestore(portal);
   },
   
@@ -198,8 +182,8 @@ export const api = {
   getAdminAnalytics: (range: '7d' | '14d' | '30d' = '14d') =>
     apiFetch<AdminAnalyticsResponse>(`/api/admin/analytics?range=${encodeURIComponent(range)}`),
 
-  getFullDatabase: () =>
-    apiFetch<{
+  getFullDatabase: async () => {
+    const full = await apiFetch<{
       partyLeaders: PartyLeader[];
       secretariatLeaders: SecretariatLeader[];
       specializedSecretariats: SpecializedSecretariat[];
@@ -219,7 +203,10 @@ export const api = {
       subscribers: EmailSubscriber[];
       emailDispatchLogs: EmailDispatchLog[];
       smtpStatus?: { configured: boolean };
-    }>('/api/admin/full-db'),
+    }>('/api/admin/full-db');
+    setLiveBaseAdminDb(full);
+    return full;
+  },
 
   // Party Leaders
   createPartyLeader: async (leader: Partial<PartyLeader>) => {
@@ -227,7 +214,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(leader)
     });
-    if (res.leader) await syncPublicRecordToFirestore('party_leaders', res.leader);
+    if (res.leader) {
+      applyLocalPublicMutation('party_leaders', 'upsert', res.leader);
+      await syncPublicRecordToFirestore('party_leaders', res.leader);
+    }
     return res;
   },
   updatePartyLeader: async (id: string, leader: Partial<PartyLeader>) => {
@@ -235,11 +225,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(leader)
     });
-    if (res.leader) await syncPublicRecordToFirestore('party_leaders', res.leader);
+    if (res.leader) {
+      applyLocalPublicMutation('party_leaders', 'upsert', res.leader);
+      await syncPublicRecordToFirestore('party_leaders', res.leader);
+    }
     return res;
   },
   deletePartyLeader: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/party-leaders/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('party_leaders', 'delete', id);
     await deletePublicRecordFromFirestore('party_leaders', id);
     return res;
   },
@@ -250,7 +244,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(leader)
     });
-    if (res.leader) await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    if (res.leader) {
+      applyLocalPublicMutation('secretariat_leaders', 'upsert', res.leader);
+      await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    }
     return res;
   },
   updateSecretariatLeader: async (id: string, leader: Partial<SecretariatLeader>) => {
@@ -258,11 +255,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(leader)
     });
-    if (res.leader) await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    if (res.leader) {
+      applyLocalPublicMutation('secretariat_leaders', 'upsert', res.leader);
+      await syncPublicRecordToFirestore('secretariat_leaders', res.leader);
+    }
     return res;
   },
   deleteSecretariatLeader: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariat-leaders/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('secretariat_leaders', 'delete', id);
     await deletePublicRecordFromFirestore('secretariat_leaders', id);
     return res;
   },
@@ -273,7 +274,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(sec)
     });
-    if (res.secretariat) await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    if (res.secretariat) {
+      applyLocalPublicMutation('secretariats', 'upsert', res.secretariat);
+      await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    }
     return res;
   },
   updateSecretariat: async (id: string, sec: Partial<SpecializedSecretariat>) => {
@@ -281,11 +285,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(sec)
     });
-    if (res.secretariat) await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    if (res.secretariat) {
+      applyLocalPublicMutation('secretariats', 'upsert', res.secretariat);
+      await syncPublicRecordToFirestore('secretariats', res.secretariat);
+    }
     return res;
   },
   deleteSecretariat: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariats/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('secretariats', 'delete', id);
     await deletePublicRecordFromFirestore('secretariats', id);
     return res;
   },
@@ -296,8 +304,13 @@ export const api = {
     });
     if (Array.isArray(secretariats)) {
       for (const sec of secretariats) {
-        if (sec && sec.id) await syncPublicRecordToFirestore('secretariats', sec);
+        if (sec && sec.id) {
+          applyLocalPublicMutation('secretariats', 'upsert', sec);
+          await syncPublicRecordToFirestore('secretariats', sec);
+        }
       }
+    } else {
+      notifyLocalPortalMutation('secretariats');
     }
     return res;
   },
@@ -308,7 +321,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(member)
     });
-    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    if (res.member) {
+      applyLocalPublicMutation('secretariat_members', 'upsert', res.member);
+      await syncPublicRecordToFirestore('secretariat_members', res.member);
+    }
     return res;
   },
   updateSecretariatMember: async (id: string, member: Partial<SecretariatMember>) => {
@@ -316,7 +332,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(member)
     });
-    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    if (res.member) {
+      applyLocalPublicMutation('secretariat_members', 'upsert', res.member);
+      await syncPublicRecordToFirestore('secretariat_members', res.member);
+    }
     return res;
   },
   transferSecretariatMember: async (data: { memberId: string; targetSecretariatId: string; newRole?: string; notes?: string }) => {
@@ -324,11 +343,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data)
     });
-    if (res.member) await syncPublicRecordToFirestore('secretariat_members', res.member);
+    if (res.member) {
+      applyLocalPublicMutation('secretariat_members', 'upsert', res.member);
+      await syncPublicRecordToFirestore('secretariat_members', res.member);
+    }
     return res;
   },
   deleteSecretariatMember: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/secretariat-members/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('secretariat_members', 'delete', id);
     await deletePublicRecordFromFirestore('secretariat_members', id);
     return res;
   },
@@ -339,7 +362,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(init)
     });
-    if (res.initiative) await syncPublicRecordToFirestore('initiatives', res.initiative);
+    if (res.initiative) {
+      applyLocalPublicMutation('initiatives', 'upsert', res.initiative);
+      await syncPublicRecordToFirestore('initiatives', res.initiative);
+    }
     return res;
   },
   updateInitiative: async (id: string, init: Partial<Initiative>) => {
@@ -347,11 +373,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(init)
     });
-    if (res.initiative) await syncPublicRecordToFirestore('initiatives', res.initiative);
+    if (res.initiative) {
+      applyLocalPublicMutation('initiatives', 'upsert', res.initiative);
+      await syncPublicRecordToFirestore('initiatives', res.initiative);
+    }
     return res;
   },
   deleteInitiative: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/initiatives/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('initiatives', 'delete', id);
     await deletePublicRecordFromFirestore('initiatives', id);
     return res;
   },
@@ -362,7 +392,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(news)
     });
-    if (res.news) await syncPublicRecordToFirestore('news', res.news);
+    if (res.news) {
+      applyLocalPublicMutation('news', 'upsert', res.news);
+      await syncPublicRecordToFirestore('news', res.news);
+    }
     return res;
   },
   updateNews: async (id: string, news: Partial<NewsItem>) => {
@@ -370,11 +403,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(news)
     });
-    if (res.news) await syncPublicRecordToFirestore('news', res.news);
+    if (res.news) {
+      applyLocalPublicMutation('news', 'upsert', res.news);
+      await syncPublicRecordToFirestore('news', res.news);
+    }
     return res;
   },
   deleteNews: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/news/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('news', 'delete', id);
     await deletePublicRecordFromFirestore('news', id);
     return res;
   },
@@ -385,7 +422,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(event)
     });
-    if (res.event) await syncPublicRecordToFirestore('events', res.event);
+    if (res.event) {
+      applyLocalPublicMutation('events', 'upsert', res.event);
+      await syncPublicRecordToFirestore('events', res.event);
+    }
     return res;
   },
   updateEvent: async (id: string, event: Partial<EventItem>) => {
@@ -393,11 +433,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(event)
     });
-    if (res.event) await syncPublicRecordToFirestore('events', res.event);
+    if (res.event) {
+      applyLocalPublicMutation('events', 'upsert', res.event);
+      await syncPublicRecordToFirestore('events', res.event);
+    }
     return res;
   },
   deleteEvent: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/events/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('events', 'delete', id);
     await deletePublicRecordFromFirestore('events', id);
     return res;
   },
@@ -408,7 +452,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(media)
     });
-    if (res.media) await syncPublicRecordToFirestore('media', res.media);
+    if (res.media) {
+      applyLocalPublicMutation('media', 'upsert', res.media);
+      await syncPublicRecordToFirestore('media', res.media);
+    }
     return res;
   },
   updateMedia: async (id: string, media: Partial<MediaItem>) => {
@@ -416,11 +463,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(media)
     });
-    if (res.media) await syncPublicRecordToFirestore('media', res.media);
+    if (res.media) {
+      applyLocalPublicMutation('media', 'upsert', res.media);
+      await syncPublicRecordToFirestore('media', res.media);
+    }
     return res;
   },
   deleteMedia: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/media/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('media', 'delete', id);
     await deletePublicRecordFromFirestore('media', id);
     return res;
   },
@@ -431,7 +482,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(stream)
     });
-    if (res.liveStream) await syncSiteConfigToFirestore('livestream', res.liveStream);
+    if (res.liveStream) {
+      applyLocalSiteConfigMutation('livestream', res.liveStream);
+      await syncSiteConfigToFirestore('livestream', res.liveStream);
+    }
     return res;
   },
 
@@ -531,7 +585,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(settings)
     });
-    if (res.settings) await syncSiteConfigToFirestore('public', res.settings);
+    if (res.settings) {
+      applyLocalSiteConfigMutation('public', res.settings);
+      await syncSiteConfigToFirestore('public', res.settings);
+    }
     return res;
   },
 
@@ -545,7 +602,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(page)
     });
-    if (res.page) await syncPublicRecordToFirestore('pages', res.page);
+    if (res.page) {
+      applyLocalPublicMutation('pages', 'upsert', res.page);
+      await syncPublicRecordToFirestore('pages', res.page);
+    }
     return res;
   },
   updateCMSPage: async (id: string, page: Partial<CMSPage>) => {
@@ -553,11 +613,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(page)
     });
-    if (res.page) await syncPublicRecordToFirestore('pages', res.page);
+    if (res.page) {
+      applyLocalPublicMutation('pages', 'upsert', res.page);
+      await syncPublicRecordToFirestore('pages', res.page);
+    }
     return res;
   },
   deleteCMSPage: async (id: string) => {
     const res = await apiFetch<{ success: boolean }>(`/api/admin/pages/${id}`, { method: 'DELETE' });
+    applyLocalPublicMutation('pages', 'delete', id);
     await deletePublicRecordFromFirestore('pages', id);
     return res;
   },
